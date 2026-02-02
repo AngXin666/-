@@ -72,7 +72,7 @@ class AutoLogin:
         # 从ModelManager获取共享的检测器实例（不再自己创建）
         from .model_manager import ModelManager
         from .page_state_guard import PageStateGuard
-        from .page_detector_hybrid_optimized import PageState
+        from .page_detector import PageState
         
         model_manager = ModelManager.get_instance()
         

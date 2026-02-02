@@ -2842,6 +2842,9 @@ class AutomationGUI:
             account_manager: 账号管理器
             log_callback: 日志回调函数（已包含实例前缀）
         """
+        import time
+        start_time = time.time()
+        
         # 获取该实例的 ADB 端口
         adb_port = await controller.get_adb_port(instance_id)
         adb_path = controller.get_adb_path()
@@ -2959,7 +2962,7 @@ class AutomationGUI:
                 
                 from .navigator import Navigator
                 from .model_manager import ModelManager
-                from .page_detector_hybrid_optimized import PageState
+                from .page_detector import PageState
                 
                 # 从ModelManager获取共享的检测器实例
                 model_manager = ModelManager.get_instance()
