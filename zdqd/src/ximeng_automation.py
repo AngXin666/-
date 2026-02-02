@@ -857,7 +857,8 @@ class XimengAutomation:
                         if page_result.state != PageState.PROFILE_LOGGED:
                             log(f"  ⚠️ 当前不在个人页（已登录），尝试导航...")
                             nav_start = time.time()
-                            nav_success = await self.navigator.navigate_to_profile(device_id)
+                            # 使用统一的广告处理方法
+                            nav_success = await self._navigate_to_profile_with_ad_handling(device_id, log)
                             nav_time = time.time() - nav_start
                             log(f"[时间记录] 导航耗时: {nav_time:.3f}秒")
                             if not nav_success:
@@ -874,10 +875,9 @@ class XimengAutomation:
                         cache_check_time = time.time() - cache_check_start
                         log(f"[时间记录] 缓存登录验证总耗时: {cache_check_time:.3f}秒")
                     else:
-                        # 导航到个人资料页面
-                        # 注意：导航可能返回True但页面状态不确定，通过获取资料来验证
+                        # 导航到个人资料页面（使用统一的广告处理方法）
                         nav_start = time.time()
-                        nav_success = await self.navigator.navigate_to_profile(device_id)
+                        nav_success = await self._navigate_to_profile_with_ad_handling(device_id, log)
                         nav_time = time.time() - nav_start
                         log(f"[时间记录] 导航耗时: {nav_time:.3f}秒")
                         
