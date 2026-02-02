@@ -674,7 +674,22 @@ class AutoLogin:
             
             # 3. 点击"我的"标签
             log("点击'我的'标签...")
-            await self.adb.tap(device_id, self.TAB_MY[0], self.TAB_MY[1])
+            
+            # 优先使用YOLO检测"我的"按钮位置
+            my_button_pos = await self.detector.find_button_yolo(
+                device_id, 
+                'homepage',  # 首页模型
+                '我的按钮',
+                conf_threshold=0.5
+            )
+            
+            if my_button_pos:
+                log(f"  YOLO检测到'我的'按钮: {my_button_pos}")
+                await self.adb.tap(device_id, my_button_pos[0], my_button_pos[1])
+            else:
+                log(f"  YOLO未检测到按钮，使用固定坐标: {self.TAB_MY}")
+                await self.adb.tap(device_id, self.TAB_MY[0], self.TAB_MY[1])
+            
             await wait_after_action(min_wait=0.5, max_wait=2.0)
             
             # 4. 点击登录入口
