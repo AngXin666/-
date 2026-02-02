@@ -26,6 +26,7 @@ class TransferRetry:
         device_id: str,
         recipient_id: str,
         log_callback: Optional[Callable] = None,
+        sender_phone: str = None,
         **kwargs
     ) -> Dict:
         """带重试的转账执行
@@ -35,6 +36,7 @@ class TransferRetry:
             device_id: 设备ID
             recipient_id: 收款人ID
             log_callback: 日志回调函数
+            sender_phone: 发送人手机号（用于查询历史记录）
             **kwargs: 其他参数
             
         Returns:
@@ -52,6 +54,35 @@ class TransferRetry:
             try:
                 if attempt > 0:
                     log(f"  [重试] 第 {attempt + 1}/{self.max_retries} 次尝试...")
+                    
+                    # 【安全检查】重试前检查是否已有成功的转账记录
+                    if sender_phone:
+                        try:
+                            from .transfer_history import get_transfer_history
+                            transfer_history = get_transfer_history()
+                            
+                            # 检查最近2分钟是否有成功的转账
+                            recent_transfer = transfer_history.get_recent_transfer(
+                                sender_phone=sender_phone,
+                                minutes=2
+                            )
+                            
+                            if recent_transfer and recent_transfer.success:
+                                log(f"  [重试] ✓ 检测到最近已有成功转账，停止重试")
+                                log(f"    - 时间: {recent_transfer.timestamp}")
+                                log(f"    - 金额: {recent_transfer.amount:.2f} 元")
+                                log(f"    - 收款人: {recent_transfer.recipient_phone}")
+                                
+                                # 返回成功结果
+                                return {
+                                    'success': True,
+                                    'message': '转账成功（历史记录）',
+                                    'amount': recent_transfer.amount,
+                                    'chain': []
+                                }
+                        except Exception as e:
+                            log(f"  [重试] ⚠️ 检查历史记录失败: {e}")
+                    
                     await asyncio.sleep(self.retry_delay)
                 
                 # 执行转账

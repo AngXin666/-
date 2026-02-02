@@ -135,6 +135,62 @@ class TransferHistory:
             print(f"[转账历史] 保存记录失败: {e}")
             return False
     
+    def get_recent_transfer(
+        self,
+        sender_phone: str,
+        minutes: int = 5
+    ) -> Optional[TransferRecord]:
+        """获取最近的转账记录（用于防止重复转账）
+        
+        Args:
+            sender_phone: 发送人手机号
+            minutes: 时间范围（分钟），默认5分钟
+            
+        Returns:
+            最近的转账记录，如果没有返回None
+        """
+        try:
+            conn = sqlite3.connect(str(self.db_path))
+            cursor = conn.cursor()
+            
+            # 计算时间阈值
+            threshold = (datetime.now() - timedelta(minutes=minutes)).isoformat()
+            
+            cursor.execute("""
+                SELECT id, sender_phone, sender_user_id, sender_name,
+                       recipient_phone, recipient_name, amount, strategy,
+                       success, error_message, timestamp, owner
+                FROM transfer_history
+                WHERE sender_phone = ? AND timestamp >= ?
+                ORDER BY timestamp DESC
+                LIMIT 1
+            """, (sender_phone, threshold))
+            
+            row = cursor.fetchone()
+            conn.close()
+            
+            if row:
+                return TransferRecord(
+                    id=row[0],
+                    sender_phone=row[1],
+                    sender_user_id=row[2],
+                    sender_name=row[3],
+                    recipient_phone=row[4],
+                    recipient_name=row[5],
+                    amount=row[6],
+                    strategy=row[7],
+                    success=bool(row[8]),
+                    error_message=row[9] or "",
+                    timestamp=row[10],
+                    owner=row[11] or ""
+                )
+            
+            return None
+            
+        except Exception as e:
+            print(f"[转账历史] 查询最近转账失败: {e}")
+            return None
+    
     def get_transfer_records(
         self,
         sender_phone: str = None,

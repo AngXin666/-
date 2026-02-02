@@ -1182,7 +1182,13 @@ class XimengAutomation:
             try:
                 # 每次处理账号时重新读取转账配置
                 from .transfer_config import get_transfer_config
+                from .transfer_lock import get_transfer_lock
+                from .transfer_history import get_transfer_history
+                
                 transfer_config = get_transfer_config()
+                transfer_lock = get_transfer_lock()
+                transfer_history = get_transfer_history()
+                
                 should_auto_transfer = transfer_config.enabled
                 
                 if should_auto_transfer:
@@ -1194,78 +1200,107 @@ class XimengAutomation:
                     elif result.balance_after is None:
                         log(f"  ⚠️ 无法获取余额，跳过转账")
                     else:
-                        # 判断是否需要转账（使用最新的配置）
-                        account_level = transfer_config.get_account_level(result.user_id)
-                        
-                        if transfer_config.should_transfer(result.user_id, result.balance_after, current_level=0):
-                            recipient_id = transfer_config.get_transfer_recipient(result.user_id, current_level=0)
-                            if recipient_id:
-                                log(f"  ✓ 满足转账条件，准备转账到 ID: {recipient_id}")
-                                try:
-                                    # 执行转账（传入转账前余额用于验证）
-                                    transfer_result = await self.balance_transfer.transfer_balance(
-                                        device_id,
-                                        recipient_id,
-                                        initial_balance=result.balance_after,
-                                        log_callback=log
-                                    )
-                                    
-                                    if transfer_result['success']:
-                                        log(f"  ✓ 转账成功")
-                                        if transfer_result.get('amount'):
-                                            log(f"    - 转账金额: {transfer_result['amount']:.2f} 元")
-                                            # 更新余额（转账后余额会减少）
-                                            if result.balance_after is not None:
-                                                result.balance_after -= transfer_result['amount']
-                                                log(f"    - 转账后余额: {result.balance_after:.2f} 元")
-                                            # 保存转账信息到result对象
-                                            result.transfer_amount = transfer_result.get('amount', 0.0)
-                                            result.transfer_recipient = recipient_id
-                                            log(f"    - 已保存转账信息: {result.transfer_amount:.2f} 元 → {result.transfer_recipient}")
-                                    else:
-                                        # 转账失败，设置错误类型
-                                        from .models.error_types import ErrorType
-                                        result.error_type = ErrorType.TRANSFER_FAILED
-                                        result.error_message = transfer_result.get('message', '未知错误')
-                                        log(f"  ❌ 转账失败: {result.error_message}")
-                                        # 转账失败时，设置收款人为"失败"
-                                        result.transfer_amount = 0.0
-                                        result.transfer_recipient = "失败"
-                                except Exception as e:
-                                    # 转账异常，设置错误类型
-                                    from .models.error_types import ErrorType
-                                    result.error_type = ErrorType.TRANSFER_FAILED
-                                    result.error_message = str(e)
-                                    log(f"  ❌ 转账异常: {e}")
-                                    import traceback
-                                    log(f"  详细错误: {traceback.format_exc()}")
-                                    # 转账异常时，设置收款人为"失败"
-                                    result.transfer_amount = 0.0
-                                    result.transfer_recipient = "失败"
-                            else:
-                                log(f"  ⚠️ 未配置收款人ID")
+                        # 【安全检查1】检查是否有转账锁
+                        if transfer_lock.is_locked(account.phone):
+                            lock_info = transfer_lock.get_lock_info(account.phone)
+                            log(f"  ⚠️ 转账进行中，跳过（已锁定 {lock_info['elapsed']:.1f}秒）")
                         else:
-                            # 判断不转账的原因
-                            if account_level > 0:
-                                # 是收款账号
-                                log(f"  ℹ️ 当前账号是 {account_level} 级收款账号，不进行转账")
-                                if not transfer_config.multi_level_enabled:
-                                    log(f"    - 多级转账功能未启用")
-                                elif account_level >= transfer_config.max_transfer_level:
-                                    log(f"    - 已达到最大转账级别 ({transfer_config.max_transfer_level})")
-                                else:
-                                    next_level = account_level + 1
-                                    if not transfer_config.get_recipients(next_level):
-                                        log(f"    - 未配置 {next_level} 级收款账号")
-                            elif not transfer_config.recipient_ids:
-                                log(f"  ⚠️ 未配置收款账号")
+                            # 【安全检查2】检查最近5分钟是否已转账
+                            recent_transfer = transfer_history.get_recent_transfer(
+                                sender_phone=account.phone,
+                                minutes=5
+                            )
+                            
+                            if recent_transfer:
+                                log(f"  ⚠️ 最近已有转账记录，跳过")
+                                log(f"    - 时间: {recent_transfer.timestamp}")
+                                log(f"    - 金额: {recent_transfer.amount:.2f} 元")
+                                log(f"    - 收款人: {recent_transfer.recipient_phone}")
+                                log(f"    - 状态: {'成功' if recent_transfer.success else '失败'}")
                             else:
-                                # 余额不足
-                                log(f"  ℹ️ 余额未达到转账条件")
-                                log(f"    - 当前余额: {result.balance_after:.2f} 元")
-                                log(f"    - 起步金额: {transfer_config.min_transfer_amount:.2f} 元")
-                                log(f"    - 保留余额: {transfer_config.min_balance:.2f} 元")
-                                log(f"    - 需要余额 >= {transfer_config.min_transfer_amount + transfer_config.min_balance:.2f} 元")
+                                # 判断是否需要转账（使用最新的配置）
+                                account_level = transfer_config.get_account_level(result.user_id)
+                                
+                                if transfer_config.should_transfer(result.user_id, result.balance_after, current_level=0):
+                                    recipient_id = transfer_config.get_transfer_recipient(result.user_id, current_level=0)
+                                    if recipient_id:
+                                        log(f"  ✓ 满足转账条件，准备转账到 ID: {recipient_id}")
+                                        
+                                        # 【安全机制】获取转账锁
+                                        if not transfer_lock.acquire_lock(account.phone):
+                                            log(f"  ⚠️ 无法获取转账锁，跳过")
+                                        else:
+                                            try:
+                                                log(f"  ✓ 已获取转账锁")
+                                                
+                                                # 执行转账（传入转账前余额用于验证）
+                                                transfer_result = await self.balance_transfer.transfer_balance(
+                                                    device_id,
+                                                    recipient_id,
+                                                    initial_balance=result.balance_after,
+                                                    log_callback=log
+                                                )
+                                                
+                                                if transfer_result['success']:
+                                                    log(f"  ✓ 转账成功")
+                                                    if transfer_result.get('amount'):
+                                                        log(f"    - 转账金额: {transfer_result['amount']:.2f} 元")
+                                                        # 更新余额（转账后余额会减少）
+                                                        if result.balance_after is not None:
+                                                            result.balance_after -= transfer_result['amount']
+                                                            log(f"    - 转账后余额: {result.balance_after:.2f} 元")
+                                                        # 保存转账信息到result对象
+                                                        result.transfer_amount = transfer_result.get('amount', 0.0)
+                                                        result.transfer_recipient = recipient_id
+                                                        log(f"    - 已保存转账信息: {result.transfer_amount:.2f} 元 → {result.transfer_recipient}")
+                                                else:
+                                                    # 转账失败，设置错误类型
+                                                    from .models.error_types import ErrorType
+                                                    result.error_type = ErrorType.TRANSFER_FAILED
+                                                    result.error_message = transfer_result.get('message', '未知错误')
+                                                    log(f"  ❌ 转账失败: {result.error_message}")
+                                                    # 转账失败时，设置收款人为"失败"
+                                                    result.transfer_amount = 0.0
+                                                    result.transfer_recipient = "失败"
+                                            except Exception as e:
+                                                # 转账异常，设置错误类型
+                                                from .models.error_types import ErrorType
+                                                result.error_type = ErrorType.TRANSFER_FAILED
+                                                result.error_message = str(e)
+                                                log(f"  ❌ 转账异常: {e}")
+                                                import traceback
+                                                log(f"  详细错误: {traceback.format_exc()}")
+                                                # 转账异常时，设置收款人为"失败"
+                                                result.transfer_amount = 0.0
+                                                result.transfer_recipient = "失败"
+                                            finally:
+                                                # 【安全机制】释放转账锁
+                                                transfer_lock.release_lock(account.phone)
+                                                log(f"  ✓ 已释放转账锁")
+                                    else:
+                                        log(f"  ⚠️ 未配置收款人ID")
+                                else:
+                                    # 判断不转账的原因
+                                    if account_level > 0:
+                                        # 是收款账号
+                                        log(f"  ℹ️ 当前账号是 {account_level} 级收款账号，不进行转账")
+                                        if not transfer_config.multi_level_enabled:
+                                            log(f"    - 多级转账功能未启用")
+                                        elif account_level >= transfer_config.max_transfer_level:
+                                            log(f"    - 已达到最大转账级别 ({transfer_config.max_transfer_level})")
+                                        else:
+                                            next_level = account_level + 1
+                                            if not transfer_config.get_recipients(next_level):
+                                                log(f"    - 未配置 {next_level} 级收款账号")
+                                    elif not transfer_config.recipient_ids:
+                                        log(f"  ⚠️ 未配置收款账号")
+                                    else:
+                                        # 余额不足
+                                        log(f"  ℹ️ 余额未达到转账条件")
+                                        log(f"    - 当前余额: {result.balance_after:.2f} 元")
+                                        log(f"    - 起步金额: {transfer_config.min_transfer_amount:.2f} 元")
+                                        log(f"    - 保留余额: {transfer_config.min_balance:.2f} 元")
+                                        log(f"    - 需要余额 >= {transfer_config.min_transfer_amount + transfer_config.min_balance:.2f} 元")
                 else:
                     log(f"  ℹ️ 自动转账功能未启用，跳过转账")
                 
