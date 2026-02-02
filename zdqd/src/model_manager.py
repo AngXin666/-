@@ -855,16 +855,16 @@ class ModelManager:
         
         return detector
     
-    def _load_page_detector_hybrid(self, adb_bridge) -> 'PageDetectorHybridOptimized':
+    def _load_page_detector_hybrid(self, adb_bridge) -> 'PageDetectorHybrid':
         """加载YOLO检测器
         
-        加载PageDetectorHybridOptimized模型，包含所有YOLO模型。
+        加载PageDetectorHybrid模型，包含所有YOLO模型。
         
         Args:
             adb_bridge: ADB桥接器实例
         
         Returns:
-            PageDetectorHybridOptimized: YOLO检测器实例
+            PageDetectorHybrid: YOLO检测器实例
         
         Raises:
             FileNotFoundError: 如果配置文件不存在
