@@ -523,4 +523,876 @@ class XimengAutomation:
         # 所有重试都失败
         log("✗ 启动流程失败，已达到最大重试次数")
         return False
+    async def _navigate_to_profile_with_ad_handling(self, device_id: str, log_callback=None) -> bool:
+        """导航到个人页并处理广告（统一方法）
+        
+        核心逻辑：
+        1. 点击"我的"按钮
+        2. 高频扫描页面状态（每0.05秒）
+        3. 检测到广告 → 立即关闭 → 继续扫描
+        4. 检测到正常个人页 → 返回成功
+        5. 超时（5秒）→ 返回失败
+        
+        Args:
+            device_id: 设备ID
+            log_callback: 日志回调函数
+            
+        Returns:
+            bool: 是否成功到达个人页
+        """
+        log = log_callback if log_callback else self._silent_log.info
+        
+        # 点击底部导航栏"我的"按钮
+        MY_TAB = (450, 920)
+        await self.adb.tap(device_id, MY_TAB[0], MY_TAB[1])
+        
+        # 高频扫描，最多5秒
+        max_scan_time = 5.0
+        scan_interval = 0.05  # 每50毫秒扫描一次
+        start_time = asyncio.get_event_loop().time()
+        
+        ad_closed_count = 0  # 记录关闭广告的次数
+        
+        while (asyncio.get_event_loop().time() - start_time) < max_scan_time:
+            # 检测当前页面状态
+            if self.integrated_detector:
+                page_result = await self.integrated_detector.detect_page(
+                    device_id, use_cache=False, detect_elements=False
+                )
+            else:
+                # 降级到混合检测器
+                balance_templates = ['已登陆个人页.png', '未登陆个人页.png', '个人页广告.png']
+                page_result = await self.hybrid_detector.detect_page_with_priority(
+                    device_id, balance_templates, use_cache=False
+                )
+            
+            if not page_result or not page_result.state:
+                await asyncio.sleep(scan_interval)
+                continue
+            
+            from .page_detector_hybrid import PageState
+            current_state = page_result.state
+            
+            # 检测到正常个人页 → 成功
+            if current_state in [PageState.PROFILE, PageState.PROFILE_LOGGED]:
+                elapsed = asyncio.get_event_loop().time() - start_time
+                log(f"  ✓ 到达个人页（耗时: {elapsed:.2f}秒，关闭广告: {ad_closed_count}次）")
+                return True
+            
+            # 检测到广告 → 立即关闭
+            elif current_state == PageState.PROFILE_AD:
+                log(f"  ⚠️ 检测到个人页广告，立即关闭...")
+                
+                # 使用YOLO检测关闭按钮
+                close_button_pos = None
+                if self.integrated_detector and hasattr(self.integrated_detector, '_yolo_detector') and self.integrated_detector._yolo_detector:
+                    close_button_pos = await self.integrated_detector.find_button_yolo(
+                        device_id, 
+                        '个人页广告',
+                        '确认按钮',
+                        conf_threshold=0.5
+                    )
+                
+                if close_button_pos:
+                    log(f"  YOLO检测到'确认按钮': {close_button_pos}，点击关闭")
+                    await self.adb.tap(device_id, close_button_pos[0], close_button_pos[1])
+                else:
+                    log(f"  使用固定坐标关闭广告")
+                    await self.adb.tap(device_id, 437, 554)
+                
+                ad_closed_count += 1
+                
+                # 等待0.3秒让广告关闭动画完成
+                await asyncio.sleep(0.3)
+                
+                # 清除缓存
+                if self.integrated_detector:
+                    self.integrated_detector.clear_cache(device_id)
+                
+                # 继续扫描（可能还有广告，或者已经到达个人页）
+                continue
+            
+            # 其他状态 → 继续扫描
+            else:
+                await asyncio.sleep(scan_interval)
+        
+        # 超时
+        elapsed = asyncio.get_event_loop().time() - start_time
+        log(f"  ❌ 导航到个人页超时（耗时: {elapsed:.2f}秒，关闭广告: {ad_closed_count}次）")
+        return False
+    
+    async def run_full_workflow(self, device_id: str, account: Account, skip_login: bool = False) -> AccountResult:
+        """执行完整工作流：登录->获取初始数据->签到->获取最终数据->退出
+        
+        增强版数据收集流程：
+        1. 登录账号（如果 skip_login=True 则跳过）
+        2. 获取完整个人资料（昵称、ID、手机号、余额、积分、抵扣券）
+        3. 获取签到信息并执行所有签到
+        4. 再次获取余额（最终余额）
+        5. 退出登录
+        
+        Args:
+            device_id: 设备 ID
+            account: 账号信息
+            skip_login: 是否跳过登录步骤（缓存登录已验证时使用）
+            
+        Returns:
+            账号处理结果（包含完整数据）
+        """
+        import time
+        
+        # 记录工作流开始时间
+        workflow_start = time.time()
+        
+        # 定义日志输出函数（优先使用回调，否则使用print）
+        def log(msg):
+            if self._log_callback:
+                self._log_callback(msg)
+            else:
+                print(msg)
+        
+        log(f"\n{'='*60}")
+        log(f"[时间记录] 工作流开始 - {time.strftime('%H:%M:%S')}")
+        log(f"[时间记录] 账号: {account.phone}")
+        log(f"{'='*60}\n")
+        
+        # 定义可中断的 sleep 函数
+        async def interruptible_sleep(seconds: float, check_interval: float = 0.1):
+            """可中断的 sleep，每隔 check_interval 检查一次停止标志"""
+            elapsed = 0.0
+            while elapsed < seconds:
+                if self._stop_check and self._stop_check():
+                    raise Exception("用户中断操作")
+                await asyncio.sleep(min(check_interval, seconds - elapsed))
+                elapsed += check_interval
+        
+        result = AccountResult(
+            phone=account.phone,
+            success=False,
+            timestamp=datetime.now()
+        )
+        
+        try:
+            # ==================== 步骤1: 登录账号 ====================
+            step1_start = time.time()
+            log(f"{'='*60}")
+            log(f"[时间记录] 步骤1: 登录账号 - {account.phone}")
+            log(f"{'='*60}")
+            
+            # 如果 skip_login=True，说明缓存登录已验证，当前已在个人页
+            if skip_login:
+                log(f"✓ 缓存登录已验证，当前已在个人页，直接获取个人信息")
+                step1_time = time.time() - step1_start
+                log(f"[时间记录] 步骤1完成 - 耗时: {step1_time:.3f}秒（跳过登录）")
+                log("")
+                # 缓存登录不需要处理登录和积分页，直接跳到获取个人资料
+            else:
+                # 执行正常登录流程
+                login_start = time.time()
+                login_result = await self.auto_login.login(
+                    device_id, account.phone, account.password
+                )
+                login_time = time.time() - login_start
+                log(f"[时间记录] 登录操作耗时: {login_time:.3f}秒")
+                
+                if not login_result.success:
+                    # 根据登录失败类型设置error_type
+                    from .models.error_types import ErrorType
+                    if login_result.error_type == "phone_not_exist":
+                        result.error_type = ErrorType.LOGIN_PHONE_NOT_EXIST
+                    elif login_result.error_type == "wrong_password":
+                        result.error_type = ErrorType.LOGIN_PASSWORD_ERROR
+                    else:
+                        # 其他登录错误，暂时归类为密码错误
+                        result.error_type = ErrorType.LOGIN_PASSWORD_ERROR
+                    
+                    result.error_message = f"登录失败: {login_result.error_message}"
+                    log(f"✗ 登录失败: {login_result.error_message}")
+                    return result
+                
+                log(f"✓ 登录成功")
+                # 登录后会跳转到积分页，需要返回到个人页
+                log(f"登录后处理积分页跳转...")
+                await asyncio.sleep(2)
+                
+                # 检测当前页面 - 使用整合检测器（GPU加速深度学习）
+                from .page_detector import PageState
+                page_result = await self.integrated_detector.detect_page(
+                    device_id, use_cache=False, detect_elements=False
+                )
+                
+                if page_result and page_result.state == PageState.POINTS_PAGE:
+                    log(f"检测到积分页，需要按2次返回键到个人页...")
+                    
+                    # 第1次返回键
+                    await self.adb.press_back(device_id)
+                    await asyncio.sleep(1)
+                    
+                    # 第2次返回键
+                    await self.adb.press_back(device_id)
+                    await interruptible_sleep(3)  # 增加等待时间到3秒，让页面充分加载
+                    
+                    # 清理缓存（页面已改变）
+                    self.hybrid_detector.clear_cache()
+                    
+                    # 按返回键后检测页面状态（最多重试3次）- 使用整合检测器（GPU加速）
+                    for retry in range(3):
+                        # 使用整合检测器进行快速检测
+                        page_result = await self.integrated_detector.detect_page(
+                            device_id, use_cache=False, detect_elements=False
+                        )
+                        
+                        if page_result:
+                            log(f"检测结果: {page_result.state.value} - {page_result.details}")
+                            
+                            if page_result.state == PageState.PROFILE_LOGGED:
+                                log(f"✓ 已返回到个人页")
+                                break
+                            elif page_result.state == PageState.POINTS_PAGE:
+                                # 仍然在积分页，再按一次返回键
+                                log(f"⚠️ 仍在积分页，再按一次返回键...")
+                                await self.adb.press_back(device_id)
+                                await interruptible_sleep(3)
+                                self.hybrid_detector.clear_cache()
+                                # 不break，继续重试检测
+                            elif page_result.state == PageState.LAUNCHER:
+                                log(f"❌ 检测到桌面，应用已退出！尝试重启应用...")
+                                # 强制停止应用
+                                await self.adb.stop_app(device_id, "com.xmwl.shop")
+                                await asyncio.sleep(1)
+                                # 重新启动应用
+                                await self.adb.start_app(device_id, "com.xmwl.shop")
+                                await interruptible_sleep(5)
+                                log(f"✓ 应用已重新启动")
+                                
+                                # 清理缓存（应用已重启）
+                                self.hybrid_detector.clear_cache()
+                                
+                                # 重启后再次检测页面状态 - 使用整合检测器（GPU加速）
+                                log(f"检测应用启动后的页面状态...")
+                                page_result = await self.integrated_detector.detect_page(
+                                    device_id, use_cache=False, detect_elements=False
+                                )
+                                if page_result:
+                                    log(f"当前页面: {page_result.state.value}")
+                                else:
+                                    log(f"⚠️ 无法检测页面状态")
+                                break
+                            else:
+                                # 其他状态，可能是个人页但模板没匹配上，用OCR再确认
+                                if "个人" in page_result.details or "我的" in page_result.details or "余额" in page_result.details:
+                                    log(f"✓ OCR确认已在个人页（{page_result.details}）")
+                                    break
+                                
+                                if retry < 2:
+                                    log(f"⚠️ 返回后页面状态: {page_result.state.value}，等待后重试...")
+                                    await interruptible_sleep(3)  # 增加等待时间到3秒
+                                else:
+                                    log(f"⚠️ 返回后页面状态: {page_result.state.value}")
+                        else:
+                            if retry < 2:
+                                log(f"⚠️ 无法检测页面状态，等待后重试...")
+                                await asyncio.sleep(2)  # 等待更长时间
+                            else:
+                                log(f"⚠️ 无法检测页面状态")
+                    else:
+                        log(f"⚠️ 无法检测返回后的页面状态")
+                else:
+                    log(f"当前页面: {page_result.state.value if page_result else 'unknown'}")
+                    await asyncio.sleep(2)
+            
+            # ==================== 步骤2: 获取初始个人资料 ====================
+            log(f"{'='*60}")
+            log(f"步骤2: 获取初始个人资料")
+            log(f"{'='*60}")
+            
+            profile_success = False
+            profile_data = None
+            
+            # 尝试最多3次获取个人资料
+            for attempt in range(3):
+                try:
+                    if attempt > 0:
+                        log(f"\n[尝试 {attempt + 1}/3] 重新获取个人资料...")
+                    
+                    # 如果是缓存登录，跳过导航（已经在个人页）
+                    if skip_login:
+                        cache_check_start = time.time()
+                        log(f"[缓存登录] 验证当前页面状态...")
+                        nav_success = True
+                        
+                        # 立即检测页面状态（不等待）- 使用整合检测器（GPU加速）
+                        detect_start = time.time()
+                        from .page_detector import PageState
+                        page_result = await self.integrated_detector.detect_page(
+                            device_id, use_cache=True, detect_elements=False
+                        )
+                        detect_time = time.time() - detect_start
+                        log(f"[时间记录] 页面检测耗时: {detect_time:.3f}秒")
+                        
+                        if not page_result or not page_result.state:
+                            log(f"  ⚠️ 无法检测当前页面状态")
+                            if attempt < 2:
+                                await asyncio.sleep(2)
+                                continue
+                            else:
+                                result.error_message = "无法确认当前页面状态"
+                                return result
+                        
+                        log(f"  当前页面: {page_result.state.value}（置信度{page_result.confidence:.2%}）")
+                        
+                        # 确认在个人页（已登录）
+                        if page_result.state != PageState.PROFILE_LOGGED:
+                            log(f"  ⚠️ 当前不在个人页（已登录），尝试导航...")
+                            nav_start = time.time()
+                            nav_success = await self.navigator.navigate_to_profile(device_id)
+                            nav_time = time.time() - nav_start
+                            log(f"[时间记录] 导航耗时: {nav_time:.3f}秒")
+                            if not nav_success:
+                                if attempt < 2:
+                                    await asyncio.sleep(2)
+                                    continue
+                                else:
+                                    result.error_message = "无法导航到个人页"
+                                    return result
+                        else:
+                            log(f"  ✓ 确认在个人页（已登录）")
+                            log(f"  ✓ 页面已就绪，直接获取个人资料")
+                        
+                        cache_check_time = time.time() - cache_check_start
+                        log(f"[时间记录] 缓存登录验证总耗时: {cache_check_time:.3f}秒")
+                    else:
+                        # 导航到个人资料页面
+                        # 注意：导航可能返回True但页面状态不确定，通过获取资料来验证
+                        nav_start = time.time()
+                        nav_success = await self.navigator.navigate_to_profile(device_id)
+                        nav_time = time.time() - nav_start
+                        log(f"[时间记录] 导航耗时: {nav_time:.3f}秒")
+                        
+                        if not nav_success:
+                            log(f"⚠️ 导航到个人资料页面失败")
+                            
+                            # 检查当前页面状态 - 使用整合检测器（GPU加速）
+                            from .page_detector import PageState
+                            page_result = await self.integrated_detector.detect_page(
+                                device_id, use_cache=True, detect_elements=False
+                            )
+                            
+                            # 检查返回值是否有效
+                            if not page_result or not page_result.state:
+                                log(f"  ⚠️ 无法检测当前页面状态")
+                                if attempt < 2:
+                                    await asyncio.sleep(2)
+                                    continue
+                                else:
+                                    break
+                            
+                            log(f"  当前页面: {page_result.state.value}")
+                            
+                            # 如果已经在个人资料页面，继续
+                            if page_result.state in [PageState.PROFILE, PageState.PROFILE_LOGGED]:
+                                log(f"  ✓ 检测到已在个人资料页面，继续获取数据")
+                            else:
+                                # 尝试按返回键回到首页，然后重新导航
+                                log(f"  尝试返回首页...")
+                                await self.adb.press_back(device_id)
+                                await asyncio.sleep(2)
+                                
+                                # 重新导航
+                                nav_success = await self.navigator.navigate_to_profile(device_id)
+                                if not nav_success:
+                                    if attempt < 2:
+                                        log(f"  ⚠️ 导航仍然失败，等待2秒后重试...")
+                                        await asyncio.sleep(2)
+                                        continue
+                                    else:
+                                        from .models.error_types import ErrorType
+                                        result.error_type = ErrorType.CANNOT_REACH_PROFILE
+                                        result.error_message = "无法导航到个人资料页面"
+                                        log(f"✗ 无法获取个人资料，终止流程\n")
+                                        return result
+                    
+                    # ===== 关键优化：直接尝试获取资料，通过获取结果判断是否成功 =====
+                    # 使用 ProfileReader 获取完整个人资料（带重试）
+                    # 传递账号字符串（格式：手机号----密码），用于提取手机号
+                    profile_read_start = time.time()
+                    log(f"[时间记录] 开始获取个人资料...")
+                    account_str = f"{account.phone}----{account.password}"
+                    profile_data = await self.profile_reader.get_full_profile_with_retry(device_id, account=account_str)
+                    profile_read_time = time.time() - profile_read_start
+                    log(f"[时间记录] 获取个人资料耗时: {profile_read_time:.3f}秒")
+                    
+                    # 检查是否成功获取数据（必须获取到余额、昵称和用户ID）
+                    has_balance = profile_data and profile_data.get('balance') is not None
+                    has_nickname = profile_data and profile_data.get('nickname') is not None
+                    has_user_id = profile_data and profile_data.get('user_id') is not None
+                    
+                    # ===== 核心逻辑：基于获取资料的结果判断是否成功 =====
+                    if has_balance and has_nickname and has_user_id:
+                        log(f"✓ 成功获取个人资料数据")
+                        profile_success = True
+                        break  # 获取成功，退出循环
+                    else:
+                        missing = []
+                        if not has_balance:
+                            missing.append("余额")
+                        if not has_nickname:
+                            missing.append("昵称")
+                        if not has_user_id:
+                            missing.append("用户ID")
+                        log(f"⚠️ 获取的数据不完整，缺少: {', '.join(missing)}")
+                        
+                        # 数据不完整，说明可能不在个人页或页面加载未完成
+                        # 重新导航并重试
+                        if attempt < 2:
+                            log(f"  重新导航到个人页...")
+                            await self.navigator.navigate_to_profile(device_id)
+                            log(f"  等待2秒后重试...")
+                            await asyncio.sleep(2)
+                        
+                except Exception as e:
+                    log(f"⚠️ 获取个人资料出错: {str(e)}")
+                    if attempt < 2:
+                        log(f"  等待2秒后重试...")
+                        await asyncio.sleep(2)
+                    else:
+                        from .models.error_types import ErrorType
+                        result.error_type = ErrorType.CANNOT_READ_PROFILE
+                        result.error_message = f"获取个人资料失败: {str(e)}"
+                        log(f"✗ 无法获取个人资料，终止流程\n")
+                        return result
+            
+            # 如果3次尝试后仍未成功
+            if not profile_success or not profile_data:
+                from .models.error_types import ErrorType
+                result.error_type = ErrorType.CANNOT_READ_PROFILE
+                result.error_message = "获取个人资料失败（3次尝试后）"
+                log(f"✗ 无法获取个人资料，终止流程\n")
+                return result
+            
+            # ==================== 步骤3: 存储初始数据到 result ====================
+            result.nickname = profile_data.get('nickname')  # 直接使用OCR结果，不使用历史数据
+            result.user_id = profile_data.get('user_id')  # 直接使用OCR结果，不使用历史数据
+            # phone 已经在初始化时设置
+            result.balance_before = profile_data.get('balance')
+            result.points = profile_data.get('points')
+            result.vouchers = profile_data.get('vouchers')
+            result.coupons = profile_data.get('coupons')
+            
+            # 显示收集到的账户信息
+            self._log_profile_data(result)
+            
+            # 调试信息：显示缓存状态
+            log(f"\n[调试] 缓存状态检查:")
+            log(f"  - enable_cache: {self.auto_login.enable_cache}")
+            log(f"  - cache_manager 存在: {self.auto_login.cache_manager is not None}")
+            log(f"  - user_id: {result.user_id}")
+            
+            # ==================== 步骤3.5: 保存登录缓存（包含用户ID）====================
+            # 优化：异步保存缓存，不阻塞主流程
+            if self.auto_login.enable_cache and self.auto_login.cache_manager:
+                if result.user_id:
+                    log(f"\n异步保存登录缓存（包含用户ID: {result.user_id}）...")
+                else:
+                    log(f"\n异步保存登录缓存（未获取到用户ID）...")
+                
+                # 创建异步任务，不等待完成
+                async def save_cache_async():
+                    try:
+                        cache_saved = await self.auto_login.cache_manager.save_login_cache(
+                            device_id, 
+                            account.phone, 
+                            user_id=result.user_id
+                        )
+                        if cache_saved:
+                            log(f"[后台] ✓ 登录缓存已保存")
+                        else:
+                            log(f"[后台] ⚠️ 登录缓存保存失败")
+                    except Exception as e:
+                        log(f"[后台] ⚠️ 保存登录缓存时出错: {str(e)}")
+                
+                # 启动后台任务，不等待完成
+                asyncio.create_task(save_cache_async())
+                log(f"✓ 缓存保存任务已启动（后台执行）")
+            else:
+                if not self.auto_login.enable_cache:
+                    log(f"\n⚠️ 缓存功能未启用，跳过缓存保存")
+                elif not self.auto_login.cache_manager:
+                    log(f"\n⚠️ 缓存管理器未初始化，跳过缓存保存")
+            
+            # 优化：移除不必要的1秒等待
+            # await asyncio.sleep(1)  # 已移除
+            
+            # ==================== 优化：跳过重复获取个人资料 ====================
+            # 步骤2已经获取了完整的个人资料，不需要在步骤4重复获取
+            # 直接使用步骤2的数据，节省时间
+            log(f"\n{'='*60}")
+            log(f"[优化] 使用步骤2已获取的个人资料数据")
+            log(f"{'='*60}")
+            log(f"  用户ID: {result.user_id}")
+            log(f"  昵称: {result.nickname}")
+            log(f"  余额: {result.balance_before:.2f} 元" if result.balance_before else "  余额: 未获取")
+            log(f"  积分: {result.points}")
+            log(f"  抵扣券: {result.vouchers}")
+            log(f"  优惠券: {result.coupons}")
+            log("")
+            
+            # ==================== 步骤3: 执行签到（仅在成功获取资料后执行）====================
+            if not profile_success:
+                log(f"{'='*60}")
+                log(f"跳过签到流程")
+                log(f"{'='*60}")
+                log(f"  原因: 未能获取个人资料数据\n")
+                # 标记为成功但跳过签到
+                result.success = True
+                return result
+            
+            log(f"{'='*60}")
+            log(f"步骤3: 执行签到")
+            log(f"{'='*60}")
+            
+            try:
+                # 使用步骤2已获取的个人资料数据
+                updated_profile_data = {
+                    'balance': result.balance_before,  # 使用步骤2获取的余额
+                    'points': result.points,
+                    'vouchers': result.vouchers,
+                    'coupons': result.coupons,
+                    'nickname': result.nickname,
+                    'user_id': result.user_id
+                }
+                
+                # 直接调用 do_checkin，它会自动处理导航和返回首页
+                checkin_result = await self.daily_checkin.do_checkin(
+                    device_id, 
+                    phone=account.phone,
+                    password=account.password,
+                    login_callback=None,  # 已经登录，不需要回调
+                    log_callback=None,
+                    profile_data=updated_profile_data  # 传递最新获取的个人信息（步骤4的数据）
+                )
+                
+                # 记录签到结果
+                if checkin_result['success']:
+                    result.checkin_reward = checkin_result.get('reward_amount', 0.0)
+                    result.checkin_total_times = checkin_result.get('total_times')
+                    log(f"✓ 签到成功")
+                    log(f"  签到次数: {checkin_result.get('checkin_count', 0)}")
+                    log(f"  总奖励: {result.checkin_reward:.2f} 元\n")
+                elif checkin_result.get('already_checked'):
+                    # 即使已签到，也要获取总次数
+                    result.checkin_total_times = checkin_result.get('total_times')
+                    log(f"✓ 今日已签到")
+                    if result.checkin_total_times:
+                        log(f"  总签到次数: {result.checkin_total_times}\n")
+                    else:
+                        log(f"  (未获取到总签到次数)\n")
+                else:
+                    # 签到失败，设置错误类型
+                    from .models.error_types import ErrorType
+                    result.error_type = ErrorType.CHECKIN_FAILED
+                    result.error_message = checkin_result.get('message', '未知错误')
+                    log(f"⚠️ 签到失败: {result.error_message}\n")
+                
+            except Exception as e:
+                # 签到异常，设置错误类型
+                from .models.error_types import ErrorType
+                result.error_type = ErrorType.CHECKIN_EXCEPTION
+                result.error_message = str(e)
+                log(f"⚠️ 签到流程出错: {str(e)}")
+                log(f"⚠️ 跳过签到，继续执行后续流程\n")
+            
+            # 优化：移除签到后的1秒等待，直接进入下一步
+            # await asyncio.sleep(1)  # 已移除
+            
+            # ==================== 步骤7: 再次获取完整个人资料（最终数据）====================
+            log(f"{'='*60}")
+            log(f"步骤7: 获取最终个人资料")
+            log(f"{'='*60}")
+            
+            try:
+                # 使用统一的导航方法（高频扫描，自动处理广告）
+                log(f"  导航到个人页...")
+                nav_success = await self._navigate_to_profile_with_ad_handling(device_id, log)
+                
+                if not nav_success:
+                    log(f"  ⚠️ 导航到个人资料页面失败，跳过最终数据获取\n")
+                else:
+                    # 直接获取个人资料（不再需要检测和处理广告）
+                    try:
+                        # 获取完整个人资料（带超时）
+                        # 使用并行处理方法提升性能
+                        account_str = f"{account.phone}----{account.password}"
+                        profile_task = self.profile_reader.get_full_profile_parallel(device_id, account=account_str)
+                        try:
+                            final_profile = await asyncio.wait_for(profile_task, timeout=10.0)
+                            
+                            # 更新最终数据（确保类型正确）
+                            balance = final_profile.get('balance')
+                            if balance is not None:
+                                # 确保余额是float类型
+                                if isinstance(balance, str):
+                                    try:
+                                        result.balance_after = float(balance)
+                                    except ValueError:
+                                        result.balance_after = None
+                                else:
+                                    result.balance_after = balance
+                            else:
+                                result.balance_after = None
+                            
+                            # 更新其他可能变化的字段
+                            if final_profile.get('points') is not None:
+                                result.points = final_profile.get('points')
+                            if final_profile.get('vouchers') is not None:
+                                result.vouchers = final_profile.get('vouchers')
+                            if final_profile.get('coupons') is not None:
+                                result.coupons = final_profile.get('coupons')
+                            
+                            if result.balance_after is not None:
+                                log(f"  ✓ 最终余额: {result.balance_after:.2f} 元")
+                            else:
+                                log(f"  ⚠️ 未能获取最终余额")
+                            
+                            if result.points is not None:
+                                log(f"  ✓ 最终积分: {result.points} 积分")
+                            
+                            if result.vouchers is not None:
+                                log(f"  ✓ 最终抵扣券: {result.vouchers} 张")
+                            
+                            if result.coupons is not None:
+                                log(f"  ✓ 最终优惠券: {result.coupons} 张")
+                            
+                            log("")  # 空行
+                        except asyncio.TimeoutError:
+                            log(f"  ⚠️ 获取最终数据超时\n")
+                    except Exception as e:
+                        log(f"  ⚠️ 获取最终数据出错: {str(e)}\n")
+            except Exception as e:
+                log(f"⚠️ 获取最终数据流程出错: {str(e)}\n")
+            
+            # 显示执行总结
+            self._log_summary(result)
+            
+            # ==================== 步骤7.5: 自动转账（每次处理账号时重新读取配置）====================
+            log(f"{'='*60}")
+            log(f"步骤7.5: 检查自动转账")
+            log(f"{'='*60}")
+            
+            try:
+                # 每次处理账号时重新读取转账配置
+                from .transfer_config import get_transfer_config
+                transfer_config = get_transfer_config()
+                should_auto_transfer = transfer_config.enabled
+                
+                if should_auto_transfer:
+                    log(f"✓ 自动转账功能已启用，开始检查转账条件...")
+                    
+                    # 检查必要的数据
+                    if not result.user_id:
+                        log(f"  ⚠️ 无法获取用户ID，跳过转账")
+                    elif result.balance_after is None:
+                        log(f"  ⚠️ 无法获取余额，跳过转账")
+                    else:
+                        # 判断是否需要转账（使用最新的配置）
+                        account_level = transfer_config.get_account_level(result.user_id)
+                        
+                        if transfer_config.should_transfer(result.user_id, result.balance_after, current_level=0):
+                            recipient_id = transfer_config.get_transfer_recipient(result.user_id, current_level=0)
+                            if recipient_id:
+                                log(f"  ✓ 满足转账条件，准备转账到 ID: {recipient_id}")
+                                try:
+                                    # 执行转账（传入转账前余额用于验证）
+                                    transfer_result = await self.balance_transfer.transfer_balance(
+                                        device_id,
+                                        recipient_id,
+                                        initial_balance=result.balance_after,
+                                        log_callback=log
+                                    )
+                                    
+                                    if transfer_result['success']:
+                                        log(f"  ✓ 转账成功")
+                                        if transfer_result.get('amount'):
+                                            log(f"    - 转账金额: {transfer_result['amount']:.2f} 元")
+                                            # 更新余额（转账后余额会减少）
+                                            if result.balance_after is not None:
+                                                result.balance_after -= transfer_result['amount']
+                                                log(f"    - 转账后余额: {result.balance_after:.2f} 元")
+                                            # 保存转账信息到result对象
+                                            result.transfer_amount = transfer_result.get('amount', 0.0)
+                                            result.transfer_recipient = recipient_id
+                                            log(f"    - 已保存转账信息: {result.transfer_amount:.2f} 元 → {result.transfer_recipient}")
+                                    else:
+                                        # 转账失败，设置错误类型
+                                        from .models.error_types import ErrorType
+                                        result.error_type = ErrorType.TRANSFER_FAILED
+                                        result.error_message = transfer_result.get('message', '未知错误')
+                                        log(f"  ❌ 转账失败: {result.error_message}")
+                                        # 转账失败时，设置收款人为"失败"
+                                        result.transfer_amount = 0.0
+                                        result.transfer_recipient = "失败"
+                                except Exception as e:
+                                    # 转账异常，设置错误类型
+                                    from .models.error_types import ErrorType
+                                    result.error_type = ErrorType.TRANSFER_FAILED
+                                    result.error_message = str(e)
+                                    log(f"  ❌ 转账异常: {e}")
+                                    import traceback
+                                    log(f"  详细错误: {traceback.format_exc()}")
+                                    # 转账异常时，设置收款人为"失败"
+                                    result.transfer_amount = 0.0
+                                    result.transfer_recipient = "失败"
+                            else:
+                                log(f"  ⚠️ 未配置收款人ID")
+                        else:
+                            # 判断不转账的原因
+                            if account_level > 0:
+                                # 是收款账号
+                                log(f"  ℹ️ 当前账号是 {account_level} 级收款账号，不进行转账")
+                                if not transfer_config.multi_level_enabled:
+                                    log(f"    - 多级转账功能未启用")
+                                elif account_level >= transfer_config.max_transfer_level:
+                                    log(f"    - 已达到最大转账级别 ({transfer_config.max_transfer_level})")
+                                else:
+                                    next_level = account_level + 1
+                                    if not transfer_config.get_recipients(next_level):
+                                        log(f"    - 未配置 {next_level} 级收款账号")
+                            elif not transfer_config.recipient_ids:
+                                log(f"  ⚠️ 未配置收款账号")
+                            else:
+                                # 余额不足
+                                log(f"  ℹ️ 余额未达到转账条件")
+                                log(f"    - 当前余额: {result.balance_after:.2f} 元")
+                                log(f"    - 起步金额: {transfer_config.min_transfer_amount:.2f} 元")
+                                log(f"    - 保留余额: {transfer_config.min_balance:.2f} 元")
+                                log(f"    - 需要余额 >= {transfer_config.min_transfer_amount + transfer_config.min_balance:.2f} 元")
+                else:
+                    log(f"  ℹ️ 自动转账功能未启用，跳过转账")
+                
+                log("")  # 空行
+            except Exception as e:
+                log(f"  ❌ 转账检查出错: {str(e)}\n")
+            
+            # ==================== 步骤8: 退出登录 ====================
+            log(f"{'='*60}")
+            log(f"步骤8: 退出登录")
+            log(f"{'='*60}")
+            
+            try:
+                await self.auto_login.logout(device_id)
+                log(f"✓ 已退出登录\n")
+            except Exception as e:
+                log(f"⚠️ 退出登录失败: {str(e)}\n")
+            
+            result.success = True
+            return result
+            
+        except Exception as e:
+            result.error_message = str(e)
+            log(f"\n✗ 工作流程出错: {str(e)}\n")
+            return result
+    
+    def _log_profile_data(self, result: AccountResult):
+        """显示收集到的账户信息
+        
+        Args:
+            result: 账号处理结果
+        """
+        print(f"\n{'='*60}")
+        print(f"账户信息")
+        print(f"{'='*60}")
+        print(f"  昵称: {result.nickname or 'N/A'}")
+        print(f"  ID: {result.user_id or 'N/A'}")
+        print(f"  手机号: {result.phone}")
+        
+        if result.balance_before is not None:
+            print(f"  余额: {result.balance_before:.2f} 元")
+        else:
+            print(f"  余额: N/A")
+        
+        if result.points is not None:
+            print(f"  积分: {result.points} 积分")
+        else:
+            print(f"  积分: N/A")
+        
+        if result.vouchers is not None:
+            print(f"  抵扣券: {result.vouchers} 张")
+        else:
+            print(f"  抵扣券: N/A")
+        
+        print(f"{'='*60}\n")
+    
+    def _log_checkin_results(self, rewards: List[float], total: float):
+        """显示签到结果
+        
+        Args:
+            rewards: 签到奖励列表
+            total: 总奖励金额
+        """
+        print(f"\n{'='*60}")
+        print(f"签到结果")
+        print(f"{'='*60}")
+        
+        for i, reward in enumerate(rewards, 1):
+            print(f"  [签到 {i}/{len(rewards)}] 奖励: {reward:.2f} 元")
+        
+        print(f"  ✓ 签到完成，总奖励: {total:.2f} 元")
+        print(f"{'='*60}\n")
+    
+    def _log_summary(self, result: AccountResult):
+        """显示执行总结
+        
+        Args:
+            result: 账号处理结果
+        """
+        print(f"\n{'='*60}")
+        print(f"执行总结")
+        print(f"{'='*60}")
+        
+        if result.balance_before is not None:
+            print(f"  余额前: {result.balance_before:.2f} 元")
+        else:
+            print(f"  余额前: N/A")
+        
+        print(f"  签到奖励: {result.checkin_reward:.2f} 元")
+        
+        if result.checkin_balance_after is not None:
+            print(f"  余额: {result.checkin_balance_after:.2f} 元")
+        else:
+            print(f"  余额: N/A")
+        
+        if result.balance_after is not None:
+            print(f"  余额: {result.balance_after:.2f} 元")
+        else:
+            print(f"  余额: N/A")
+        
+        if result.balance_change is not None:
+            print(f"  余额变化: {result.balance_change:+.2f} 元")
+        else:
+            print(f"  余额变化: 无变化")
+        
+        print(f"{'='*60}\n")
+    
+    def _log_collection_error(self, field: str, error: Exception):
+        """记录字段获取失败
+        
+        Args:
+            field: 字段名称（如"昵称"、"余额"等）
+            error: 异常对象
+        """
+        print(f"  ⚠️ 获取{field}失败: {str(error)}")
+    
+    def _log_partial_success(self, collected_fields: List[str], failed_fields: List[str]):
+        """记录部分成功的数据收集结果
+        
+        Args:
+            collected_fields: 成功收集的字段列表
+            failed_fields: 收集失败的字段列表
+        """
+        if collected_fields:
+            print(f"  ✓ 成功获取: {', '.join(collected_fields)}")
+        
+        if failed_fields:
+            print(f"  ✗ 获取失败: {', '.join(failed_fields)}")
+
 
