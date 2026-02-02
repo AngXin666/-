@@ -1,0 +1,7 @@
+names:
+  0: 签到按钮
+  1: 签到次数
+nc: 2
+path: D:\360MoveData\Users\Administrator\Desktop\模拟\yolo_dataset_签到页
+train: images/train
+val: images/val

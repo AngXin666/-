@@ -1,0 +1,2526 @@
+﻿"""
+个人信息读取模块 - 读取积分、抵扣券、总抽奖次数等
+Profile Reader Module - Read points, vouchers, draw times, etc.
+"""
+
+import asyncio
+import re
+from typing import Optional, Dict, List
+from io import BytesIO
+
+try:
+    from PIL import Image
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
+
+try:
+    from rapidocr import RapidOCR
+    HAS_OCR = True
+except ImportError:
+    HAS_OCR = False
+
+from .adb_bridge import ADBBridge
+from .account_cache import get_account_cache
+from .ocr_image_processor import enhance_for_ocr
+from .ocr_thread_pool import get_ocr_pool
+from .logger import get_silent_logger
+
+
+class ProfileReader:
+    """个人信息读取器"""
+    
+    # 定义固定的像素区域（540x960分辨率）
+    # 只识别数字区域，不包含标签文字
+    REGIONS = {
+        'nickname': (100, 90, 300, 130),     # 昵称区域（顶部，ID上方）
+        'balance': (30, 230, 150, 330),      # 余额数字区域（向左扩展20px以包含完整数字）
+        'points': (180, 230, 260, 330),      # 积分数字区域
+        'vouchers': (265, 230, 360, 330),    # 抵扣券数字区域（左边扩大10px以支持3位数）
+        'coupons': (410, 230, 490, 330),     # 优惠券数字区域
+    }
+    
+    def __init__(self, adb: ADBBridge, yolo_detector=None):
+        """初始化读取器
+        
+        Args:
+            adb: ADB桥接对象
+            yolo_detector: YOLO按钮检测器或PageDetector对象（应该是从ModelManager获取的共享实例）
+        """
+        self.adb = adb
+        
+        # 从ModelManager获取OCR线程池
+        from .model_manager import ModelManager
+        model_manager = ModelManager.get_instance()
+        self._ocr_pool = model_manager.get_ocr_thread_pool() if HAS_OCR else None
+        
+        # 初始化账号缓存
+        self._cache = get_account_cache()
+        
+        # 初始化检测器（支持整合检测器和旧的YOLO检测器）
+        self._integrated_detector = None
+        self._yolo_detector = None
+        
+        if yolo_detector:
+            # 检查是否是整合检测器（PageDetectorIntegrated）
+            if hasattr(yolo_detector, 'detect_page') and hasattr(yolo_detector, '_detect_elements'):
+                self._integrated_detector = yolo_detector
+                print(f"[ProfileReader] ✓ 整合检测器已初始化")
+            # 检查是否是PageDetector对象，提取其中的_yolo_detector
+            elif hasattr(yolo_detector, '_yolo_detector'):
+                self._yolo_detector = yolo_detector._yolo_detector
+                print(f"[ProfileReader] ✓ YOLO检测器已初始化（从PageDetector提取）")
+            else:
+                self._yolo_detector = yolo_detector
+                print(f"[ProfileReader] ✓ YOLO检测器已初始化")
+        else:
+            print(f"[ProfileReader] ✗ 检测器为None，将使用OCR降级方案")
+        
+        # 初始化静默日志记录器
+        self._silent_log = get_silent_logger()
+    
+    async def get_profile_info(self, device_id: str) -> Dict[str, any]:
+        """获取个人信息（积分、抵扣券、总抽奖次数等）
+        
+        Args:
+            device_id: 设备ID
+            
+        Returns:
+            dict: 个人信息
+                - points: int, 积分
+                - vouchers: int, 抵扣券数量
+                - total_draw_times: int, 总抽奖次数
+        """
+        result = {
+            'points': None,
+            'vouchers': None,
+            'total_draw_times': None
+        }
+        
+        if not HAS_PIL or not self._ocr_pool:
+            return result
+        
+        try:
+            # 截图
+            screenshot_data = await self.adb.screencap(device_id)
+            if not screenshot_data:
+                return result
+            
+            image = Image.open(BytesIO(screenshot_data))
+            
+            # 使用OCR图像预处理模块增强图像（灰度图 + 对比度增强2倍）
+            enhanced_image = enhance_for_ocr(image)
+            
+            # 使用 OCR 线程池识别（异步，带超时）
+            ocr_result = await self._ocr_pool.recognize(enhanced_image, timeout=10.0)
+            
+            if not ocr_result or not ocr_result.texts:
+                return result
+            
+            texts = ocr_result.texts
+            
+            # 解析积分
+            points = self._parse_points(texts)
+            if points is not None:
+                result['points'] = points
+            
+            # 解析抵扣券
+            vouchers = self._parse_vouchers(texts)
+            if vouchers is not None:
+                result['vouchers'] = vouchers
+            
+            # 解析优惠券
+            coupons = self._parse_coupons(texts)
+            if coupons is not None:
+                result['coupons'] = coupons
+            
+            # 解析总抽奖次数
+            draw_times = self._parse_draw_times(texts)
+            if draw_times is not None:
+                result['total_draw_times'] = draw_times
+            
+            return result
+            
+        except Exception as e:
+            print(f"获取个人信息失败: {e}")
+            return result
+    
+    async def _get_dynamic_data_only(self, device_id: str) -> Dict[str, any]:
+        """只获取动态数据（余额、积分、抵扣券、优惠券），跳过昵称和用户ID
+        
+        用于缓存登录时，已经有昵称和用户ID，只需要获取动态数据
+        
+        Args:
+            device_id: 设备ID
+            
+        Returns:
+            dict: 动态数据
+                - balance: float, 余额
+                - points: int, 积分
+                - vouchers: float, 抵扣券
+                - coupons: int, 优惠券
+        """
+        result = {
+            'balance': None,
+            'points': None,
+            'vouchers': None,
+            'coupons': None
+        }
+        
+        if not HAS_PIL or not self._ocr_pool:
+            print("  ! PIL 或 OCR 库未安装")
+            return result
+        
+        try:
+            # 截图
+            screenshot_data = await self.adb.screencap(device_id)
+            if not screenshot_data:
+                print("  ! 截图失败")
+                return result
+            
+            image = Image.open(BytesIO(screenshot_data))
+            
+            # 优先使用YOLO检测余额、积分、抵扣券、优惠券
+            if self._yolo_detector:
+                # 使用balance模型检测，降低置信度阈值到0.3提高检测成功率
+                detections = await self._yolo_detector.detect(
+                    device_id, 
+                    'balance',
+                    conf_threshold=0.3  # 从0.5降低到0.3
+                )
+                
+                print(f"  [YOLO] 检测到 {len(detections)} 个目标")
+                for det in detections:
+                    print(f"  [YOLO]   - {det.class_name}: 置信度={det.confidence:.2f}, bbox={det.bbox}")
+                
+                if detections:
+                    # 处理检测结果
+                    for det in detections:
+                        # 裁剪区域并OCR识别数字
+                        x1, y1, x2, y2 = det.bbox
+                        region = image.crop((x1, y1, x2, y2))
+                        region_enhanced = enhance_for_ocr(region)
+                        region_ocr = await self._ocr_pool.recognize(region_enhanced, timeout=3.0)
+                        
+                        if region_ocr and region_ocr.texts:
+                            # 提取数字
+                            for text in region_ocr.texts:
+                                match = re.search(r'(\d+\.?\d*)', text.strip())
+                                if match:
+                                    try:
+                                        value = float(match.group(1))
+                                        
+                                        # 根据类别名称分配到对应字段
+                                        if '余额' in det.class_name and result['balance'] is None:
+                                            result['balance'] = value
+                                            print(f"  ✓ 余额: {result['balance']:.2f} 元")
+                                        elif '积分' in det.class_name and result['points'] is None:
+                                            result['points'] = int(value)
+                                            print(f"  ✓ 积分: {result['points']}")
+                                        elif '抵扣' in det.class_name and result['vouchers'] is None:
+                                            result['vouchers'] = value
+                                            print(f"  ✓ 抵扣券: {result['vouchers']}")
+                                        elif '优惠' in det.class_name and result['coupons'] is None:
+                                            result['coupons'] = int(value)
+                                            print(f"  ✓ 优惠券: {result['coupons']}")
+                                        
+                                        break
+                                    except ValueError:
+                                        pass
+                else:
+                    print(f"  [YOLO] 未检测到任何目标，降级到区域OCR")
+            
+            # 如果YOLO检测失败，降级到区域OCR
+            if result['balance'] is None or result['points'] is None or result['vouchers'] is None or result['coupons'] is None:
+                print(f"  [区域OCR] YOLO部分字段未检测到，尝试区域OCR...")
+                region_results = await self._recognize_regions(device_id, image)
+                
+                if result['balance'] is None and region_results.get('balance') is not None:
+                    result['balance'] = region_results['balance']
+                    print(f"  [区域OCR] 余额: {result['balance']}")
+                
+                if result['points'] is None and region_results.get('points') is not None:
+                    result['points'] = region_results['points']
+                    print(f"  [区域OCR] 积分: {result['points']}")
+                
+                if result['vouchers'] is None and region_results.get('vouchers') is not None:
+                    result['vouchers'] = region_results['vouchers']
+                    print(f"  [区域OCR] 抵扣券: {result['vouchers']}")
+                
+                if result['coupons'] is None and region_results.get('coupons') is not None:
+                    result['coupons'] = region_results['coupons']
+                    print(f"  [区域OCR] 优惠券: {result['coupons']}")
+            
+            return result
+            
+        except Exception as e:
+            print(f"  ! 获取动态数据失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return result
+    
+    async def get_identity_only(self, device_id: str, account: Optional[str] = None) -> Dict[str, any]:
+        """只获取身份信息（昵称、用户ID），不读取余额等动态数据
+        
+        用于登录状态检查时，只需要确认身份，不需要读取余额
+        
+        注意：个人页上没有显示手机号，只能通过用户ID进行匹配
+        
+        Args:
+            device_id: 设备ID
+            account: 登录账号（可选），保留参数以兼容旧代码，但不使用
+            
+        Returns:
+            dict: 身份信息
+                - nickname: str, 昵称
+                - user_id: str, 用户ID
+        """
+        result = {
+            'nickname': None,
+            'user_id': None
+        }
+        
+        if not HAS_PIL or not self._ocr_pool:
+            print("  ! PIL 或 OCR 库未安装")
+            return result
+        
+        try:
+            # 截图
+            screenshot_data = await self.adb.screencap(device_id)
+            if not screenshot_data:
+                print("  ! 截图失败")
+                return result
+            
+            image = Image.open(BytesIO(screenshot_data))
+            
+            # 优先使用YOLO检测昵称和用户ID
+            if self._yolo_detector:
+                # 使用profile_logged模型检测
+                detections = await self._yolo_detector.detect(
+                    device_id, 
+                    'profile_logged',
+                    conf_threshold=0.3
+                )
+                
+                print(f"  [YOLO] 检测到 {len(detections)} 个目标")
+                
+                if detections:
+                    # 并行OCR识别
+                    ocr_tasks = []
+                    for det in detections:
+                        x1, y1, x2, y2 = det.bbox
+                        region = image.crop((x1, y1, x2, y2))
+                        region_enhanced = enhance_for_ocr(region)
+                        
+                        if '昵称' in det.class_name and result['nickname'] is None:
+                            ocr_tasks.append(('nickname', det.class_name, self._ocr_pool.recognize(region_enhanced, timeout=5.0)))
+                        elif 'ID' in det.class_name and result['user_id'] is None:
+                            ocr_tasks.append(('user_id', det.class_name, self._ocr_pool.recognize(region_enhanced, timeout=5.0)))
+                    
+                    # 并行执行OCR识别
+                    if ocr_tasks:
+                        ocr_results = await asyncio.gather(*[task[2] for task in ocr_tasks])
+                        
+                        # 处理OCR结果
+                        for i, (field_type, class_name, _) in enumerate(ocr_tasks):
+                            ocr_result = ocr_results[i]
+                            
+                            if not ocr_result or not ocr_result.texts:
+                                continue
+                            
+                            # 处理昵称
+                            if field_type == 'nickname':
+                                nickname = self._extract_nickname_from_texts(ocr_result.texts)
+                                if nickname:
+                                    result['nickname'] = nickname
+                                    print(f"  ✓ 昵称: {result['nickname']}")
+                            
+                            # 处理用户ID
+                            elif field_type == 'user_id':
+                                for text in ocr_result.texts:
+                                    text = text.strip()
+                                    if 'ID' in text or 'id' in text:
+                                        match = re.search(r'(\d{6,})', text)
+                                        if match:
+                                            result['user_id'] = match.group(1)
+                                            print(f"  ✓ 用户ID: {result['user_id']}")
+                                            break
+            
+            # 如果YOLO检测失败，降级到全屏OCR
+            if result['nickname'] is None or result['user_id'] is None:
+                print(f"  [全屏OCR] YOLO未检测到身份信息，尝试全屏OCR...")
+                enhanced_image = enhance_for_ocr(image)
+                ocr_result = await self._ocr_pool.recognize(enhanced_image, timeout=10.0)
+                
+                if ocr_result and ocr_result.texts:
+                    texts = ocr_result.texts
+                    
+                    # 保存OCR结果以便提取昵称时使用位置信息
+                    self._last_ocr_result = ocr_result
+                    
+                    if result['nickname'] is None:
+                        result['nickname'] = self._extract_nickname(texts)
+                        if result['nickname']:
+                            print(f"  [全屏OCR] 昵称: {result['nickname']}")
+                    
+                    if result['user_id'] is None:
+                        result['user_id'] = self._extract_user_id(texts)
+                        if result['user_id']:
+                            print(f"  [全屏OCR] 用户ID: {result['user_id']}")
+            
+            return result
+            
+        except Exception as e:
+            print(f"  ! 获取身份信息失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return result
+    
+    async def get_full_profile(self, device_id: str, account: Optional[str] = None) -> Dict[str, any]:
+        """获取完整的个人资料信息（并行优化版）
+        
+        Args:
+            device_id: 设备ID
+            account: 登录账号（可选），用于提取手机号
+            
+        Returns:
+            dict: 完整个人资料
+                - nickname: str, 昵称
+                - user_id: str, 用户ID
+                - phone: str, 手机号
+                - balance: float, 余额
+                - points: int, 积分
+                - vouchers: int, 抵扣券数量
+        """
+        import time
+        start_time = time.time()
+        
+        result = {
+            'nickname': None,
+            'user_id': None,
+            'phone': None,
+            'balance': None,
+            'points': None,
+            'vouchers': None,
+            'coupons': None
+        }
+        
+        if not HAS_PIL or not self._ocr_pool:
+            print("  ! PIL 或 OCR 库未安装")
+            return result
+        
+        try:
+            # 截图
+            screenshot_start = time.time()
+            screenshot_data = await self.adb.screencap(device_id)
+            if not screenshot_data:
+                print("  ! 截图失败")
+                return result
+            
+            image = Image.open(BytesIO(screenshot_data))
+            screenshot_time = time.time() - screenshot_start
+            print(f"  [性能] 截图耗时: {screenshot_time:.3f}秒")
+            
+            # ===== 优先使用整合检测器检测页面类型 =====
+            # ===== 优先使用整合检测器检测页面类型 =====
+            if self._integrated_detector:
+                detect_start = time.time()
+                print(f"  [整合检测器] 检测页面类型...")
+                
+                # 先检测页面类型（不检测元素，只判断是什么页面）
+                from .page_detector import PageState
+                page_result = await self._integrated_detector.detect_page(
+                    device_id, 
+                    use_cache=False, 
+                    detect_elements=False
+                )
+                
+                detect_time = time.time() - detect_start
+                print(f"  [性能] 页面类型检测耗时: {detect_time:.3f}秒")
+                print(f"  [整合检测器] 页面类型: {page_result.state.chinese_name} (置信度: {page_result.confidence:.2%})")
+                
+                # 如果检测到弹窗，需要处理
+                if page_result.state in [PageState.POPUP, PageState.PROFILE_AD]:
+                    print(f"  [整合检测器] ⚠️ 检测到弹窗页面: {page_result.state.chinese_name}")
+                    
+                    # 弹窗关闭逻辑：每5秒重试一次，最多4次（总共30秒超时）
+                    max_attempts = 4
+                    retry_interval = 5.0  # 每5秒重试一次
+                    close_start_time = time.time()
+                    
+                    for attempt in range(1, max_attempts + 1):
+                        print(f"  [弹窗处理] 第 {attempt}/{max_attempts} 次尝试...")
+                        
+                        # 步骤1：YOLO检测关闭按钮并点击
+                        clicked = False
+                        try:
+                            element_result = await self._integrated_detector.detect_page(
+                                device_id, 
+                                use_cache=False, 
+                                detect_elements=True
+                            )
+                            
+                            if element_result.elements:
+                                # 查找关闭按钮
+                                for element in element_result.elements:
+                                    if "关闭" in element.class_name or "确认" in element.class_name or "确定" in element.class_name:
+                                        print(f"  [YOLO] 找到关闭按钮: {element.class_name} (置信度: {element.confidence:.2%})")
+                                        
+                                        # 点击关闭按钮
+                                        x1, y1, x2, y2 = element.bbox
+                                        center_x = (x1 + x2) // 2
+                                        center_y = (y1 + y2) // 2
+                                        await self.adb.tap(device_id, center_x, center_y)
+                                        print(f"  [YOLO] 已点击关闭按钮 ({center_x}, {center_y})")
+                                        clicked = True
+                                        await asyncio.sleep(0.5)
+                                        break
+                        except Exception as e:
+                            print(f"  [YOLO] ⚠️ YOLO检测失败: {e}")
+                        
+                        # 步骤2：OCR确认是否关闭成功
+                        print(f"  [OCR确认] 检查是否已返回个人页...")
+                        screenshot_data = await self.adb.screencap(device_id)
+                        if screenshot_data:
+                            image = Image.open(BytesIO(screenshot_data))
+                            enhanced_image = enhance_for_ocr(image)
+                            ocr_result = await self._ocr_pool.recognize(enhanced_image, timeout=3.0)
+                            
+                            if ocr_result and ocr_result.texts:
+                                texts = ' '.join(ocr_result.texts)
+                                
+                                # 检查是否有个人页关键词
+                                profile_keywords = ['昵称', 'ID', '余额', '积分', '抵扣券', '优惠券']
+                                popup_keywords = ['友情提示', '确认', '取消', '关闭', '广告']
+                                
+                                has_profile = any(keyword in texts for keyword in profile_keywords)
+                                has_popup = any(keyword in texts for keyword in popup_keywords)
+                                
+                                if has_profile and not has_popup:
+                                    print(f"  [OCR确认] ✓ 已返回个人页")
+                                    break
+                                elif has_popup:
+                                    print(f"  [OCR确认] ⚠️ 仍在弹窗页面，尝试按返回键...")
+                                    await self.adb.press_back(device_id)
+                                    await asyncio.sleep(0.5)
+                                    
+                                    # 再次OCR确认
+                                    screenshot_data = await self.adb.screencap(device_id)
+                                    if screenshot_data:
+                                        image = Image.open(BytesIO(screenshot_data))
+                                        enhanced_image = enhance_for_ocr(image)
+                                        ocr_result = await self._ocr_pool.recognize(enhanced_image, timeout=3.0)
+                                        
+                                        if ocr_result and ocr_result.texts:
+                                            texts = ' '.join(ocr_result.texts)
+                                            has_profile = any(keyword in texts for keyword in profile_keywords)
+                                            has_popup = any(keyword in texts for keyword in popup_keywords)
+                                            
+                                            if has_profile and not has_popup:
+                                                print(f"  [返回键] ✓ 已返回个人页")
+                                                break
+                        
+                        # 检查是否超时（累计计时，不清零）
+                        elapsed = time.time() - close_start_time
+                        if elapsed >= 30.0:
+                            print(f"  [弹窗处理] ⚠️ 超时（{elapsed:.1f}秒），停止尝试")
+                            break
+                        
+                        # 如果不是最后一次尝试，等待5秒后重试
+                        if attempt < max_attempts:
+                            remaining = retry_interval - (time.time() - close_start_time - (attempt - 1) * retry_interval)
+                            if remaining > 0:
+                                print(f"  [弹窗处理] 等待 {remaining:.1f}秒后重试...")
+                                await asyncio.sleep(remaining)
+
+                
+                # 现在开始检测页面元素（昵称、余额等）
+                yolo_start = time.time()
+                print(f"  [整合检测器] 开始检测页面元素...")
+                
+                # 使用整合检测器的detect_page方法，启用元素检测
+                detection_result = await self._integrated_detector.detect_page(
+                    device_id, 
+                    use_cache=False, 
+                    detect_elements=True
+                )
+                
+                yolo_time = time.time() - yolo_start
+                print(f"  [性能] 整合检测器耗时: {yolo_time:.3f}秒")
+                print(f"  [整合检测器] 检测到 {len(detection_result.elements)} 个元素")
+                
+                # ===== 优化：全屏OCR一次，然后根据YOLO位置匹配文本 =====
+                if detection_result.elements:
+                    ocr_start = time.time()
+                    
+                    # 全屏OCR识别（只调用一次）
+                    print(f"  [全屏OCR] 开始识别...")
+                    enhanced_image = enhance_for_ocr(image)
+                    full_ocr_result = await self._ocr_pool.recognize(enhanced_image)
+                    
+                    ocr_time = time.time() - ocr_start
+                    print(f"  [性能] 全屏OCR耗时: {ocr_time:.3f}秒")
+                    
+                    if full_ocr_result and full_ocr_result.texts and full_ocr_result.boxes is not None:
+                        print(f"  [全屏OCR] 识别到 {len(full_ocr_result.texts)} 个文本")
+                        
+                        # 根据YOLO检测到的元素位置，从全屏OCR结果中匹配文本
+                        for element in detection_result.elements:
+                            x1, y1, x2, y2 = element.bbox
+                            element_center_x = (x1 + x2) / 2
+                            element_center_y = (y1 + y2) / 2
+                            
+                            # 查找与元素位置重叠的OCR文本
+                            matched_texts = []
+                            for i, (text, box) in enumerate(zip(full_ocr_result.texts, full_ocr_result.boxes)):
+                                # 计算OCR文本框的中心点
+                                box_flat = box.flatten().tolist() if hasattr(box, 'flatten') else box
+                                ocr_x1, ocr_y1 = box_flat[0], box_flat[1]
+                                ocr_x2, ocr_y2 = box_flat[4], box_flat[5]
+                                ocr_center_x = (ocr_x1 + ocr_x2) / 2
+                                ocr_center_y = (ocr_y1 + ocr_y2) / 2
+                                
+                                # 检查OCR文本框是否在YOLO元素框内
+                                if x1 <= ocr_center_x <= x2 and y1 <= ocr_center_y <= y2:
+                                    matched_texts.append(text)
+                            
+                            if not matched_texts:
+                                continue
+                            
+                            # 处理昵称
+                            if '昵称' in element.class_name and result['nickname'] is None:
+                                nickname = self._extract_nickname_from_texts(matched_texts)
+                                if nickname:
+                                    result['nickname'] = nickname
+                                    print(f"  ✓ 昵称: {result['nickname']}")
+                            
+                            # 处理用户ID
+                            elif 'ID' in element.class_name and result['user_id'] is None:
+                                for text in matched_texts:
+                                    text = text.strip()
+                                    if 'ID' in text or 'id' in text:
+                                        match = re.search(r'(\d{6,})', text)
+                                        if match:
+                                            result['user_id'] = match.group(1)
+                                            print(f"  ✓ 用户ID: {result['user_id']}")
+                                            break
+                            
+                            # 处理余额、积分、抵扣券、优惠券
+                            else:
+                                # 合并所有匹配的文本
+                                combined_text = ' '.join(matched_texts)
+                                
+                                # 查找所有数字（包括小数）
+                                all_numbers = re.findall(r'(\d+\.?\d*)', combined_text)
+                                
+                                if all_numbers:
+                                    # 尝试合并连续的数字（处理"1 0.24"这种情况）
+                                    if len(all_numbers) > 1:
+                                        try:
+                                            first = all_numbers[0]
+                                            second = all_numbers[1]
+                                            
+                                            if '.' in second or '.' not in first:
+                                                combined = first + second if '.' in second else first + '.' + second
+                                                try:
+                                                    combined_value = float(combined)
+                                                    if combined_value > float(first):
+                                                        all_numbers[0] = str(combined_value)
+                                                        print(f"  [OCR修正] 合并数字: {first} + {second} = {combined_value}")
+                                                except ValueError:
+                                                    pass
+                                        except (IndexError, ValueError):
+                                            pass
+                                    
+                                    # 转换为浮点数并选择最大的合理值
+                                    valid_numbers = []
+                                    for num_str in all_numbers:
+                                        try:
+                                            num = float(num_str)
+                                            # 根据元素类别进行合理性检查
+                                            if '余额' in element.class_name and 0.01 <= num <= 100000:
+                                                valid_numbers.append(num)
+                                            elif '积分' in element.class_name and 0 <= num <= 1000000:
+                                                valid_numbers.append(num)
+                                            elif '抵扣' in element.class_name and 0 <= num <= 10000:
+                                                valid_numbers.append(num)
+                                            elif '优惠' in element.class_name and 0 <= num <= 1000:
+                                                valid_numbers.append(num)
+                                        except ValueError:
+                                            continue
+                                    
+                                    if valid_numbers:
+                                        value = max(valid_numbers)
+                                        
+                                        if '余额' in element.class_name and result['balance'] is None:
+                                            result['balance'] = value
+                                            print(f"  ✓ 余额: {result['balance']:.2f} 元")
+                                        elif '积分' in element.class_name and result['points'] is None:
+                                            result['points'] = int(value)
+                                            print(f"  ✓ 积分: {result['points']}")
+                                        elif '抵扣' in element.class_name:
+                                            if result['vouchers'] is None or value > result['vouchers']:
+                                                result['vouchers'] = value
+                                                print(f"  ✓ 抵扣券: {result['vouchers']}")
+                                        elif '优惠' in element.class_name and result['coupons'] is None:
+                                            result['coupons'] = int(value)
+                                            print(f"  ✓ 优惠券: {result['coupons']}")
+            
+            # ===== 降级：使用旧的YOLO检测器 =====
+            elif self._yolo_detector:
+                # 创建并行YOLO检测任务（降低置信度阈值以提高检测成功率）
+                yolo_start = time.time()
+                yolo_tasks = [
+                    self._yolo_detector.detect(device_id, 'profile_logged', conf_threshold=0.25),
+                    self._yolo_detector.detect(device_id, 'balance', conf_threshold=0.25)
+                ]
+                
+                # 并行执行YOLO检测
+                profile_detections, balance_detections = await asyncio.gather(*yolo_tasks)
+                yolo_time = time.time() - yolo_start
+                print(f"  [性能] YOLO检测耗时: {yolo_time:.3f}秒")
+                
+                print(f"  [YOLO并行] profile_logged检测到 {len(profile_detections)} 个目标")
+                print(f"  [YOLO并行] balance检测到 {len(balance_detections)} 个目标")
+                
+                # ===== 并行优化：同时进行OCR识别 =====
+                ocr_start = time.time()
+                ocr_tasks = []
+                
+                # 处理profile_logged检测结果（昵称和用户ID）
+                for det in profile_detections:
+                    x1, y1, x2, y2 = det.bbox
+                    region = image.crop((x1, y1, x2, y2))
+                    region_enhanced = enhance_for_ocr(region)
+                    
+                    if '昵称' in det.class_name and result['nickname'] is None:
+                        ocr_tasks.append(('nickname', det.class_name, self._ocr_pool.recognize(region_enhanced, timeout=3.0)))
+                    elif 'ID' in det.class_name and result['user_id'] is None:
+                        ocr_tasks.append(('user_id', det.class_name, self._ocr_pool.recognize(region_enhanced, timeout=3.0)))
+                
+                # 处理balance检测结果（余额、积分、抵扣券、优惠券）
+                for det in balance_detections:
+                    x1, y1, x2, y2 = det.bbox
+                    region = image.crop((x1, y1, x2, y2))
+                    region_enhanced = enhance_for_ocr(region)
+                    ocr_tasks.append((det.class_name, det.class_name, self._ocr_pool.recognize(region_enhanced, timeout=2.0)))
+                
+                # 并行执行所有OCR识别
+                if ocr_tasks:
+                    ocr_results = await asyncio.gather(*[task[2] for task in ocr_tasks])
+                    ocr_time = time.time() - ocr_start
+                    print(f"  [性能] OCR识别耗时: {ocr_time:.3f}秒")
+                    
+                    # 处理OCR结果
+                    for i, (field_type, class_name, _) in enumerate(ocr_tasks):
+                        ocr_result = ocr_results[i]
+                        
+                        if not ocr_result or not ocr_result.texts:
+                            continue
+                        
+                        # 处理昵称
+                        if field_type == 'nickname':
+                            nickname = self._extract_nickname_from_texts(ocr_result.texts)
+                            if nickname:
+                                result['nickname'] = nickname
+                                print(f"  ✓ 昵称: {result['nickname']}")
+                        
+                        # 处理用户ID
+                        elif field_type == 'user_id':
+                            for text in ocr_result.texts:
+                                text = text.strip()
+                                if 'ID' in text or 'id' in text:
+                                    match = re.search(r'(\d{6,})', text)
+                                    if match:
+                                        result['user_id'] = match.group(1)
+                                        print(f"  ✓ 用户ID: {result['user_id']}")
+                                        break
+                        
+                        # 处理余额、积分、抵扣券、优惠券
+                        else:
+                            # 合并所有文本，处理分散识别的情况（如"1 0.24"）
+                            combined_text = ' '.join(ocr_result.texts)
+                            
+                            # 查找所有数字（包括小数）
+                            all_numbers = re.findall(r'(\d+\.?\d*)', combined_text)
+                            
+                            if all_numbers:
+                                # 尝试合并连续的数字（处理"1 0.24"这种情况）
+                                if len(all_numbers) > 1:
+                                    try:
+                                        first = all_numbers[0]
+                                        second = all_numbers[1]
+                                        
+                                        # 如果第二个数字以小数点开头或第一个数字是整数
+                                        if '.' in second or '.' not in first:
+                                            combined = first + second if '.' in second else first + '.' + second
+                                            try:
+                                                combined_value = float(combined)
+                                                if combined_value > float(first):
+                                                    all_numbers[0] = str(combined_value)
+                                                    print(f"  [OCR修正] 合并数字: {first} + {second} = {combined_value}")
+                                            except ValueError:
+                                                pass
+                                    except (IndexError, ValueError):
+                                        pass
+                                
+                                # 转换为浮点数并排序（选择最大的合理值）
+                                valid_numbers = []
+                                for num_str in all_numbers:
+                                    try:
+                                        num = float(num_str)
+                                        # 根据字段类型进行合理性检查
+                                        if '余额' in class_name and 0.01 <= num <= 100000:
+                                            valid_numbers.append(num)
+                                        elif '积分' in class_name and 0 <= num <= 1000000:
+                                            valid_numbers.append(num)
+                                        elif '抵扣' in class_name and 0 <= num <= 10000:
+                                            valid_numbers.append(num)
+                                        elif '优惠' in class_name and 0 <= num <= 1000:
+                                            valid_numbers.append(num)
+                                    except ValueError:
+                                        continue
+                                
+                                if valid_numbers:
+                                    # 选择最大的合理值
+                                    value = max(valid_numbers)
+                                    
+                                    if '余额' in class_name and result['balance'] is None:
+                                        result['balance'] = value
+                                        print(f"  ✓ 余额: {result['balance']:.2f} 元")
+                                    elif '积分' in class_name and result['points'] is None:
+                                        result['points'] = int(value)
+                                        print(f"  ✓ 积分: {result['points']}")
+                                    elif '抵扣' in class_name and result['vouchers'] is None:
+                                        result['vouchers'] = value
+                                        print(f"  ✓ 抵扣券: {result['vouchers']}")
+                                    elif '优惠' in class_name and result['coupons'] is None:
+                                        result['coupons'] = int(value)
+                                        print(f"  ✓ 优惠券: {result['coupons']}")
+            
+            # 如果YOLO检测失败，降级到串行OCR方法
+            if result['nickname'] is None or result['user_id'] is None:
+                fallback_start = time.time()
+                print(f"  [降级] YOLO检测未获取到昵称或用户ID，使用全屏OCR...")
+                # 使用OCR图像预处理模块增强图像
+                enhanced_image = enhance_for_ocr(image)
+                ocr_result = await self._ocr_pool.recognize(enhanced_image, timeout=5.0)
+                
+                if ocr_result and ocr_result.texts:
+                    texts = ocr_result.texts
+                    
+                    # 保存OCR结果以便提取昵称时使用位置信息
+                    self._last_ocr_result = ocr_result
+                    
+                    if result['nickname'] is None:
+                        result['nickname'] = self._extract_nickname(texts)
+                    
+                    if result['user_id'] is None:
+                        result['user_id'] = self._extract_user_id(texts)
+                
+                fallback_time = time.time() - fallback_start
+                print(f"  [性能] 降级OCR耗时: {fallback_time:.3f}秒")
+            
+            # 手机号只能从登录账号中提取
+            if account:
+                result['phone'] = self._extract_phone_from_account(account)
+            
+            # 如果YOLO检测失败，降级到区域OCR识别
+            if result['balance'] is None or result['points'] is None or result['vouchers'] is None or result['coupons'] is None:
+                region_start = time.time()
+                print(f"  [降级] YOLO检测未获取到余额/积分/抵扣券/优惠券，使用区域OCR...")
+                region_results = await self._recognize_regions(device_id, image)
+                
+                if result['balance'] is None:
+                    result['balance'] = region_results.get('balance')
+                if result['points'] is None:
+                    result['points'] = region_results.get('points')
+                if result['vouchers'] is None:
+                    result['vouchers'] = region_results.get('vouchers')
+                if result['coupons'] is None:
+                    result['coupons'] = region_results.get('coupons')
+                
+                region_time = time.time() - region_start
+                print(f"  [性能] 区域OCR耗时: {region_time:.3f}秒")
+            
+            total_time = time.time() - start_time
+            print(f"  [性能] 总耗时: {total_time:.3f}秒")
+            
+            return result
+            
+        except Exception as e:
+            print(f"  ! 获取完整个人资料失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return result
+    
+    def _extract_nickname_from_texts(self, texts: List[str]) -> Optional[str]:
+        """从OCR文本列表中提取昵称（辅助方法）"""
+        member_keywords = [
+            "钻石会员", "黄金会员", "白金会员", "铂金会员",
+            "普通会员", "初级会员", "银牌会员",
+            "VIP会员", "SVIP", "VIP",
+            "vip会员", "vip", "Vip",
+            "会员"
+        ]
+        
+        exclude_keywords = [
+            "ID", "id", "手机", "余额", "积分", 
+            "抵扣券", "优惠券", "抵扣券", "我的", "设置", "首页", "分类",
+            "商城", "订单", "查看", "待付款", "待发货", "待收货", "待评价",
+            "溪盟", "山泉", "干溪", "汇盟",
+            "元", "张", "次"
+        ]
+        
+        for text in texts:
+            text = text.strip()
+            
+            # 只保留排除关键字检查，允许用户使用数字、符号等作为昵称
+            if not text:
+                continue
+            
+            nickname_candidate = text
+            for member_kw in member_keywords:
+                if member_kw in text:
+                    nickname_candidate = text.split(member_kw)[0].strip()
+                    break
+            
+            if not nickname_candidate:
+                continue
+            
+            has_keyword = False
+            for kw in exclude_keywords:
+                if kw in nickname_candidate:
+                    has_keyword = True
+                    break
+            if has_keyword:
+                continue
+            
+            text_len = len(nickname_candidate)
+            if 1 <= text_len <= 20:
+                return nickname_candidate
+        
+        return None
+    
+    async def get_full_profile_with_retry(self, device_id: str, max_retries: int = 3, account: Optional[str] = None) -> Dict[str, any]:
+        """获取完整个人资料，支持重试机制和缓存
+        
+        优化策略：
+        1. 登录时就有手机号，直接从缓存查询昵称和ID
+        2. 如果缓存有完整数据（昵称+用户ID），则只获取余额等动态数据
+        3. 如果缓存不完整，才进行完整OCR识别
+        4. 识别成功后，自动保存到缓存
+        
+        Args:
+            device_id: 设备ID
+            max_retries: 最大重试次数，默认3次
+            account: 登录账号（可选），用于提取手机号和使用缓存
+            
+        Returns:
+            dict: 完整个人资料（累积最佳结果）
+        """
+        print("  正在获取账户信息...")
+        
+        # 提取手机号（登录时就有）
+        phone = None
+        if account:
+            phone = self._extract_phone_from_account(account)
+            if phone:
+                self._silent_log.log(f"[账号] 手机号: {phone}")
+        
+        best_result = {}
+        collected_fields = []
+        
+        # ===== 优化：优先从缓存获取昵称和用户ID =====
+        cache_has_identity = False  # 缓存是否有完整的身份信息（昵称+用户ID）
+        if phone:
+            cached_nickname = self._cache.get_nickname(phone)
+            cached_user_id = self._cache.get_user_id(phone)
+            
+            if cached_nickname and cached_user_id:
+                # 缓存有完整的身份信息，可以跳过身份识别
+                cache_has_identity = True
+                self._silent_log.log(f"[缓存] 找到完整身份信息")
+                best_result['nickname'] = cached_nickname
+                best_result['user_id'] = cached_user_id
+                collected_fields.extend(['nickname', 'user_id'])
+                self._silent_log.log(f"[缓存] - 昵称: {cached_nickname}")
+                self._silent_log.log(f"[缓存] - 用户ID: {cached_user_id}")
+            elif cached_nickname or cached_user_id:
+                # 缓存只有部分信息
+                self._silent_log.log(f"[缓存] 找到部分缓存信息")
+                if cached_nickname:
+                    best_result['nickname'] = cached_nickname
+                    collected_fields.append('nickname')
+                    self._silent_log.log(f"[缓存] - 昵称: {cached_nickname}")
+                if cached_user_id:
+                    best_result['user_id'] = cached_user_id
+                    collected_fields.append('user_id')
+                    self._silent_log.log(f"[缓存] - 用户ID: {cached_user_id}")
+            else:
+                self._silent_log.log(f"[缓存] 未找到缓存，需要完整OCR识别")
+        
+        # 手机号可以直接从账号中提取
+        if phone:
+            best_result['phone'] = phone
+            collected_fields.append('phone')
+        
+        for attempt in range(max_retries):
+            try:
+                # 如果缓存已有完整身份信息，只需要获取动态数据（余额、积分、抵扣券）
+                if cache_has_identity:
+                    print(f"[ProfileReader] 🚀 使用缓存优化：只获取动态数据")
+                    self._silent_log.log(f"[尝试 {attempt + 1}/{max_retries}] 获取动态数据（余额、积分、抵扣券）...")
+                    # 只获取动态数据，跳过身份识别
+                    profile = await self._get_dynamic_data_only(device_id)
+                else:
+                    print(f"[ProfileReader] 📝 缓存不完整：执行完整识别")
+                    self._silent_log.log(f"[尝试 {attempt + 1}/{max_retries}] 开始完整OCR识别...")
+                    profile = await self.get_full_profile(device_id, account=account)
+                
+                # 静默记录OCR识别到的原始数据
+                self._silent_log.log(f"[调试] OCR识别结果:")
+                self._silent_log.log(f"  - nickname: {profile.get('nickname')}")
+                self._silent_log.log(f"  - user_id: {profile.get('user_id')}")
+                self._silent_log.log(f"  - phone: {profile.get('phone')}")
+                self._silent_log.log(f"  - balance: {profile.get('balance')}")
+                self._silent_log.log(f"  - points: {profile.get('points')}")
+                self._silent_log.log(f"  - vouchers: {profile.get('vouchers')}")
+                self._silent_log.log(f"  - coupons: {profile.get('coupons')}")
+                
+                # 合并结果（保留非空值）
+                newly_collected = []
+                for key, value in profile.items():
+                    if value is not None and best_result.get(key) is None:
+                        best_result[key] = value
+                        newly_collected.append(key)
+                        if key not in collected_fields:
+                            collected_fields.append(key)
+                
+                # 显示本次新获取的字段
+                if newly_collected:
+                    field_names = {
+                        'nickname': '昵称',
+                        'user_id': '用户ID',
+                        'phone': '手机号',
+                        'balance': '余额',
+                        'points': '积分',
+                        'vouchers': '抵扣券',
+                        'coupons': '优惠券'
+                    }
+                    new_field_names = [field_names.get(f, f) for f in newly_collected]
+                    self._silent_log.log(f"[尝试 {attempt + 1}/{max_retries}] 新获取: {', '.join(new_field_names)}")
+                
+                # ===== 优化：更新缓存（如果获取到新的昵称或用户ID）=====
+                if phone:
+                    new_nickname = profile.get('nickname')
+                    new_user_id = profile.get('user_id')
+                    
+                    if new_nickname or new_user_id:
+                        # 检查是否是新数据
+                        cached_nickname = self._cache.get_nickname(phone)
+                        cached_user_id = self._cache.get_user_id(phone)
+                        
+                        if new_nickname and new_nickname != cached_nickname:
+                            self._cache.set(phone, nickname=new_nickname)
+                            self._silent_log.log(f"[缓存] 已保存昵称: {new_nickname}")
+                        
+                        if new_user_id and new_user_id != cached_user_id:
+                            self._cache.set(phone, user_id=new_user_id)
+                            self._silent_log.log(f"[缓存] 已保存用户ID: {new_user_id}")
+                
+                # 检查是否所有字段都已获取
+                all_fields = ['nickname', 'user_id', 'phone', 'balance', 'points', 'vouchers', 'coupons']
+                missing_fields = [f for f in all_fields if best_result.get(f) is None]
+                
+                if not missing_fields:
+                    print(f"  ✓ 成功获取个人资料数据")
+                    self._log_collection_summary(collected_fields, [])
+                    return best_result
+                
+                if attempt < max_retries - 1:
+                    field_names = {
+                        'nickname': '昵称',
+                        'user_id': '用户ID',
+                        'phone': '手机号',
+                        'balance': '余额',
+                        'points': '积分',
+                        'vouchers': '抵扣券',
+                        'coupons': '优惠券'
+                    }
+                    missing_field_names = [field_names.get(f, f) for f in missing_fields]
+                    self._silent_log.log(f"[尝试 {attempt + 1}/{max_retries}] 仍缺少: {', '.join(missing_field_names)}")
+                    self._silent_log.log(f"等待2秒后重试...")
+                    await asyncio.sleep(2)  # 等待2秒后重试
+                    
+            except Exception as e:
+                self._silent_log.log(f"[尝试 {attempt + 1}/{max_retries}] OCR识别出错: {str(e)}")
+                if attempt < max_retries - 1:
+                    self._silent_log.log(f"等待2秒后重试...")
+                    await asyncio.sleep(2)
+        
+        # 所有重试后，尝试备选方案
+        all_fields = ['nickname', 'user_id', 'phone', 'balance', 'points', 'vouchers', 'coupons']
+        missing_fields = [f for f in all_fields if best_result.get(f) is None]
+        
+        if missing_fields:
+            print(f"\n  ! 经过 {max_retries} 次尝试后，仍有字段缺失")
+            print(f"  开始尝试备选方案...")
+            
+            fallback_success = []
+            fallback_failed = []
+            
+            # 尝试备选方案获取缺失字段
+            if best_result.get('balance') is None:
+                try:
+                    print(f"  [备选方案] 尝试获取余额...")
+                    balance = await self.get_balance_fallback(device_id)
+                    if balance is not None:
+                        best_result['balance'] = balance
+                        fallback_success.append('余额')
+                        collected_fields.append('balance')
+                        print(f"  [备选方案] OK 成功获取余额: {balance:.2f} 元")
+                    else:
+                        fallback_failed.append('余额')
+                        print(f"  [备选方案] X 余额获取失败")
+                except Exception as e:
+                    fallback_failed.append('余额')
+                    print(f"  [备选方案] X 余额获取出错: {str(e)}")
+            
+            if best_result.get('user_id') is None:
+                try:
+                    print(f"  [备选方案] 尝试获取用户ID...")
+                    user_id = await self.get_user_id_fallback(device_id)
+                    if user_id is not None:
+                        best_result['user_id'] = user_id
+                        fallback_success.append('用户ID')
+                        collected_fields.append('user_id')
+                        print(f"  [备选方案] OK 成功获取用户ID: {user_id}")
+                    else:
+                        fallback_failed.append('用户ID')
+                        print(f"  [备选方案] X 用户ID获取失败")
+                except Exception as e:
+                    fallback_failed.append('用户ID')
+                    print(f"  [备选方案] X 用户ID获取出错: {str(e)}")
+            
+            if best_result.get('nickname') is None:
+                try:
+                    print(f"  [备选方案] 尝试获取昵称...")
+                    nickname = await self.get_nickname_fallback(device_id)
+                    if nickname is not None:
+                        best_result['nickname'] = nickname
+                        fallback_success.append('昵称')
+                        collected_fields.append('nickname')
+                        print(f"  [备选方案] OK 成功获取昵称: {nickname}")
+                    else:
+                        fallback_failed.append('昵称')
+                        print(f"  [备选方案] X 昵称获取失败")
+                except Exception as e:
+                    fallback_failed.append('昵称')
+                    print(f"  [备选方案] X 昵称获取出错: {str(e)}")
+            
+            if best_result.get('phone') is None:
+                try:
+                    print(f"  [备选方案] 尝试获取手机号...")
+                    phone = await self.get_phone_fallback(device_id)
+                    if phone is not None:
+                        best_result['phone'] = phone
+                        fallback_success.append('手机号')
+                        collected_fields.append('phone')
+                        print(f"  [备选方案] OK 成功获取手机号: {phone}")
+                    else:
+                        fallback_failed.append('手机号')
+                        print(f"  [备选方案] X 手机号获取失败")
+                except Exception as e:
+                    fallback_failed.append('手机号')
+                    print(f"  [备选方案] X 手机号获取出错: {str(e)}")
+            
+            if best_result.get('points') is None:
+                try:
+                    print(f"  [备选方案] 尝试获取积分...")
+                    points = await self.get_points_fallback(device_id)
+                    if points is not None:
+                        best_result['points'] = points
+                        fallback_success.append('积分')
+                        collected_fields.append('points')
+                        print(f"  [备选方案] OK 成功获取积分: {points}")
+                    else:
+                        fallback_failed.append('积分')
+                        print(f"  [备选方案] X 积分获取失败")
+                except Exception as e:
+                    fallback_failed.append('积分')
+                    print(f"  [备选方案] X 积分获取出错: {str(e)}")
+            
+            if best_result.get('vouchers') is None:
+                try:
+                    print(f"  [备选方案] 尝试获取抵扣券...")
+                    vouchers = await self.get_vouchers_fallback(device_id)
+                    if vouchers is not None:
+                        best_result['vouchers'] = vouchers
+                        fallback_success.append('抵扣券')
+                        collected_fields.append('vouchers')
+                        print(f"  [备选方案] OK 成功获取抵扣券: {vouchers}")
+                    else:
+                        fallback_failed.append('抵扣券')
+                        print(f"  [备选方案] X 抵扣券获取失败")
+                except Exception as e:
+                    fallback_failed.append('抵扣券')
+                    print(f"  [备选方案] X 抵扣券获取出错: {str(e)}")
+            
+            # 显示备选方案总结
+            if fallback_success or fallback_failed:
+                print(f"\n  备选方案总结:")
+                if fallback_success:
+                    print(f"  OK 成功: {', '.join(fallback_success)}")
+                if fallback_failed:
+                    print(f"  X 失败: {', '.join(fallback_failed)}")
+        
+        # 显示最终收集结果
+        final_missing = [f for f in all_fields if best_result.get(f) is None]
+        field_names = {
+            'nickname': '昵称',
+            'user_id': '用户ID',
+            'phone': '手机号',
+            'balance': '余额',
+            'points': '积分',
+            'vouchers': '抵扣券',
+            'coupons': '优惠券'
+        }
+        collected_field_names = [field_names.get(f, f) for f in collected_fields]
+        failed_field_names = [field_names.get(f, f) for f in final_missing]
+        
+        self._log_collection_summary(collected_field_names, failed_field_names)
+        
+        return best_result
+    
+    def _log_collection_summary(self, collected_fields: List[str], failed_fields: List[str]):
+        """记录数据收集总结
+        
+        Args:
+            collected_fields: 成功收集的字段列表
+            failed_fields: 收集失败的字段列表
+        """
+        print(f"\n  数据收集总结:")
+        if collected_fields:
+            print(f"  OK 成功获取: {', '.join(collected_fields)}")
+        
+        if failed_fields:
+            print(f"  X 获取失败: {', '.join(failed_fields)}")
+            print(f"  ! 部分字段缺失，但不影响整体流程继续执行")
+    
+    async def _recognize_regions(self, device_id: str, full_image: 'Image.Image') -> Dict[str, any]:
+        """使用固定像素区域识别余额、积分、抵扣券、优惠券
+        
+        Args:
+            device_id: 设备ID
+            full_image: 完整截图的PIL Image对象
+            
+        Returns:
+            dict: 识别结果
+                - balance: float, 余额
+                - points: int, 积分
+                - vouchers: float, 抵扣券
+                - coupons: int, 优惠券
+        """
+        result = {
+            'balance': None,
+            'points': None,
+            'vouchers': None,
+            'coupons': None
+        }
+        
+        if not HAS_PIL or not self._ocr_pool:
+            return result
+        
+        try:
+            # 识别余额区域
+            balance_region = full_image.crop(self.REGIONS['balance'])
+            balance_enhanced = enhance_for_ocr(balance_region)
+            balance_ocr = await self._ocr_pool.recognize(balance_enhanced, timeout=3.0)
+            if balance_ocr and balance_ocr.texts:
+                # 提取第一个数字
+                for text in balance_ocr.texts:
+                    match = re.search(r'(\d+\.?\d*)', text.strip())
+                    if match:
+                        try:
+                            result['balance'] = float(match.group(1))
+                            break
+                        except ValueError:
+                            pass
+            
+            # 识别积分区域
+            points_region = full_image.crop(self.REGIONS['points'])
+            points_enhanced = enhance_for_ocr(points_region)
+            points_ocr = await self._ocr_pool.recognize(points_enhanced, timeout=3.0)
+            if points_ocr and points_ocr.texts:
+                # 提取第一个数字
+                for text in points_ocr.texts:
+                    match = re.search(r'(\d+\.?\d*)', text.strip())
+                    if match:
+                        try:
+                            result['points'] = int(float(match.group(1)))
+                            break
+                        except ValueError:
+                            pass
+            
+            # 识别抵扣券区域
+            vouchers_region = full_image.crop(self.REGIONS['vouchers'])
+            vouchers_enhanced = enhance_for_ocr(vouchers_region)
+            vouchers_ocr = await self._ocr_pool.recognize(vouchers_enhanced, timeout=3.0)
+            if vouchers_ocr and vouchers_ocr.texts:
+                # 提取第一个数字
+                for text in vouchers_ocr.texts:
+                    match = re.search(r'(\d+\.?\d*)', text.strip())
+                    if match:
+                        try:
+                            result['vouchers'] = float(match.group(1))
+                            break
+                        except ValueError:
+                            pass
+            
+            # 识别优惠券区域
+            coupons_region = full_image.crop(self.REGIONS['coupons'])
+            coupons_enhanced = enhance_for_ocr(coupons_region)
+            coupons_ocr = await self._ocr_pool.recognize(coupons_enhanced, timeout=3.0)
+            if coupons_ocr and coupons_ocr.texts:
+                # 提取第一个数字
+                for text in coupons_ocr.texts:
+                    match = re.search(r'(\d+\.?\d*)', text.strip())
+                    if match:
+                        try:
+                            result['coupons'] = int(float(match.group(1)))
+                            break
+                        except ValueError:
+                            pass
+            
+            return result
+            
+        except Exception as e:
+            print(f"  [区域OCR] ❌ 异常: {e}")
+            return result
+    
+    async def get_full_profile_parallel(self, device_id: str, account: Optional[str] = None) -> Dict[str, any]:
+        """获取完整的个人资料信息(并行版本，实际上是 get_full_profile 的别名)
+        
+        为了兼容性保留此方法，实际调用 get_full_profile
+        
+        Args:
+            device_id: 设备ID
+            account: 登录账号(可选)，用于提取手机号
+            
+        Returns:
+            dict: 完整个人资料
+        """
+        return await self.get_full_profile(device_id, account)
+    
+    def _extract_nickname(self, texts: List[str]) -> Optional[str]:
+        """从OCR文本中提取昵称
+        
+        改进策略：基于ID的相对位置提取昵称
+        - 昵称通常在ID的上方
+        - 先找到ID，然后在ID上方的文本中查找昵称
+        
+        Args:
+            texts: OCR识别的文本列表
+            
+        Returns:
+            str: 昵称，未找到返回 None
+        """
+        print(f"  [昵称提取] 开始提取昵称，OCR文本数量: {len(texts)}")
+        print(f"  [昵称提取] 前15个文本: {texts[:15]}")
+        
+        # 策略1: 基于ID位置提取昵称
+        # 先找到ID的位置
+        id_index = -1
+        for i, text in enumerate(texts):
+            text_no_space = text.replace(" ", "")
+            if "ID" in text_no_space or "id" in text_no_space.lower():
+                # 确认是用户ID（包含数字）
+                if re.search(r'(?:用户)?[Ii][Dd][:：]?(\d+)', text_no_space):
+                    id_index = i
+                    print(f"  [昵称提取] 找到ID位置: 索引 {i}, 文本: '{text}'")
+                    break
+        
+        if id_index >= 0:
+            # 在ID之前的文本中查找昵称（通常在ID的前1-3个位置）
+            print(f"  [昵称提取] 在ID之前查找昵称...")
+            
+            # 会员标签关键字
+            member_keywords = [
+                "钻石会员", "黄金会员", "白金会员", "铂金会员",
+                "普通会员", "初级会员", "银牌会员",
+                "VIP会员", "SVIP", "VIP",
+                "vip会员", "vip", "Vip",
+                "会员"
+            ]
+            
+            # 排除关键字
+            exclude_keywords = [
+                "ID", "id", "手机", "余额", "积分", 
+                "抵扣券", "优惠券", "抵扣券", "我的", "设置", "首页", "分类",
+                "商城", "订单", "查看", "待付款", "待发货", "待收货", "待评价",
+                "溪盟", "山泉", "干溪", "汇盟",
+                "元", "张", "次"
+            ]
+            
+            # 获取ID的位置（用于过滤）
+            id_box = None
+            if hasattr(self, '_last_ocr_result') and self._last_ocr_result is not None:
+                if hasattr(self._last_ocr_result, 'boxes') and self._last_ocr_result.boxes is not None:
+                    try:
+                        id_box = self._last_ocr_result.boxes[id_index]
+                    except:
+                        pass
+            
+            # 检查ID之前的3个文本
+            for i in range(max(0, id_index - 3), id_index):
+                text = texts[i].strip()
+                
+                # 获取当前文本的位置
+                text_box = None
+                if hasattr(self, '_last_ocr_result') and self._last_ocr_result is not None:
+                    if hasattr(self._last_ocr_result, 'boxes') and self._last_ocr_result.boxes is not None:
+                        try:
+                            text_box = self._last_ocr_result.boxes[i]
+                        except:
+                            pass
+                
+                # 位置过滤：排除右上角的文本（x > 400，通常是状态栏图标）
+                if text_box is not None:
+                    x_min = min(text_box[0][0], text_box[1][0], text_box[2][0], text_box[3][0])
+                    if x_min > 400:
+                        print(f"  [昵称提取] 检查ID之前的文本 {i}: '{text}' - 跳过：位置在右上角 (x={x_min})")
+                        continue
+                
+                print(f"  [昵称提取] 检查ID之前的文本 {i}: '{text}'")
+                
+                # 跳过空文本
+                if not text:
+                    print(f"    - 跳过：空文本")
+                    continue
+                
+                # 跳过纯数字
+                if text.isdigit():
+                    print(f"    - 跳过：纯数字")
+                    continue
+                
+                # 跳过时间格式
+                if re.match(r'\d+:\d+', text):
+                    print(f"    - 跳过：时间格式")
+                    continue
+                
+                # 跳过包含冒号的文本
+                if ':' in text or '：' in text:
+                    print(f"    - 跳过：包含冒号")
+                    continue
+                
+                # 处理会员标签
+                nickname_candidate = text
+                for member_kw in member_keywords:
+                    if member_kw in text:
+                        nickname_candidate = text.split(member_kw)[0].strip()
+                        print(f"    - 发现会员标签 '{member_kw}'，提取昵称: '{nickname_candidate}'")
+                        break
+                
+                if not nickname_candidate:
+                    print(f"    - 跳过：提取后为空")
+                    continue
+                
+                # 检查排除关键字
+                has_keyword = False
+                for kw in exclude_keywords:
+                    if kw in nickname_candidate:
+                        has_keyword = True
+                        print(f"    - 跳过：包含排除关键字 '{kw}'")
+                        break
+                if has_keyword:
+                    continue
+                
+                # 长度检查
+                text_len = len(nickname_candidate)
+                if 1 <= text_len <= 20:
+                    # 单字检查
+                    if text_len == 1:
+                        single_char_exclude = ['我', '的', '首', '页', '设', '置']
+                        if nickname_candidate in single_char_exclude:
+                            print(f"    - 跳过：单字排除")
+                            continue
+                    
+                    print(f"  [昵称提取] ✓ 基于ID位置找到昵称: '{nickname_candidate}'")
+                    return nickname_candidate
+                else:
+                    print(f"    - 跳过：长度不符 ({text_len} 字符)")
+        
+        # 策略2: 查找"昵称"关键字（备选）
+        print(f"  [昵称提取] 策略1失败，尝试查找'昵称'关键字...")
+        for text in texts:
+            if "昵称" in text:
+                match = re.search(r'昵称[:：\s]+(.+)', text)
+                if match:
+                    nickname = match.group(1).strip()
+                    if nickname:
+                        print(f"  [昵称提取] ✓ 通过关键字找到昵称: {nickname}")
+                        return nickname
+                
+                if text.startswith("昵称"):
+                    nickname = text[2:].strip()
+                    if nickname:
+                        print(f"  [昵称提取] ✓ 通过关键字找到昵称: {nickname}")
+                        return nickname
+        
+        # 策略3: 在前10个文本中查找（最后的备选）
+        print(f"  [昵称提取] 策略2失败，在前10个文本中查找...")
+        
+        exclude_keywords = [
+            "ID", "id", "手机", "余额", "积分", 
+            "抵扣券", "优惠券", "抵扣券", "我的", "设置", "首页", "分类",
+            "商城", "订单", "查看", "待付款", "待发货", "待收货", "待评价",
+            "溪盟", "山泉", "干溪", "汇盟",
+            "元", "张", "次"
+        ]
+        
+        member_keywords = [
+            "钻石会员", "黄金会员", "白金会员", "铂金会员",
+            "普通会员", "初级会员", "银牌会员",
+            "VIP会员", "SVIP", "VIP",
+            "vip会员", "vip", "Vip",
+            "会员"
+        ]
+        
+        for i, text in enumerate(texts[:10]):
+            text = text.strip()
+            
+            if not text or text.isdigit():
+                continue
+            
+            if re.match(r'\d+:\d+', text):
+                continue
+            
+            if ':' in text or '：' in text:
+                continue
+            
+            nickname_candidate = text
+            for member_kw in member_keywords:
+                if member_kw in text:
+                    nickname_candidate = text.split(member_kw)[0].strip()
+                    break
+            
+            if not nickname_candidate:
+                continue
+            
+            has_keyword = False
+            for kw in exclude_keywords:
+                if kw in nickname_candidate:
+                    has_keyword = True
+                    break
+            if has_keyword:
+                continue
+            
+            text_len = len(nickname_candidate)
+            if 1 <= text_len <= 20:
+                if text_len == 1:
+                    single_char_exclude = ['我', '的', '首', '页', '设', '置']
+                    if nickname_candidate in single_char_exclude:
+                        continue
+                
+                print(f"  [昵称提取] ✓ 在前10个文本中找到昵称: '{nickname_candidate}'")
+                return nickname_candidate
+        
+        print(f"  [昵称提取] ✗ 所有策略都失败，未找到昵称")
+        return None
+    
+    def _extract_user_id(self, texts: List[str]) -> Optional[str]:
+        """从OCR文本中提取用户ID
+        
+        常见模式：
+        - "ID: 123456"
+        - "用户ID: 123456"
+        - "ID 123456"
+        
+        Args:
+            texts: OCR识别的文本列表
+            
+        Returns:
+            str: 用户ID，未找到返回 None
+        """
+        for text in texts:
+            # 移除空格
+            text_no_space = text.replace(" ", "")
+            
+            # 模式1: "ID:数字" 或 "用户ID:数字"
+            if "ID" in text_no_space or "id" in text_no_space.lower():
+                # 提取数字部分
+                match = re.search(r'(?:用户)?[Ii][Dd][:：]?(\d+)', text_no_space)
+                if match:
+                    return match.group(1)
+        
+        return None
+    
+    def _extract_phone(self, texts: List[str]) -> Optional[str]:
+        """从OCR文本中提取手机号
+        
+        常见模式：
+        - "手机号: 138****1234"
+        - "138****1234"
+        - "13812341234"（完整手机号）
+        
+        Args:
+            texts: OCR识别的文本列表
+            
+        Returns:
+            str: 手机号，未找到返回 None
+        """
+        for text in texts:
+            # 移除空格
+            text_no_space = text.replace(" ", "")
+            
+            # 模式1: 掩码格式 "138****1234"
+            match = re.search(r'(\d{3}\*{4}\d{4})', text_no_space)
+            if match:
+                return match.group(1)
+            
+            # 模式2: 完整手机号 "13812341234"
+            match = re.search(r'(1[3-9]\d{9})', text_no_space)
+            if match:
+                return match.group(1)
+            
+            # 模式3: "手机号:XXX"
+            if "手机" in text_no_space:
+                match = re.search(r'手机号?[:：]?(\d{3}\*{4}\d{4}|1[3-9]\d{9})', text_no_space)
+                if match:
+                    return match.group(1)
+        
+        return None
+    
+    def _extract_phone_from_account(self, account: str) -> Optional[str]:
+        """从登录账号中提取手机号
+        
+        账号格式通常是: 手机号----密码
+        例如: 15766121960----hye19911206
+        
+        Args:
+            account: 登录账号字符串
+            
+        Returns:
+            str: 手机号，未找到返回 None
+        """
+        if not account:
+            return None
+        
+        # 提取----之前的部分
+        if '----' in account:
+            phone = account.split('----')[0].strip()
+        else:
+            phone = account.strip()
+        
+        # 验证是否是有效的手机号（11位数字，以1开头）
+        if phone and len(phone) == 11 and phone.isdigit() and phone.startswith('1'):
+            return phone
+        
+        return None
+    
+    def _extract_balance(self, texts: List[str]) -> Optional[float]:
+        """从OCR文本中提取余额
+        
+        常见模式：
+        - "余额: 16.26"
+        - "余额" 和 "16.26" 分开识别（数值通常在标签之前）
+        - "16.26元"
+        
+        策略：余额通常是第一个数值（最远离标签的）
+        
+        Args:
+            texts: OCR识别的文本列表
+            
+        Returns:
+            float: 余额，未找到返回 None
+        """
+        print(f"  [余额提取] 开始提取余额，OCR文本数量: {len(texts)}")
+        
+        # 策略1: 查找包含"余额"的文本
+        for text in texts:
+            text_no_space = text.replace(" ", "")
+            
+            # 模式1: "余额:数字"
+            if "余额" in text_no_space:
+                match = re.search(r'余额[:：]?(\d+\.?\d*)', text_no_space)
+                if match:
+                    try:
+                        balance = float(match.group(1))
+                        print(f"  [余额提取] OK 策略1成功: 在文本'{text}'中找到余额 {balance}")
+                        return balance
+                    except ValueError:
+                        pass
+        
+        # 策略2: 查找"余额"标签，然后在其前5个文本块中查找数值
+        # 余额通常是最远的那个数值（第一个数值）
+        for i, text in enumerate(texts):
+            if "余额" in text:
+                print(f"  [余额提取] 在索引{i}找到'余额'标签: '{text}'")
+                candidates = []
+                
+                # 检查前面的文本块，扩大到5个，收集所有候选值
+                for j in range(i-1, max(0, i-6), -1):
+                    # 尝试提取数字（支持小数）
+                    match = re.search(r'^(\d+\.?\d*)$', texts[j].strip())
+                    if match:
+                        try:
+                            balance = float(match.group(1))
+                            # 合理性检查：余额通常在0-10000之间
+                            if 0 <= balance <= 10000:
+                                candidates.append((j, balance))  # 保存索引和值
+                                print(f"  [余额提取] 候选值: 索引{j}, 文本'{texts[j]}', 余额{balance}")
+                        except ValueError:
+                            pass
+                
+                print(f"  [余额提取] 找到{len(candidates)}个候选值")
+                
+                # 优先选择非零值，如果有多个非零值，选择最远的（索引最小的）
+                # 因为页面布局通常是：余额、积分、抵扣券，余额离标签最远
+                non_zero = [(idx, val) for idx, val in candidates if val > 0]
+                if non_zero:
+                    # 按索引排序，选择最远的（索引最小的）
+                    non_zero.sort(key=lambda x: x[0])
+                    print(f"  [余额提取] OK 策略2成功: 选择最远的非零值 索引{non_zero[0][0]}, 余额{non_zero[0][1]}")
+                    return non_zero[0][1]
+                elif candidates:
+                    # 如果都是0，返回最远的
+                    candidates.sort(key=lambda x: x[0])
+                    print(f"  [余额提取] OK 策略2成功: 选择最远的值（都是0） 索引{candidates[0][0]}, 余额{candidates[0][1]}")
+                    return candidates[0][1]
+        
+        # 策略3: 查找带"元"的数字（但不包含"余额"）
+        for text in texts:
+            text_no_space = text.replace(" ", "")
+            if "元" in text_no_space and "余额" not in text_no_space:
+                match = re.search(r'(\d+\.?\d*)元', text_no_space)
+                if match:
+                    try:
+                        balance = float(match.group(1))
+                        if 0 <= balance <= 10000:
+                            print(f"  [余额提取] OK 策略3成功: 在文本'{text}'中找到余额 {balance}")
+                            return balance
+                    except ValueError:
+                        pass
+        
+        print(f"  [余额提取] X 所有策略都失败，未找到余额")
+        return None
+    
+    def _parse_points(self, texts: list) -> Optional[int]:
+        """从OCR文本中解析积分
+        
+        常见模式：
+        - "积分: 1234"
+        - "积分" 和 "1234" 分开识别（数值通常在标签之前）
+        - "1234积分"
+        - "0.00" 或 "1.00" (可能被识别为小数，需要转换为整数)
+        
+        布局：余额值 | 积分值 | 抵扣券值 | "余额" | "抵扣券" | "优惠券"
+        注意："积分"标签可能没有被OCR识别出来
+        
+        Args:
+            texts: OCR识别的文本列表
+            
+        Returns:
+            int: 积分，未找到返回 None
+        """
+        # 策略1: 查找包含"积分"的文本
+        for text in texts:
+            text_no_space = text.replace(" ", "")
+            
+            if "积分" in text_no_space:
+                # 模式1: "积分:数字"
+                match = re.search(r'积分[:：]?(\d+\.?\d*)', text_no_space)
+                if match:
+                    try:
+                        # 转换为整数（去掉小数部分）
+                        return int(float(match.group(1)))
+                    except ValueError:
+                        pass
+                
+                # 模式2: "数字积分"
+                match = re.search(r'(\d+\.?\d*)积分', text_no_space)
+                if match:
+                    try:
+                        return int(float(match.group(1)))
+                    except ValueError:
+                        pass
+        
+        # 策略2: 查找"积分"标签，然后只在其前面的文本块中查找数值
+        for i, text in enumerate(texts):
+            if "积分" in text:
+                # 只检查前面的文本块（最多2个，避免跨到余额字段）
+                for j in range(i-1, max(0, i-3), -1):
+                    text_j = texts[j].strip()
+                    
+                    # 跳过其他标签（避免误识别）
+                    if any(keyword in text_j for keyword in ["余额", "抵扣券", "优惠券", "抵扣劵", "优惠劵"]):
+                        continue
+                    
+                    # 尝试提取纯数字或小数（必须是完整的数字，不能包含其他字符）
+                    match = re.search(r'^(\d+\.?\d*)$', text_j)
+                    if match:
+                        try:
+                            # 积分可能显示为小数（如 0.00 或 1.00），转换为整数
+                            points = int(float(match.group(1)))
+                            # 合理性检查：积分通常在0-100000之间
+                            if 0 <= points <= 100000:
+                                # 找到第一个符合条件的值就返回（最近的）
+                                return points
+                        except ValueError:
+                            pass
+        
+        # 策略3: 如果没有找到"积分"标签，使用位置推断
+        # 布局：余额值 | 积分值 | 抵扣券值 | "余额" | "抵扣券" | "优惠券"
+        # 找到"余额"标签，它前面第2个数值就是积分
+        for i, text in enumerate(texts):
+            if "余额" in text:
+                # 收集前面的所有数值
+                values = []
+                for j in range(i-1, max(0, i-5), -1):
+                    text_j = texts[j].strip()
+                    # 尝试提取纯数字或小数
+                    match = re.search(r'^(\d+\.?\d*)$', text_j)
+                    if match:
+                        try:
+                            value = float(match.group(1))
+                            values.append((j, value))
+                        except ValueError:
+                            pass
+                
+                # 如果找到至少2个数值，第2个（从后往前数）就是积分
+                if len(values) >= 2:
+                    # values是从近到远排列的，所以values[1]是第2个数值（积分）
+                    points = int(values[1][1])
+                    # 合理性检查
+                    if 0 <= points <= 100000:
+                        return points
+        
+        return None
+    
+    def _parse_vouchers(self, texts: list) -> Optional[float]:
+        """从OCR文本中解析抵扣券数量/金额
+        
+        常见模式：
+        - "抵扣券: 5"
+        - "抵扣券" 和 "5" 分开识别（数值通常在标签之前）
+        - "5张抵扣券"
+        - "5.97" (可能是金额)
+        
+        布局：余额值 | 积分值 | 抵扣券值 | "余额" | "抵扣券" | "优惠券"
+        
+        注意：返回浮点数以保留原始精度
+        
+        Args:
+            texts: OCR识别的文本列表
+            
+        Returns:
+            float: 抵扣券数量/金额，未找到返回 None
+        """
+        # 策略1: 查找包含"抵扣券"的文本
+        for text in texts:
+            text_no_space = text.replace(" ", "")
+            
+            if "抵扣券" in text_no_space:
+                # 模式1: "抵扣券:数字"
+                match = re.search(r'抵扣券[:：]?(\d+\.?\d*)', text_no_space)
+                if match:
+                    try:
+                        return float(match.group(1))
+                    except ValueError:
+                        pass
+                
+                # 模式2: "数字张抵扣券"
+                match = re.search(r'(\d+\.?\d*)张?抵扣券', text_no_space)
+                if match:
+                    try:
+                        return float(match.group(1))
+                    except ValueError:
+                        pass
+        
+        # 策略2: 查找"抵扣券"标签，然后只在其前面的文本块中查找数值
+        for i, text in enumerate(texts):
+            if "抵扣券" in text:
+                # 只检查前面的文本块（最多2个，避免跨到积分字段）
+                for j in range(i-1, max(0, i-3), -1):
+                    text_j = texts[j].strip()
+                    
+                    # 跳过其他标签（避免误识别）
+                    if any(keyword in text_j for keyword in ["余额", "积分", "优惠券", "优惠劵"]):
+                        continue
+                    
+                    # 尝试提取纯数字或小数（必须是完整的数字，不能包含其他字符）
+                    match = re.search(r'^(\d+\.?\d*)$', text_j)
+                    if match:
+                        try:
+                            value = float(match.group(1))
+                            # 合理性检查：抵扣券通常在0-100之间
+                            if 0 <= value <= 100:
+                                # 找到第一个符合条件的值就返回（最近的）
+                                return value
+                        except ValueError:
+                            pass
+        
+        # 策略3: 如果没有找到"抵扣券"标签，使用位置推断
+        # 布局：余额值 | 积分值 | 抵扣券值 | "余额" | "抵扣券" | "优惠券"
+        # 找到"余额"标签，它前面第3个数值就是抵扣券
+        for i, text in enumerate(texts):
+            if "余额" in text:
+                # 收集前面的所有数值
+                values = []
+                for j in range(i-1, max(0, i-5), -1):
+                    text_j = texts[j].strip()
+                    # 尝试提取纯数字或小数
+                    match = re.search(r'^(\d+\.?\d*)$', text_j)
+                    if match:
+                        try:
+                            value = float(match.group(1))
+                            values.append((j, value))
+                        except ValueError:
+                            pass
+                
+                # 如果找到至少3个数值，第3个（从后往前数）就是抵扣券
+                if len(values) >= 3:
+                    # values是从近到远排列的，所以values[2]是第3个数值（抵扣券）
+                    vouchers = values[2][1]
+                    # 合理性检查
+                    if 0 <= vouchers <= 100:
+                        return vouchers
+        
+        return None
+    
+    def _parse_coupons(self, texts: list) -> Optional[int]:
+        """从OCR文本中解析优惠券数量
+        
+        常见模式：
+        - "优惠券: 5"
+        - "优惠券" 和 "5" 分开识别（数值通常在标签之前）
+        - "5张优惠券"
+        - "抵扣券: 5" (可能的别名)
+        - "0" (优惠券为0也要返回)
+        
+        Args:
+            texts: OCR识别的文本列表
+            
+        Returns:
+            int: 优惠券数量，未找到返回 None
+        """
+        # 定义可能的关键词（优惠券可能被识别为其他名称）
+        keywords = ["优惠券", "优惠劵"]  # 注意"劵"是常见的OCR错误
+        
+        # 策略1: 查找包含关键词的文本
+        for text in texts:
+            text_no_space = text.replace(" ", "")
+            
+            for keyword in keywords:
+                if keyword in text_no_space:
+                    # 模式1: "关键词:数字"
+                    match = re.search(rf'{keyword}[:：]?(\d+\.?\d*)', text_no_space)
+                    if match:
+                        try:
+                            return int(float(match.group(1)))
+                        except ValueError:
+                            pass
+                    
+                    # 模式2: "数字张关键词"
+                    match = re.search(rf'(\d+\.?\d*)张?{keyword}', text_no_space)
+                    if match:
+                        try:
+                            return int(float(match.group(1)))
+                        except ValueError:
+                            pass
+        
+        # 策略2: 查找关键词标签，然后只在其前面的文本块中查找数值
+        for i, text in enumerate(texts):
+            for keyword in keywords:
+                if keyword in text:
+                    # 只检查前面的文本块（最多2个，避免跨到抵扣券字段）
+                    # 布局：抵扣券值 | "抵扣券" | 优惠券值 | "优惠券"
+                    for j in range(i-1, max(0, i-3), -1):
+                        text_j = texts[j].strip()
+                        
+                        # 跳过其他标签（避免误识别）
+                        if any(kw in text_j for kw in ["余额", "积分", "抵扣券", "抵扣劵"]):
+                            continue
+                        
+                        # 尝试提取纯数字（必须是完整的数字，不能包含其他字符）
+                        match = re.search(r'^(\d+\.?\d*)$', text_j)
+                        if match:
+                            try:
+                                value = int(float(match.group(1)))
+                                # 合理性检查：优惠券数量通常在0-100之间
+                                if 0 <= value <= 100:
+                                    # 找到第一个符合条件的值就返回（最近的）
+                                    return value
+                            except ValueError:
+                                pass
+        
+        return None
+    
+    def _parse_draw_times(self, texts: list) -> Optional[int]:
+        """从OCR文本中解析总抽奖次数
+        
+        常见模式：
+        - "抽奖次数: 10"
+        - "剩余次数: 10"
+        - "可抽奖: 10次"
+        
+        Args:
+            texts: OCR识别的文本列表
+            
+        Returns:
+            int: 总抽奖次数，未找到返回 None
+        """
+        for text in texts:
+            # 移除空格
+            text = text.replace(" ", "")
+            
+            # 模式1: "抽奖次数:数字" 或 "剩余次数:数字"
+            if "抽奖" in text or "次数" in text:
+                # 提取数字部分
+                match = re.search(r'(抽奖次数|剩余次数|可抽奖)[:：]?(\d+)', text)
+                if match:
+                    try:
+                        return int(match.group(2))
+                    except ValueError:
+                        pass
+        
+        return None
+    
+    # ==================== 余额获取方法 ====================
+    
+    async def get_balance(self, device_id: str) -> Optional[float]:
+        """获取余额（优化版：使用全屏OCR一次+位置匹配）
+        
+        Args:
+            device_id: 设备ID
+            
+        Returns:
+            float: 余额，失败返回 None
+        """
+        if not HAS_PIL or not self._ocr_pool:
+            return None
+        
+        try:
+            # 截图
+            screenshot_data = await self.adb.screencap(device_id)
+            if not screenshot_data:
+                return None
+            
+            image = Image.open(BytesIO(screenshot_data))
+            
+            # 优先使用整合检测器（全屏OCR优化）
+            if self._integrated_detector:
+                detection_result = await self._integrated_detector.detect_page(
+                    device_id, 
+                    use_cache=False, 
+                    detect_elements=True
+                )
+                
+                if detection_result.elements:
+                    # 全屏OCR识别（只调用一次）
+                    enhanced_image = enhance_for_ocr(image)
+                    full_ocr_result = await self._ocr_pool.recognize(enhanced_image)
+                    
+                    if full_ocr_result and full_ocr_result.texts and full_ocr_result.boxes is not None:
+                        # 根据YOLO检测到的余额元素位置，从全屏OCR结果中匹配文本
+                        for element in detection_result.elements:
+                            if '余额' in element.class_name:
+                                x1, y1, x2, y2 = element.bbox
+                                
+                                # 查找与元素位置重叠的OCR文本
+                                matched_texts = []
+                                for i, (text, box) in enumerate(zip(full_ocr_result.texts, full_ocr_result.boxes)):
+                                    # 计算OCR文本框的中心点
+                                    box_flat = box.flatten().tolist() if hasattr(box, 'flatten') else box
+                                    ocr_x1, ocr_y1 = box_flat[0], box_flat[1]
+                                    ocr_x2, ocr_y2 = box_flat[4], box_flat[5]
+                                    ocr_center_x = (ocr_x1 + ocr_x2) / 2
+                                    ocr_center_y = (ocr_y1 + ocr_y2) / 2
+                                    
+                                    # 检查OCR文本框是否在YOLO元素框内
+                                    if x1 <= ocr_center_x <= x2 and y1 <= ocr_center_y <= y2:
+                                        matched_texts.append(text)
+                                
+                                if matched_texts:
+                                    # 合并所有匹配的文本
+                                    combined_text = ' '.join(matched_texts)
+                                    
+                                    # 查找所有数字（包括小数）
+                                    all_numbers = re.findall(r'(\d+\.?\d*)', combined_text)
+                                    
+                                    if all_numbers:
+                                        # 转换为浮点数并选择最大的合理值
+                                        valid_numbers = []
+                                        for num_str in all_numbers:
+                                            try:
+                                                num = float(num_str)
+                                                if 0.01 <= num <= 100000:
+                                                    valid_numbers.append(num)
+                                            except ValueError:
+                                                continue
+                                        
+                                        if valid_numbers:
+                                            return max(valid_numbers)
+            
+            # 降级：使用旧的YOLO检测器
+            elif self._yolo_detector:
+                detections = await self._yolo_detector.detect(
+                    device_id, 
+                    'balance',
+                    conf_threshold=0.3
+                )
+                
+                if detections:
+                    for det in detections:
+                        if '余额' in det.class_name:
+                            x1, y1, x2, y2 = det.bbox
+                            region = image.crop((x1, y1, x2, y2))
+                            region_enhanced = enhance_for_ocr(region)
+                            ocr_result = await self._ocr_pool.recognize(region_enhanced, timeout=2.0)
+                            
+                            if ocr_result and ocr_result.texts:
+                                for text in ocr_result.texts:
+                                    match = re.search(r'(\d+\.?\d*)', text.strip())
+                                    if match:
+                                        try:
+                                            balance = float(match.group(1))
+                                            if 0 <= balance <= 10000:
+                                                return balance
+                                        except ValueError:
+                                            pass
+            
+            # 最后降级：使用区域OCR
+            region_results = await self._recognize_regions(device_id, image)
+            return region_results.get('balance')
+            
+        except Exception as e:
+            print(f"  ! 获取余额失败: {e}")
+            return None
+    
+    # ==================== 备选方案方法 ====================
+    
+    async def get_balance_fallback(self, device_id: str) -> Optional[float]:
+        """备选方案：使用区域OCR获取余额
+        
+        策略：
+        1. 对整个屏幕进行OCR
+        2. 查找"余额"关键字
+        3. 提取其附近的数字
+        
+        Args:
+            device_id: 设备ID
+            
+        Returns:
+            float: 余额，失败返回 None
+        """
+        if not HAS_PIL or not HAS_OCR:
+            return None
+        
+        try:
+            # 截图
+            screenshot_data = await self.adb.screencap(device_id)
+            if not screenshot_data:
+                return None
+            
+            image = Image.open(BytesIO(screenshot_data))
+            
+            # OCR识别，超时10秒
+            try:
+                ocr_result = await asyncio.wait_for(
+                    asyncio.to_thread(self._ocr, image),
+                    timeout=10.0
+                )
+            except asyncio.TimeoutError:
+                return None
+            
+            if not ocr_result or not ocr_result.txts:
+                return None
+            
+            texts = list(ocr_result.txts)
+            
+            # 策略1: 查找"余额"关键字附近的数字
+            for i, text in enumerate(texts):
+                if "余额" in text:
+                    # 检查前后的文本
+                    for j in range(max(0, i-3), min(len(texts), i+4)):
+                        if j != i:
+                            # 尝试提取数字
+                            match = re.search(r'(\d+\.?\d*)', texts[j])
+                            if match:
+                                try:
+                                    balance = float(match.group(1))
+                                    # 合理性检查：余额通常在0-10000之间
+                                    if 0 <= balance <= 10000:
+                                        return balance
+                                except ValueError:
+                                    pass
+            
+            # 策略2: 查找带"元"的数字
+            for text in texts:
+                if "元" in text and "余额" not in text:
+                    match = re.search(r'(\d+\.?\d*)元', text)
+                    if match:
+                        try:
+                            balance = float(match.group(1))
+                            if 0 <= balance <= 10000:
+                                return balance
+                        except ValueError:
+                            pass
+            
+            return None
+            
+        except Exception as e:
+            print(f"  ! 备选方案获取余额失败: {e}")
+            return None
+    
+    async def get_user_id_fallback(self, device_id: str) -> Optional[str]:
+        """备选方案：从固定位置提取用户ID
+        
+        策略：
+        1. 对屏幕顶部30%区域进行OCR
+        2. 查找"ID"关键字
+        3. 提取其后的数字
+        
+        Args:
+            device_id: 设备ID
+            
+        Returns:
+            str: 用户ID，失败返回 None
+        """
+        if not HAS_PIL or not HAS_OCR:
+            return None
+        
+        try:
+            # 截图
+            screenshot_data = await self.adb.screencap(device_id)
+            if not screenshot_data:
+                return None
+            
+            image = Image.open(BytesIO(screenshot_data))
+            
+            # 裁剪顶部30%区域
+            width, height = image.size
+            top_region = image.crop((0, 0, width, int(height * 0.3)))
+            
+            # OCR识别，超时10秒
+            try:
+                ocr_result = await asyncio.wait_for(
+                    asyncio.to_thread(self._ocr, top_region),
+                    timeout=10.0
+                )
+            except asyncio.TimeoutError:
+                return None
+            
+            if not ocr_result or not ocr_result.txts:
+                return None
+            
+            texts = list(ocr_result.txts)
+            
+            # 查找ID模式
+            for text in texts:
+                text_no_space = text.replace(" ", "")
+                # 匹配 "ID:数字" 或 "用户ID:数字"
+                match = re.search(r'(?:用户)?[Ii][Dd][:：]?(\d+)', text_no_space)
+                if match:
+                    user_id = match.group(1)
+                    # 合理性检查：ID通常是6-12位数字
+                    if 6 <= len(user_id) <= 12:
+                        return user_id
+            
+            return None
+            
+        except Exception as e:
+            print(f"  ! 备选方案获取用户ID失败: {e}")
+            return None
+    
+    async def get_nickname_fallback(self, device_id: str) -> Optional[str]:
+        """备选方案：从顶部区域提取昵称
+        
+        策略：
+        1. 对屏幕顶部20%区域进行OCR
+        2. 查找"昵称"关键字
+        3. 提取其后的文本
+        4. 如果没有"昵称"关键字，返回顶部区域最长的非数字文本
+        
+        Args:
+            device_id: 设备ID
+            
+        Returns:
+            str: 昵称，失败返回 None
+        """
+        if not HAS_PIL or not HAS_OCR:
+            return None
+        
+        try:
+            # 截图
+            screenshot_data = await self.adb.screencap(device_id)
+            if not screenshot_data:
+                return None
+            
+            image = Image.open(BytesIO(screenshot_data))
+            
+            # 裁剪顶部20%区域
+            width, height = image.size
+            top_region = image.crop((0, 0, width, int(height * 0.2)))
+            
+            # OCR识别，超时10秒
+            try:
+                ocr_result = await asyncio.wait_for(
+                    asyncio.to_thread(self._ocr, top_region),
+                    timeout=10.0
+                )
+            except asyncio.TimeoutError:
+                return None
+            
+            if not ocr_result or not ocr_result.txts:
+                return None
+            
+            texts = list(ocr_result.txts)
+            
+            # 策略1: 查找"昵称"关键字
+            for text in texts:
+                if "昵称" in text:
+                    match = re.search(r'昵称[:：\s]+(.+)', text)
+                    if match:
+                        nickname = match.group(1).strip()
+                        if nickname and len(nickname) <= 20:  # 昵称通常不超过20个字符
+                            return nickname
+            
+            # 策略2: 返回最长的非数字、非关键字文本
+            candidates = []
+            keywords = ["ID", "id", "手机", "余额", "积分", "抵扣券", "优惠券", "我的", "设置"]
+            for text in texts:
+                # 过滤掉纯数字、包含关键字的文本
+                if not text.isdigit() and not any(kw in text for kw in keywords):
+                    # 过滤掉太短或太长的文本
+                    if 2 <= len(text) <= 20:
+                        candidates.append(text)
+            
+            if candidates:
+                # 返回最长的候选
+                return max(candidates, key=len)
+            
+            return None
+            
+        except Exception as e:
+            print(f"  ! 备选方案获取昵称失败: {e}")
+            return None
+    
+    async def get_phone_fallback(self, device_id: str) -> Optional[str]:
+        """备选方案：从手机号区域提取
+        
+        策略：
+        1. 对整个屏幕进行OCR
+        2. 查找手机号模式(掩码或完整)
+        3. 优先返回掩码格式
+        
+        Args:
+            device_id: 设备ID
+            
+        Returns:
+            str: 手机号，失败返回 None
+        """
+        if not HAS_PIL or not HAS_OCR:
+            return None
+        
+        try:
+            # 截图
+            screenshot_data = await self.adb.screencap(device_id)
+            if not screenshot_data:
+                return None
+            
+            image = Image.open(BytesIO(screenshot_data))
+            
+            # OCR识别，超时10秒
+            try:
+                ocr_result = await asyncio.wait_for(
+                    asyncio.to_thread(self._ocr, image),
+                    timeout=10.0
+                )
+            except asyncio.TimeoutError:
+                return None
+            
+            if not ocr_result or not ocr_result.txts:
+                return None
+            
+            texts = list(ocr_result.txts)
+            
+            # 策略1: 查找掩码格式 "138****1234"
+            for text in texts:
+                text_no_space = text.replace(" ", "")
+                match = re.search(r'(\d{3}\*{4}\d{4})', text_no_space)
+                if match:
+                    return match.group(1)
+            
+            # 策略2: 查找完整手机号 "13812341234"
+            for text in texts:
+                text_no_space = text.replace(" ", "")
+                match = re.search(r'(1[3-9]\d{9})', text_no_space)
+                if match:
+                    return match.group(1)
+            
+            return None
+            
+        except Exception as e:
+            print(f"  ! 备选方案获取手机号失败: {e}")
+            return None
+    
+    async def get_points_fallback(self, device_id: str) -> Optional[int]:
+        """备选方案：从积分区域提取
+        
+        策略：
+        1. 对整个屏幕进行OCR
+        2. 查找"积分"关键字
+        3. 提取其附近的数字
+        
+        Args:
+            device_id: 设备ID
+            
+        Returns:
+            int: 积分，失败返回 None
+        """
+        if not HAS_PIL or not HAS_OCR:
+            return None
+        
+        try:
+            # 截图
+            screenshot_data = await self.adb.screencap(device_id)
+            if not screenshot_data:
+                return None
+            
+            image = Image.open(BytesIO(screenshot_data))
+            
+            # OCR识别，超时10秒
+            try:
+                ocr_result = await asyncio.wait_for(
+                    asyncio.to_thread(self._ocr, image),
+                    timeout=10.0
+                )
+            except asyncio.TimeoutError:
+                return None
+            
+            if not ocr_result or not ocr_result.txts:
+                return None
+            
+            texts = list(ocr_result.txts)
+            
+            # 策略1: 查找"积分"关键字附近的数字
+            for i, text in enumerate(texts):
+                if "积分" in text:
+                    # 检查同一文本中的数字
+                    match = re.search(r'(\d+)积分', text)
+                    if match:
+                        try:
+                            points = int(match.group(1))
+                            # 合理性检查：积分通常在0-100000之间
+                            if 0 <= points <= 100000:
+                                return points
+                        except ValueError:
+                            pass
+                    
+                    match = re.search(r'积分[:：]?(\d+)', text)
+                    if match:
+                        try:
+                            points = int(match.group(1))
+                            if 0 <= points <= 100000:
+                                return points
+                        except ValueError:
+                            pass
+                    
+                    # 检查前后的文本
+                    for j in range(max(0, i-3), min(len(texts), i+4)):
+                        if j != i and texts[j].isdigit():
+                            try:
+                                points = int(texts[j])
+                                if 0 <= points <= 100000:
+                                    return points
+                            except ValueError:
+                                pass
+            
+            return None
+            
+        except Exception as e:
+            print(f"  ! 备选方案获取积分失败: {e}")
+            return None
+    
+    async def get_vouchers_fallback(self, device_id: str) -> Optional[float]:
+        """备选方案：从抵扣券区域提取
+        
+        策略：
+        1. 对整个屏幕进行OCR
+        2. 查找"抵扣券"或"优惠券"关键字
+        3. 提取其附近的数字（支持小数）
+        
+        Args:
+            device_id: 设备ID
+            
+        Returns:
+            float: 抵扣券数量/金额，失败返回 None
+        """
+        if not HAS_PIL or not HAS_OCR:
+            return None
+        
+        try:
+            # 截图
+            screenshot_data = await self.adb.screencap(device_id)
+            if not screenshot_data:
+                return None
+            
+            image = Image.open(BytesIO(screenshot_data))
+            
+            # OCR识别，超时10秒
+            try:
+                ocr_result = await asyncio.wait_for(
+                    asyncio.to_thread(self._ocr, image),
+                    timeout=10.0
+                )
+            except asyncio.TimeoutError:
+                return None
+            
+            if not ocr_result or not ocr_result.txts:
+                return None
+            
+            texts = list(ocr_result.txts)
+            
+            # 策略1: 查找"抵扣券"或"优惠券"关键字附近的数字
+            for i, text in enumerate(texts):
+                if "抵扣券" in text or "优惠券" in text:
+                    # 检查同一文本中的数字（支持小数）
+                    match = re.search(r'(\d+\.?\d*)张?(抵扣券|优惠券)', text)
+                    if match:
+                        try:
+                            vouchers = float(match.group(1))
+                            # 合理性检查：抵扣券通常在0-100之间
+                            if 0 <= vouchers <= 100:
+                                return vouchers
+                        except ValueError:
+                            pass
+                    
+                    match = re.search(r'(抵扣券|优惠券)[:：]?(\d+\.?\d*)', text)
+                    if match:
+                        try:
+                            vouchers = float(match.group(2))
+                            if 0 <= vouchers <= 100:
+                                return vouchers
+                        except ValueError:
+                            pass
+                    
+                    # 检查前后的文本（支持小数）
+                    for j in range(max(0, i-3), min(len(texts), i+4)):
+                        if j != i:
+                            # 尝试匹配数字（包括小数）
+                            match = re.search(r'^(\d+\.?\d*)$', texts[j].strip())
+                            if match:
+                                try:
+                                    vouchers = float(match.group(1))
+                                    if 0 <= vouchers <= 100:
+                                        return vouchers
+                                except ValueError:
+                                    pass
+            
+            return None
+            
+        except Exception as e:
+            print(f"  ! 备选方案获取抵扣券失败: {e}")
+            return None

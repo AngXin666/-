@@ -1,0 +1,68 @@
+{
+  "_comment": "ModelManager 配置文件 - 控制模型加载行为",
+  "_version": "1.0.0",
+  
+  "models": {
+    "_comment": "模型配置节 - 定义要加载的模型及其参数",
+    
+    "page_detector_integrated": {
+      "_comment": "深度学习页面分类器 - 使用PyTorch模型进行页面识别",
+      "enabled": true,
+      "model_path": "page_classifier_pytorch_best.pth",
+      "classes_path": "page_classes.json",
+      "device": "auto",
+      "_device_options": "auto (自动选择), cuda (强制GPU), cpu (强制CPU)",
+      "quantize": false,
+      "_quantize_comment": "启用量化可减少内存占用和提升推理速度"
+    },
+    
+    "page_detector_hybrid": {
+      "_comment": "混合优化的YOLO检测器 - 用于检测页面中的特定元素",
+      "enabled": true,
+      "yolo_registry_path": "yolo_model_registry.json",
+      "mapping_path": "page_yolo_mapping.json",
+      "device": "auto",
+      "_device_options": "auto (自动选择), cuda (强制GPU), cpu (强制CPU)"
+    },
+    
+    "ocr_thread_pool": {
+      "_comment": "OCR线程池 - 使用RapidOCR进行文字识别",
+      "enabled": true,
+      "thread_count": 4,
+      "_thread_count_comment": "建议设置为CPU核心数的一半",
+      "use_gpu": true,
+      "_use_gpu_comment": "如果可用，使用GPU加速OCR识别"
+    }
+  },
+  
+  "startup": {
+    "_comment": "启动配置节 - 控制启动时的行为",
+    "show_progress": true,
+    "_show_progress_comment": "是否显示模型加载进度",
+    "log_loading_time": true,
+    "_log_loading_time_comment": "是否记录每个模型的加载时间",
+    "log_memory_usage": true,
+    "_log_memory_usage_comment": "是否记录内存使用情况"
+  },
+  
+  "performance": {
+    "_comment": "性能配置节 - 可选的性能优化选项",
+    "parallel_loading": false,
+    "_parallel_loading_comment": "是否并行加载模型（实验性功能）",
+    "lazy_loading": false,
+    "_lazy_loading_comment": "是否延迟加载模型（首次使用时才加载）"
+  },
+  
+  "error_handling": {
+    "_comment": "错误处理配置节 - 控制错误处理行为",
+    "retry_count": 3,
+    "_retry_count_comment": "模型加载失败时的重试次数",
+    "retry_delay": 1,
+    "_retry_delay_comment": "重试之间的延迟时间（秒）",
+    "critical_models": [
+      "page_detector_integrated",
+      "page_detector_hybrid"
+    ],
+    "_critical_models_comment": "关键模型列表 - 这些模型加载失败会阻止程序启动"
+  }
+}

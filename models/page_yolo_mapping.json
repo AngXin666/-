@@ -1,0 +1,457 @@
+{
+  "mapping": {
+    "个人页_已登录": {
+      "page_state": "PROFILE_LOGGED",
+      "yolo_models": [
+        {
+          "model_key": "profile_logged",
+          "purpose": "检测昵称和用户ID",
+          "priority": 1
+        },
+        {
+          "model_key": "balance",
+          "purpose": "检测余额和积分",
+          "priority": 2
+        },
+        {
+          "model_key": "avatar_homepage",
+          "purpose": "检测头像和首页按钮",
+          "priority": 3
+        }
+      ]
+    },
+    "个人页_未登录": {
+      "page_state": "PROFILE",
+      "yolo_models": [
+        {
+          "model_key": "profile_unlogged",
+          "purpose": "检测请登陆按钮",
+          "priority": 1
+        }
+      ]
+    },
+    "个人页广告": {
+      "page_state": "PROFILE_AD",
+      "yolo_models": [
+        {
+          "model_key": "个人页广告",
+          "purpose": "检测确认按钮",
+          "priority": 1
+        },
+        {
+          "model_key": "个人页广告_20260131_000131",
+          "purpose": "检测按钮",
+          "priority": 2
+        }
+      ]
+    },
+    "交易流水": {
+      "page_state": "TRANSACTION_HISTORY",
+      "yolo_models": [
+        {
+          "model_key": "transaction_history",
+          "purpose": "检测同意按钮",
+          "priority": 1
+        }
+      ]
+    },
+    "优惠劵": {
+      "page_state": "COUPON",
+      "yolo_models": [
+        {
+          "model_key": "coupon_detector",
+          "purpose": "检测返回按钮",
+          "priority": 1
+        }
+      ]
+    },
+    "分类页": {
+      "page_state": "CATEGORY",
+      "yolo_models": [
+        {
+          "model_key": "分类页",
+          "purpose": "检测我的按钮和首页按钮",
+          "priority": 1
+        },
+        {
+          "model_key": "category",
+          "purpose": "检测按钮",
+          "priority": 2
+        }
+      ]
+    },
+    "加载页": {
+      "page_state": "LOADING",
+      "yolo_models": []
+    },
+    "启动页服务弹窗": {
+      "page_state": "STARTUP_POPUP",
+      "yolo_models": [
+        {
+          "model_key": "startup_popup",
+          "purpose": "检测同意和拒绝按钮",
+          "priority": 1
+        }
+      ]
+    },
+    "广告页": {
+      "page_state": "AD",
+      "yolo_models": []
+    },
+    "搜索页": {
+      "page_state": "SEARCH",
+      "yolo_models": [
+        {
+          "model_key": "搜索页",
+          "purpose": "检测返回按钮",
+          "priority": 1
+        },
+        {
+          "model_key": "search",
+          "purpose": "检测返回按钮",
+          "priority": 2
+        }
+      ]
+    },
+    "文章页": {
+      "page_state": "ARTICLE",
+      "yolo_models": [
+        {
+          "model_key": "文章页",
+          "purpose": "检测返回按钮",
+          "priority": 1
+        },
+        {
+          "model_key": "article",
+          "purpose": "检测按钮",
+          "priority": 2
+        }
+      ]
+    },
+    "模拟器桌面": {
+      "page_state": "LAUNCHER",
+      "yolo_models": []
+    },
+    "温馨提示": {
+      "page_state": "WARMTIP",
+      "yolo_models": [
+        {
+          "model_key": "warmtip",
+          "purpose": "检测关闭按钮",
+          "priority": 1
+        },
+        {
+          "model_key": "warmtip_20260131_000131",
+          "purpose": "检测确认按钮",
+          "priority": 2
+        }
+      ]
+    },
+    "登录页": {
+      "page_state": "LOGIN",
+      "yolo_models": [
+        {
+          "model_key": "login",
+          "purpose": "检测登陆按钮、输入框和协议勾选框",
+          "priority": 1
+        },
+        {
+          "model_key": "login_exception",
+          "purpose": "检测登录异常确认按钮",
+          "priority": 2
+        }
+      ]
+    },
+    "积分页": {
+      "page_state": "POINTS_PAGE",
+      "yolo_models": [
+        {
+          "model_key": "积分页",
+          "purpose": "检测返回按钮",
+          "priority": 1
+        },
+        {
+          "model_key": "points",
+          "purpose": "检测按钮",
+          "priority": 2
+        }
+      ]
+    },
+    "签到弹窗": {
+      "page_state": "CHECKIN_POPUP",
+      "yolo_models": [
+        {
+          "model_key": "签到成功弹窗",
+          "purpose": "检测签到成功文本、金额和关闭按钮",
+          "priority": 1
+        }
+      ]
+    },
+    "签到页": {
+      "page_state": "CHECKIN",
+      "yolo_models": [
+        {
+          "model_key": "签到页",
+          "purpose": "检测签到按钮和签到次数",
+          "priority": 1
+        },
+        {
+          "model_key": "checkin",
+          "purpose": "检测签到按钮",
+          "priority": 2
+        },
+        {
+          "model_key": "checkin_20260131_000131",
+          "purpose": "检测签到按钮",
+          "priority": 3
+        },
+        {
+          "model_key": "checkin_20260131_000413",
+          "purpose": "检测签到按钮",
+          "priority": 4
+        }
+      ]
+    },
+    "设置页": {
+      "page_state": "SETTINGS",
+      "yolo_models": []
+    },
+    "转账页": {
+      "page_state": "TRANSFER",
+      "yolo_models": [
+        {
+          "model_key": "transfer",
+          "purpose": "检测全部转账按钮、输入框和提交按钮",
+          "priority": 1
+        },
+        {
+          "model_key": "transfer_confirm",
+          "purpose": "检测转账确认弹窗",
+          "priority": 2
+        },
+        {
+          "model_key": "transfer_20260131_000131",
+          "purpose": "检测转账按钮, 输入框",
+          "priority": 3
+        },
+        {
+          "model_key": "transfer_20260131_000413",
+          "purpose": "检测转账按钮, 输入框",
+          "priority": 4
+        },
+        {
+          "model_key": "transfer_20260131_001357",
+          "purpose": "检测转账按钮, 输入框",
+          "priority": 5
+        },
+        {
+          "model_key": "transfer_20260131_001632",
+          "purpose": "检测转账按钮, 输入框",
+          "priority": 6
+        },
+        {
+          "model_key": "transfer_20260131_004231",
+          "purpose": "检测转账按钮, 输入框",
+          "priority": 7
+        }
+      ]
+    },
+    "钱包页": {
+      "page_state": "WALLET",
+      "yolo_models": [
+        {
+          "model_key": "钱包页",
+          "purpose": "检测余额数字和转增按钮",
+          "priority": 1
+        },
+        {
+          "model_key": "wallet",
+          "purpose": "检测余额数字, 转增按钮",
+          "priority": 2
+        }
+      ]
+    },
+    "首页": {
+      "page_state": "HOME",
+      "yolo_models": [
+        {
+          "model_key": "首页",
+          "purpose": "检测每日签到按钮和我的按钮",
+          "priority": 1
+        },
+        {
+          "model_key": "home",
+          "purpose": "检测我的按钮, 签到按钮",
+          "priority": 2
+        },
+        {
+          "model_key": "home_20260131_000131",
+          "purpose": "检测我的按钮, 签到按钮",
+          "priority": 3
+        }
+      ]
+    },
+    "首页公告": {
+      "page_state": "HOME_NOTICE",
+      "yolo_models": [
+        {
+          "model_key": "首页公告",
+          "purpose": "检测确认按钮",
+          "priority": 1
+        },
+        {
+          "model_key": "首页公告_20260131_000131",
+          "purpose": "检测按钮",
+          "priority": 2
+        }
+      ]
+    },
+    "首页异常代码弹窗": {
+      "page_state": "HOME_ERROR_POPUP",
+      "yolo_models": [
+        {
+          "model_key": "首页异常代码弹窗",
+          "purpose": "检测确认按钮",
+          "priority": 1
+        },
+        {
+          "model_key": "首页异常代码弹窗_20260131_000131",
+          "purpose": "检测按钮",
+          "priority": 2
+        }
+      ]
+    },
+    "button": {
+      "page_state": "BUTTON",
+      "yolo_models": [
+        {
+          "model_key": "button",
+          "purpose": "检测按钮",
+          "priority": 1
+        }
+      ]
+    },
+    "签到成功弹窗": {
+      "page_state": "签到成功弹窗",
+      "yolo_models": [
+        {
+          "model_key": "签到成功弹窗_20260131_000131",
+          "purpose": "检测按钮",
+          "priority": 1
+        }
+      ]
+    },
+    "签到成功弹窗_detector2": {
+      "page_state": "签到成功弹窗_DETECTOR2",
+      "yolo_models": [
+        {
+          "model_key": "签到成功弹窗_detector2",
+          "purpose": "检测按钮",
+          "priority": 1
+        }
+      ]
+    },
+    "签到页_detector2": {
+      "page_state": "签到页_DETECTOR2",
+      "yolo_models": [
+        {
+          "model_key": "签到页_detector2",
+          "purpose": "检测按钮",
+          "priority": 1
+        }
+      ]
+    },
+    "首页_detector2": {
+      "page_state": "首页_DETECTOR2",
+      "yolo_models": [
+        {
+          "model_key": "首页_detector2",
+          "purpose": "检测按钮",
+          "priority": 1
+        }
+      ]
+    },
+    "train": {
+      "page_state": "TRAIN",
+      "yolo_models": [
+        {
+          "model_key": "train",
+          "purpose": "检测按钮",
+          "priority": 1
+        },
+        {
+          "model_key": "train_20260131_000131",
+          "purpose": "检测按钮",
+          "priority": 2
+        },
+        {
+          "model_key": "train_20260131_000413",
+          "purpose": "检测按钮",
+          "priority": 3
+        }
+      ]
+    },
+    "train2": {
+      "page_state": "TRAIN2",
+      "yolo_models": [
+        {
+          "model_key": "train2",
+          "purpose": "检测按钮",
+          "priority": 1
+        }
+      ]
+    },
+    "train3": {
+      "page_state": "TRAIN3",
+      "yolo_models": [
+        {
+          "model_key": "train3",
+          "purpose": "检测按钮",
+          "priority": 1
+        },
+        {
+          "model_key": "train3_20260131_000131",
+          "purpose": "检测按钮",
+          "priority": 2
+        }
+      ]
+    },
+    "train4": {
+      "page_state": "TRAIN4",
+      "yolo_models": [
+        {
+          "model_key": "train4",
+          "purpose": "检测按钮",
+          "priority": 1
+        }
+      ]
+    },
+    "exp2": {
+      "page_state": "EXP2",
+      "yolo_models": [
+        {
+          "model_key": "exp2",
+          "purpose": "检测按钮",
+          "priority": 1
+        }
+      ]
+    },
+    "exp": {
+      "page_state": "EXP",
+      "yolo_models": [
+        {
+          "model_key": "exp",
+          "purpose": "检测按钮",
+          "priority": 1
+        }
+      ]
+    }
+  },
+  "description": "页面分类器和YOLO模型的映射配置",
+  "usage": {
+    "workflow": "1. 使用页面分类器识别页面类型 -> 2. 根据映射加载对应的YOLO模型 -> 3. 使用YOLO模型检测页面元素",
+    "example": "页面分类器识别为'首页' -> 加载homepage YOLO模型 -> 检测'每日签到按钮'和'我的按钮'"
+  },
+  "version": "1.0",
+  "last_updated": "2026-01-31"
+}

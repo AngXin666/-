@@ -1,0 +1,97 @@
+{
+  "version": "1.0.5",
+  "update_date": "2026-01-31",
+  "description": "自动注册 1 个新模型",
+  "models": {
+    "page_classifier": {
+      "version": "1.0.0",
+      "file": "page_classifier_pytorch_best.pth",
+      "size_mb": 10.64,
+      "description": "页面分类器（PyTorch）"
+    },
+    "page_classes": {
+      "version": "1.0.0",
+      "file": "page_classes.json",
+      "size_mb": 0.0,
+      "description": "页面类别映射"
+    },
+    "yolo_registry": {
+      "version": "1.0.0",
+      "file": "yolo_model_registry.json",
+      "size_mb": 0.02,
+      "description": "YOLO模型注册表"
+    },
+    "page_yolo_mapping": {
+      "version": "1.0.0",
+      "file": "page_yolo_mapping.json",
+      "size_mb": 0.01,
+      "description": "页面YOLO映射"
+    },
+    "yolo_button_detector": {
+      "version": "1.0.0",
+      "file": "yolo_runs/button_detector/weights/best.pt",
+      "size_mb": 5.96,
+      "description": "YOLO检测器 - button_detector"
+    },
+    "yolo_checkin_detector": {
+      "version": "1.0.0",
+      "file": "yolo_runs/checkin_detector/weights/best.pt",
+      "size_mb": 17.48,
+      "description": "YOLO检测器 - checkin_detector"
+    },
+    "yolo_checkin_detector2": {
+      "version": "1.0.0",
+      "file": "yolo_runs/checkin_detector2/weights/best.pt",
+      "size_mb": 5.95,
+      "description": "YOLO检测器 - checkin_detector2"
+    },
+    "yolo_homepage_detector": {
+      "version": "1.0.0",
+      "file": "yolo_runs/homepage_detector/weights/best.pt",
+      "size_mb": 5.97,
+      "description": "YOLO检测器 - homepage_detector"
+    },
+    "yolo_login_detector": {
+      "version": "1.0.0",
+      "file": "yolo_runs/login_detector/weights/best.pt",
+      "size_mb": 5.96,
+      "description": "YOLO检测器 - login_detector"
+    },
+    "yolo_transfer_detector": {
+      "version": "1.0.0",
+      "file": "yolo_runs/transfer_detector/weights/best.pt",
+      "size_mb": 17.5,
+      "description": "YOLO检测器 - transfer_detector"
+    },
+    "yolo_transfer_detector10": {
+      "version": "1.0.0",
+      "file": "yolo_runs/transfer_detector10/weights/best.pt",
+      "size_mb": 17.5,
+      "description": "YOLO检测器 - transfer_detector10"
+    },
+    "yolo_transfer_detector11": {
+      "version": "1.0.0",
+      "file": "yolo_runs/transfer_detector11/weights/best.pt",
+      "size_mb": 5.96,
+      "description": "YOLO检测器 - transfer_detector11"
+    },
+    "yolo_transfer_detector2": {
+      "version": "1.0.0",
+      "file": "yolo_runs/transfer_detector2/weights/best.pt",
+      "size_mb": 17.5,
+      "description": "YOLO检测器 - transfer_detector2"
+    },
+    "yolo_transfer_detector8": {
+      "version": "1.0.0",
+      "file": "yolo_runs/transfer_detector8/weights/best.pt",
+      "size_mb": 5.96,
+      "description": "YOLO检测器 - transfer_detector8"
+    },
+    "yolo_transfer_detector9": {
+      "version": "1.0.0",
+      "file": "yolo_runs/transfer_detector9/weights/best.pt",
+      "size_mb": 5.96,
+      "description": "YOLO检测器 - transfer_detector9"
+    }
+  }
+}

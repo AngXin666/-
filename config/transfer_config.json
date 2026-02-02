@@ -1,0 +1,17 @@
+{
+  "min_balance": 0.0,
+  "min_transfer_amount": 30.0,
+  "recipient_ids": [
+    "N/A"
+  ],
+  "level_recipients": {
+    "1": [
+      "N/A"
+    ],
+    "2": [],
+    "3": []
+  },
+  "enabled": false,
+  "multi_level_enabled": false,
+  "max_transfer_level": 3
+}
