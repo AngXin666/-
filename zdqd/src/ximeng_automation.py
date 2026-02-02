@@ -257,7 +257,7 @@ class XimengAutomation:
                     log(f"\n{'='*60}")
                     log(f"[时间记录] ✓ 启动流程完成")
                     log(f"[时间记录] 到达页面: {result.state.value}")
-                    log(f"[时间记录] 总耗时: {total_time:.3f}秒")
+                    log(f"[时间记录] 总耗时: {int(total_time)}秒")
                     log(f"[时间记录] 完成时间: {time.strftime('%H:%M:%S')}")
                     log(f"{'='*60}\n")
                     return True
@@ -286,7 +286,7 @@ class XimengAutomation:
                         log_callback=lambda msg: log(f"  [等待] {msg}")
                     )
                     wait_time = time.time() - wait_start
-                    log(f"✓ 应用启动完成 (耗时: {time.time() - step_start:.2f}秒, 等待: {wait_time:.2f}秒)")
+                    log(f"✓ 应用启动完成 (耗时: {int(time.time() - step_start)}秒, 等待: {int(wait_time)}秒)")
                     continue
                 
                 # 处理启动页服务弹窗
@@ -302,9 +302,9 @@ class XimengAutomation:
                     click_time = time.time() - click_start
                     
                     if success:
-                        log(f"  ✓ 成功点击'同意'按钮 (检测+点击耗时: {click_time:.3f}秒)")
+                        log(f"  ✓ 成功点击'同意'按钮 (检测+点击耗时: {int(click_time)}秒)")
                     else:
-                        log(f"  ⚠️ 未找到'同意'按钮，使用固定坐标... (检测耗时: {click_time:.3f}秒)")
+                        log(f"  ⚠️ 未找到'同意'按钮，使用固定坐标... (检测耗时: {int(click_time)}秒)")
                         await self.adb.tap(device_id, 270, 600)
                     
                     # 优化：使用智能等待器等待页面变化（替换固定等待0.5秒）
@@ -319,7 +319,7 @@ class XimengAutomation:
                     )
                     
                     step_time = time.time() - step_start
-                    log(f"[时间记录] 弹窗处理完成 - 总耗时: {step_time:.3f}秒")
+                    log(f"[时间记录] 弹窗处理完成 - 总耗时: {int(step_time)}秒")
                     log("")
                     continue
                 
@@ -336,9 +336,9 @@ class XimengAutomation:
                     click_time = time.time() - click_start
                     
                     if success:
-                        log(f"  ✓ 成功点击'确认'按钮 (检测+点击耗时: {click_time:.3f}秒)")
+                        log(f"  ✓ 成功点击'确认'按钮 (检测+点击耗时: {int(click_time)}秒)")
                     else:
-                        log(f"  ⚠️ 未找到'确认'按钮，使用固定坐标... (检测耗时: {click_time:.3f}秒)")
+                        log(f"  ⚠️ 未找到'确认'按钮，使用固定坐标... (检测耗时: {int(click_time)}秒)")
                         await self.adb.tap(device_id, 270, 690)
                     
                     # 优化：使用智能等待器等待页面变化（替换固定等待1.5秒）
@@ -355,16 +355,16 @@ class XimengAutomation:
                     
                     if wait_result:
                         total_time = time.time() - total_start_time
-                        log(f"[时间记录] 弹窗处理完成 - 总耗时: {step_time:.3f}秒")
+                        log(f"[时间记录] 弹窗处理完成 - 总耗时: {int(step_time)}秒")
                         log(f"\n{'='*60}")
                         log(f"[时间记录] ✓ 启动流程完成")
                         log(f"[时间记录] 到达页面: {wait_result.state.value}")
-                        log(f"[时间记录] 总耗时: {total_time:.3f}秒")
+                        log(f"[时间记录] 总耗时: {int(total_time)}秒")
                         log(f"[时间记录] 完成时间: {time.strftime('%H:%M:%S')}")
                         log(f"{'='*60}\n")
                         return True
                     
-                    log(f"[时间记录] 弹窗处理完成 - 总耗时: {step_time:.3f}秒")
+                    log(f"[时间记录] 弹窗处理完成 - 总耗时: {int(step_time)}秒")
                     log("")
                     continue
                 
@@ -412,7 +412,7 @@ class XimengAutomation:
                     step_time = time.time() - step_start
                     
                     if wait_result:
-                        log(f"[时间记录] 广告已消失 - 当前页面: {wait_result.state.value}, 耗时: {step_time:.3f}秒")
+                        log(f"[时间记录] 广告已消失 - 当前页面: {wait_result.state.value}, 耗时: {int(step_time)}秒")
                         log("")
                         
                         # 如果已到达目标页面，直接返回
@@ -421,12 +421,12 @@ class XimengAutomation:
                             log(f"\n{'='*60}")
                             log(f"[时间记录] ✓ 启动流程完成")
                             log(f"[时间记录] 到达页面: {wait_result.state.value}")
-                            log(f"[时间记录] 总耗时: {total_time:.3f}秒")
+                            log(f"[时间记录] 总耗时: {int(total_time)}秒")
                             log(f"[时间记录] 完成时间: {time.strftime('%H:%M:%S')}")
                             log(f"{'='*60}\n")
                             return True
                     else:
-                        log(f"[时间记录] ⚠️ 广告等待超时，继续流程... (耗时: {step_time:.3f}秒)")
+                        log(f"[时间记录] ⚠️ 广告等待超时，继续流程... (耗时: {int(step_time)}秒)")
                         log("")
                     continue
                 
@@ -465,9 +465,9 @@ class XimengAutomation:
                     click_time = time.time() - click_start
                     
                     if success:
-                        log(f"  ✓ 成功点击'关闭'按钮 (检测+点击耗时: {click_time:.3f}秒)")
+                        log(f"  ✓ 成功点击'关闭'按钮 (检测+点击耗时: {int(click_time)}秒)")
                     else:
-                        log(f"  ⚠️ 未找到'关闭'按钮，按返回键... (检测耗时: {click_time:.3f}秒)")
+                        log(f"  ⚠️ 未找到'关闭'按钮，按返回键... (检测耗时: {int(click_time)}秒)")
                         await self.adb.press_back(device_id)
                     
                     # 优化：使用智能等待器等待页面变化（替换固定等待0.5秒）
@@ -484,16 +484,16 @@ class XimengAutomation:
                     
                     if wait_result:
                         total_time = time.time() - total_start_time
-                        log(f"[时间记录] 弹窗处理完成 - 总耗时: {step_time:.3f}秒")
+                        log(f"[时间记录] 弹窗处理完成 - 总耗时: {int(step_time)}秒")
                         log(f"\n{'='*60}")
                         log(f"[时间记录] ✓ 启动流程完成")
                         log(f"[时间记录] 到达页面: {wait_result.state.value}")
-                        log(f"[时间记录] 总耗时: {total_time:.3f}秒")
+                        log(f"[时间记录] 总耗时: {int(total_time)}秒")
                         log(f"[时间记录] 完成时间: {time.strftime('%H:%M:%S')}")
                         log(f"{'='*60}\n")
                         return True
                     
-                    log(f"[时间记录] 弹窗处理完成 - 总耗时: {step_time:.3f}秒")
+                    log(f"[时间记录] 弹窗处理完成 - 总耗时: {int(step_time)}秒")
                     log("")
                     continue
                 
@@ -589,7 +589,7 @@ class XimengAutomation:
             # 检测到正常个人页 → 成功
             if current_state in [PageState.PROFILE, PageState.PROFILE_LOGGED]:
                 elapsed = asyncio.get_event_loop().time() - start_time
-                log(f"  ✓ 到达个人页（耗时: {elapsed:.2f}秒，关闭广告: {ad_closed_count}次）")
+                log(f"  ✓ 到达个人页（耗时: {int(elapsed)}秒，关闭广告: {ad_closed_count}次）")
                 return True
             
             # 检测到广告 → 立即关闭
@@ -630,7 +630,7 @@ class XimengAutomation:
         
         # 超时
         elapsed = asyncio.get_event_loop().time() - start_time
-        log(f"  ❌ 导航到个人页超时（耗时: {elapsed:.2f}秒，关闭广告: {ad_closed_count}次）")
+        log(f"  ❌ 导航到个人页超时（耗时: {int(elapsed)}秒，关闭广告: {ad_closed_count}次）")
         return False
     
     async def run_full_workflow(self, device_id: str, account: Account, skip_login: bool = False) -> AccountResult:
@@ -695,7 +695,7 @@ class XimengAutomation:
             if skip_login:
                 log(f"✓ 缓存登录已验证，当前已在个人页，直接获取个人信息")
                 step1_time = time.time() - step1_start
-                log(f"[时间记录] 步骤1完成 - 耗时: {step1_time:.3f}秒（跳过登录）")
+                log(f"[时间记录] 步骤1完成 - 耗时: {int(step1_time)}秒（跳过登录）")
                 log("")
                 # 缓存登录不需要处理登录和积分页，直接跳到获取个人资料
             else:
@@ -705,7 +705,7 @@ class XimengAutomation:
                     device_id, account.phone, account.password
                 )
                 login_time = time.time() - login_start
-                log(f"[时间记录] 登录操作耗时: {login_time:.3f}秒")
+                log(f"[时间记录] 登录操作耗时: {int(login_time)}秒")
                 
                 if not login_result.success:
                     # 根据登录失败类型设置error_type
@@ -840,7 +840,7 @@ class XimengAutomation:
                             device_id, use_cache=True, detect_elements=False
                         )
                         detect_time = time.time() - detect_start
-                        log(f"[时间记录] 页面检测耗时: {detect_time:.3f}秒")
+                        log(f"[时间记录] 页面检测耗时: {int(detect_time)}秒")
                         
                         if not page_result or not page_result.state:
                             log(f"  ⚠️ 无法检测当前页面状态")
@@ -860,7 +860,7 @@ class XimengAutomation:
                             # 使用统一的广告处理方法
                             nav_success = await self._navigate_to_profile_with_ad_handling(device_id, log)
                             nav_time = time.time() - nav_start
-                            log(f"[时间记录] 导航耗时: {nav_time:.3f}秒")
+                            log(f"[时间记录] 导航耗时: {int(nav_time)}秒")
                             if not nav_success:
                                 if attempt < 2:
                                     await asyncio.sleep(2)
@@ -873,13 +873,13 @@ class XimengAutomation:
                             log(f"  ✓ 页面已就绪，直接获取个人资料")
                         
                         cache_check_time = time.time() - cache_check_start
-                        log(f"[时间记录] 缓存登录验证总耗时: {cache_check_time:.3f}秒")
+                        log(f"[时间记录] 缓存登录验证总耗时: {int(cache_check_time)}秒")
                     else:
                         # 导航到个人资料页面（使用统一的广告处理方法）
                         nav_start = time.time()
                         nav_success = await self._navigate_to_profile_with_ad_handling(device_id, log)
                         nav_time = time.time() - nav_start
-                        log(f"[时间记录] 导航耗时: {nav_time:.3f}秒")
+                        log(f"[时间记录] 导航耗时: {int(nav_time)}秒")
                         
                         if not nav_success:
                             log(f"⚠️ 导航到个人资料页面失败")
@@ -932,7 +932,7 @@ class XimengAutomation:
                     account_str = f"{account.phone}----{account.password}"
                     profile_data = await self.profile_reader.get_full_profile_with_retry(device_id, account=account_str)
                     profile_read_time = time.time() - profile_read_start
-                    log(f"[时间记录] 获取个人资料耗时: {profile_read_time:.3f}秒")
+                    log(f"[时间记录] 获取个人资料耗时: {int(profile_read_time)}秒")
                     
                     # 检查是否成功获取数据（必须获取到余额、昵称和用户ID）
                     has_balance = profile_data and profile_data.get('balance') is not None
