@@ -583,22 +583,21 @@ class XimengAutomation:
             elif current_state == PageState.PROFILE_AD:
                 log(f"  ⚠️ 检测到个人页广告，立即关闭...")
                 
-                # 使用YOLO检测关闭按钮
-                close_button_pos = None
-                if self.integrated_detector and hasattr(self.integrated_detector, '_yolo_detector') and self.integrated_detector._yolo_detector:
-                    close_button_pos = await self.integrated_detector.find_button_yolo(
-                        device_id, 
-                        '个人页广告',
-                        '确认按钮',
-                        conf_threshold=0.5
-                    )
+                # 方法1: 使用YOLO检测关闭按钮
+                close_button_pos = await self.integrated_detector.find_button_yolo(
+                    device_id, 
+                    '个人页广告',
+                    '确认按钮',
+                    conf_threshold=0.5
+                )
                 
                 if close_button_pos:
-                    log(f"  YOLO检测到'确认按钮': {close_button_pos}，点击关闭")
+                    log(f"  YOLO检测到关闭按钮: {close_button_pos}")
                     await self.adb.tap(device_id, close_button_pos[0], close_button_pos[1])
                 else:
-                    log(f"  使用固定坐标关闭广告")
-                    await self.adb.tap(device_id, 437, 554)
+                    # 方法2: 使用返回键关闭（更可靠）
+                    log(f"  YOLO未检测到按钮，使用返回键关闭")
+                    await self.adb.press_back(device_id)
                 
                 ad_closed_count += 1
                 

@@ -323,27 +323,25 @@ class Navigator:
             
             # 在其他已知页面,点击首页标签
             # 优先使用YOLO检测"首页"按钮位置（更准确）
-            home_button_pos = None
-            if hasattr(self.detector, '_yolo_detector') and self.detector._yolo_detector:
-                self._silent_log.log(f"[导航到首页] 使用YOLO检测'首页'按钮位置...")
-                
-                # 根据当前页面选择合适的模型
-                if current_state in [PageState.PROFILE, PageState.PROFILE_LOGGED]:
-                    # 从个人页跳转，使用avatar_homepage模型
-                    home_button_pos = await self.detector.find_button_yolo(
-                        device_id, 
-                        'avatar_homepage',  # 个人页模型有"首页按钮"
-                        '首页按钮',
-                        conf_threshold=0.5
-                    )
-                else:
-                    # 从其他页面跳转，尝试分类页模型
-                    home_button_pos = await self.detector.find_button_yolo(
-                        device_id, 
-                        '分类页',  # 分类页模型有"首页按钮"
-                        '首页按钮',
-                        conf_threshold=0.5
-                    )
+            self._silent_log.log(f"[导航到首页] 使用YOLO检测'首页'按钮位置...")
+            
+            # 根据当前页面选择合适的模型
+            if current_state in [PageState.PROFILE, PageState.PROFILE_LOGGED]:
+                # 从个人页跳转，使用avatar_homepage模型
+                home_button_pos = await self.detector.find_button_yolo(
+                    device_id, 
+                    'avatar_homepage',  # 个人页模型有"首页按钮"
+                    '首页按钮',
+                    conf_threshold=0.5
+                )
+            else:
+                # 从其他页面跳转，尝试分类页模型
+                home_button_pos = await self.detector.find_button_yolo(
+                    device_id, 
+                    '分类页',  # 分类页模型有"首页按钮"
+                    '首页按钮',
+                    conf_threshold=0.5
+                )
             
             # 如果YOLO检测成功，使用检测到的坐标；否则使用固定坐标
             if home_button_pos:
@@ -421,28 +419,27 @@ class Navigator:
             if current_state == PageState.PROFILE_AD:
                 self._silent_log.info(f"[导航到我的页面] ⚠️ 检测到个人页广告，立即关闭...")
                 
-                # 使用YOLO检测关闭按钮
-                close_button_pos = None
-                if hasattr(self.detector, '_yolo_detector') and self.detector._yolo_detector:
-                    close_button_pos = await self.detector.find_button_yolo(
-                        device_id, 
-                        '个人页广告',
-                        '确认按钮',
-                        conf_threshold=0.5
-                    )
+                # 方法1: 使用YOLO检测关闭按钮
+                close_button_pos = await self.detector.find_button_yolo(
+                    device_id, 
+                    '个人页广告',
+                    '确认按钮',
+                    conf_threshold=0.5
+                )
                 
                 if close_button_pos:
-                    self._silent_log.log(f"[导航到我的页面] YOLO检测到'确认按钮': {close_button_pos}，点击关闭")
+                    self._silent_log.info(f"[导航到我的页面] YOLO检测到关闭按钮: {close_button_pos}")
                     await self.adb.tap(device_id, close_button_pos[0], close_button_pos[1])
+                    await asyncio.sleep(TimeoutsConfig.WAIT_SHORT)
                 else:
-                    self._silent_log.log(f"[导航到我的页面] 使用固定坐标关闭")
-                    await self.adb.tap(device_id, 437, 554)
+                    # 方法2: 使用返回键关闭（更可靠）
+                    self._silent_log.info(f"[导航到我的页面] YOLO未检测到按钮，使用返回键关闭")
+                    await self.adb.press_back(device_id)
+                    await asyncio.sleep(TimeoutsConfig.WAIT_SHORT)
                 
-                # 等待0.5秒让广告关闭
-                await asyncio.sleep(TimeoutsConfig.WAIT_SHORT)
                 self.detector.clear_cache()
                 
-                # 验证广告是否已关闭（失效缓存）
+                # 验证广告是否已关闭
                 self._page_cache.invalidate(device_id, f"profile_nav_{attempt}")
                 page_result = await self._detect_page_cached(
                     device_id, 
@@ -454,7 +451,7 @@ class Navigator:
                     self._silent_log.info(f"[导航到我的页面] ✓ 广告已关闭，到达个人页")
                     return True
                 else:
-                    self._silent_log.info(f"[导航到我的页面] ⚠️ 广告关闭后状态异常，继续尝试...")
+                    self._silent_log.info(f"[导航到我的页面] ⚠️ 广告关闭后状态: {page_result.state.value if page_result else 'unknown'}，继续尝试...")
                     continue
             
             # 如果在签到页面，先返回首页
@@ -661,15 +658,13 @@ class Navigator:
                 asyncio.create_task(self.detector._yolo_detector.detect(device_id, '个人页广告', conf_threshold=0.5))
             
             # 优先使用YOLO检测"我的"按钮位置（更准确）
-            my_button_pos = None
-            if hasattr(self.detector, '_yolo_detector') and self.detector._yolo_detector:
-                self._silent_log.log(f"[导航到我的页面] 使用YOLO检测'我的'按钮位置...")
-                my_button_pos = await self.detector.find_button_yolo(
-                    device_id, 
-                    'homepage',  # 首页模型
-                    '我的按钮',
-                    conf_threshold=0.5
-                )
+            self._silent_log.log(f"[导航到我的页面] 使用YOLO检测'我的'按钮位置...")
+            my_button_pos = await self.detector.find_button_yolo(
+                device_id, 
+                'homepage',  # 首页模型
+                '我的按钮',
+                conf_threshold=0.5
+            )
             
             # 如果YOLO检测成功，使用检测到的坐标；否则使用固定坐标
             if my_button_pos:
@@ -696,25 +691,24 @@ class Navigator:
                 if page_result.state == PageState.PROFILE_AD:
                     self._silent_log.info(f"[导航到我的页面] ⚠️ 检测到个人页广告，立即关闭...")
                     
-                    # 使用YOLO检测关闭按钮
-                    close_button_pos = None
-                    if hasattr(self.detector, '_yolo_detector') and self.detector._yolo_detector:
-                        close_button_pos = await self.detector.find_button_yolo(
-                            device_id, 
-                            '个人页广告',
-                            '确认按钮',
-                            conf_threshold=0.5
-                        )
+                    # 方法1: 使用YOLO检测关闭按钮
+                    close_button_pos = await self.detector.find_button_yolo(
+                        device_id, 
+                        '个人页广告',
+                        '确认按钮',
+                        conf_threshold=0.5
+                    )
                     
                     if close_button_pos:
-                        self._silent_log.log(f"[导航到我的页面] YOLO检测到'确认按钮': {close_button_pos}，点击关闭")
+                        self._silent_log.info(f"[导航到我的页面] YOLO检测到关闭按钮: {close_button_pos}")
                         await self.adb.tap(device_id, close_button_pos[0], close_button_pos[1])
+                        await asyncio.sleep(0.5)
                     else:
-                        self._silent_log.log(f"[导航到我的页面] 使用固定坐标关闭")
-                        await self.adb.tap(device_id, 437, 554)
+                        # 方法2: 使用返回键关闭（更可靠）
+                        self._silent_log.info(f"[导航到我的页面] YOLO未检测到按钮，使用返回键关闭")
+                        await self.adb.press_back(device_id)
+                        await asyncio.sleep(0.5)
                     
-                    # 等待0.5秒让广告关闭
-                    await asyncio.sleep(0.5)
                     self.detector.clear_cache(device_id)
                     
                     # 再次检测页面状态
