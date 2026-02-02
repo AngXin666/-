@@ -542,9 +542,22 @@ class XimengAutomation:
         """
         log = log_callback if log_callback else self._silent_log.info
         
-        # 点击底部导航栏"我的"按钮
-        MY_TAB = (450, 920)
-        await self.adb.tap(device_id, MY_TAB[0], MY_TAB[1])
+        # 优先使用YOLO检测"我的"按钮位置
+        my_button_pos = await self.integrated_detector.find_button_yolo(
+            device_id, 
+            'homepage',  # 首页模型
+            '我的按钮',
+            conf_threshold=0.5
+        )
+        
+        if my_button_pos:
+            log(f"  YOLO检测到'我的'按钮: {my_button_pos}")
+            await self.adb.tap(device_id, my_button_pos[0], my_button_pos[1])
+        else:
+            # 降级：使用固定坐标
+            MY_TAB = (450, 920)
+            log(f"  YOLO未检测到按钮，使用固定坐标: {MY_TAB}")
+            await self.adb.tap(device_id, MY_TAB[0], MY_TAB[1])
         
         # 高频扫描，最多5秒
         max_scan_time = 5.0
