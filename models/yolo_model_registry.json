@@ -1,0 +1,1459 @@
+{
+  "models": {
+    "login": {
+      "name": "登录页检测模型",
+      "page_type": "登录页",
+      "model_path": "yolo_runs/login_detector/weights/best.pt",
+      "classes": [
+        "登陆按钮",
+        "账号输入框",
+        "密码输入框",
+        "协议勾选框"
+      ],
+      "num_classes": 4,
+      "performance": {
+        "mAP50": 0.959,
+        "precision": 0.979,
+        "recall": 0.969,
+        "mAP50-95": 0.682
+      },
+      "training_date": "2026-01-27",
+      "dataset_size": {
+        "original": 55,
+        "augmented": 385,
+        "train": 308,
+        "val": 77
+      }
+    },
+    "warmtip": {
+      "name": "温馨提示检测模型",
+      "page_type": "温馨提示",
+      "model_path": "runs/detect/yolo_runs/warmtip_detector/train2/weights/best.pt",
+      "classes": [
+        "关闭按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.846,
+        "precision": 0.834,
+        "recall": 0.946,
+        "mAP50-95": 0.548
+      },
+      "training_date": "2026-01-27",
+      "dataset_size": {
+        "original": 51,
+        "augmented": 765,
+        "train": 612,
+        "val": 153
+      },
+      "notes": "使用15倍数据增强"
+    },
+    "login_exception": {
+      "name": "登录异常检测模型",
+      "page_type": "登录异常",
+      "model_path": "runs/detect/yolo_runs/login_exception_detector/train2/weights/best.pt",
+      "classes": [
+        "确认按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.995,
+        "precision": 1.0,
+        "recall": 1.0,
+        "mAP50-95": 0.607
+      },
+      "training_date": "2026-01-27",
+      "dataset_size": {
+        "original": 100,
+        "augmented": 1500,
+        "train": 1200,
+        "val": 300
+      },
+      "notes": "合并了'用户名或密码错误弹窗'和'手机号码不存在'两个数据集"
+    },
+    "profile_logged": {
+      "name": "已登录个人页检测模型（昵称和ID）",
+      "page_type": "个人页_已登录",
+      "model_path": "runs/detect/yolo_runs/profile_detector/train/weights/best.pt",
+      "classes": [
+        "昵称文本",
+        "用户ID"
+      ],
+      "num_classes": 2,
+      "performance": {
+        "mAP50": 0.96,
+        "precision": 0.941,
+        "recall": 1.0,
+        "mAP50-95": 0.671
+      },
+      "training_date": "2026-01-27",
+      "dataset_size": {
+        "original": 57,
+        "augmented": 855,
+        "train": 684,
+        "val": 171
+      },
+      "notes": "只检测昵称和用户ID"
+    },
+    "balance": {
+      "name": "余额积分检测模型",
+      "page_type": "个人页_已登录_余额积分",
+      "model_path": "runs/detect/yolo_runs/balance_detector/train4/weights/best.pt",
+      "classes": [
+        "余额数字",
+        "积分数字",
+        "抵扣劵数字",
+        "优惠劵数字"
+      ],
+      "num_classes": 4,
+      "performance": {
+        "mAP50": 0.995,
+        "precision": 0.999,
+        "recall": 1.0,
+        "mAP50-95": 0.749
+      },
+      "training_date": "2026-01-27",
+      "dataset_size": {
+        "original": 51,
+        "augmented": 765,
+        "train": 612,
+        "val": 153
+      },
+      "notes": "使用15倍数据增强，删除了不完整标注的图片"
+    },
+    "avatar_homepage": {
+      "name": "头像和首页按钮检测模型",
+      "page_type": "个人页_已登录_头像首页",
+      "model_path": "runs/detect/runs/detect/yolo_runs/avatar_homepage_detector/train/weights/best.pt",
+      "classes": [
+        "头像",
+        "首页按钮"
+      ],
+      "num_classes": 2,
+      "performance": {
+        "mAP50": 0.786,
+        "precision": 0.995,
+        "recall": 1.0,
+        "mAP50-95": 0.76
+      },
+      "training_date": "2026-01-27",
+      "dataset_size": {
+        "original": 60,
+        "augmented": 900,
+        "train": 720,
+        "val": 180
+      },
+      "notes": "使用15倍数据增强，训练50轮，测试100%检测成功率"
+    },
+    "profile_unlogged": {
+      "name": "未登录个人页检测模型",
+      "page_type": "个人页_未登录",
+      "model_path": "runs/detect/runs/detect/yolo_runs/profile_unlogged_detector/weights/best.pt",
+      "classes": [
+        "请登陆按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 1.0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "mAP50-95": 0.995
+      },
+      "training_date": "2026-01-27",
+      "dataset_size": {
+        "original": 50,
+        "augmented": 750,
+        "train": 600,
+        "val": 150
+      },
+      "notes": "使用15倍数据增强，训练100轮，测试100%检测成功率"
+    },
+    "startup_popup": {
+      "name": "启动页服务弹窗检测模型",
+      "page_type": "启动页服务弹窗",
+      "model_path": "runs/detect/runs/detect/yolo_runs/startup_popup_detector/weights/best.pt",
+      "classes": [
+        "同意按钮",
+        "拒绝按钮"
+      ],
+      "num_classes": 2,
+      "performance": {
+        "mAP50": 0.995,
+        "precision": 0.999,
+        "recall": 1.0,
+        "mAP50-95": 0.664
+      },
+      "training_date": "2026-01-27",
+      "dataset_size": {
+        "original": 54,
+        "augmented": 810,
+        "train": 648,
+        "val": 162
+      },
+      "notes": "使用15倍数据增强，训练50轮（36轮提前停止），测试100%检测成功率"
+    },
+    "transfer": {
+      "name": "转账页检测模型",
+      "page_type": "转账页",
+      "model_path": "yolo_runs/transfer_detector11/weights/best.pt",
+      "classes": [
+        "全部转账按钮",
+        "ID输入框",
+        "转账金额输入框",
+        "提交按钮",
+        "转账明细文本"
+      ],
+      "num_classes": 5,
+      "performance": {
+        "mAP50": 0.991,
+        "precision": 0.992,
+        "recall": 1.0,
+        "mAP50-95": 0.755
+      },
+      "training_date": "2026-01-27",
+      "dataset_size": {
+        "original": 55,
+        "augmented": 1705,
+        "train": 1364,
+        "val": 341
+      },
+      "notes": "使用31倍数据增强，训练50轮，测试100%检测成功率（341/341张图片）"
+    },
+    "transfer_confirm": {
+      "name": "转账确认弹窗检测模型",
+      "page_type": "转账确认弹窗",
+      "model_path": "runs/detect/yolo_runs/transfer_confirm_detector/exp3/weights/best.pt",
+      "classes": [
+        "转账确认ID",
+        "转账确认昵称",
+        "转账确认金额",
+        "确认按钮"
+      ],
+      "num_classes": 4,
+      "performance": {
+        "mAP50": 0.995,
+        "precision": 0.987,
+        "recall": 1.0,
+        "mAP50-95": 0.743
+      },
+      "training_date": "2026-01-27",
+      "dataset_size": {
+        "original": 57,
+        "augmented": 450,
+        "train": 450,
+        "val": 12
+      },
+      "notes": "使用10倍数据增强，训练100轮，测试100%检测成功率（58/58张图片），所有元素检测率100%"
+    },
+    "transaction_history": {
+      "name": "交易流水检测模型",
+      "page_type": "交易流水",
+      "model_path": "runs/detect/yolo_runs/transaction_history_detector/exp2/weights/best.pt",
+      "classes": [
+        "同意按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.995,
+        "precision": 0.993,
+        "recall": 1.0,
+        "mAP50-95": 0.714
+      },
+      "training_date": "2026-01-27",
+      "dataset_size": {
+        "original": 41,
+        "augmented": 489,
+        "train": 480,
+        "val": 9
+      },
+      "notes": "使用15倍数据增强，训练63轮（第13轮最佳，早停），测试100%检测成功率（41/41张原始图片），增强数据测试102.9%检测率（503/489）"
+    },
+    "分类页": {
+      "name": "分类页检测模型",
+      "page_type": "分类页",
+      "model_path": "runs/detect\\runs\\detect\\yolo_runs\\分类页_detector\\weights\\best.pt",
+      "classes": [
+        "我的按钮",
+        "首页按钮"
+      ],
+      "num_classes": 2,
+      "performance": {
+        "mAP50": 0.874,
+        "mAP50-95": 0.612,
+        "precision": 0.874,
+        "recall": 1.0
+      },
+      "training_date": "2026-01-27",
+      "dataset_size": {
+        "original": 47,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "original_data_path": "原始标注图\\分类页_20260127_230041",
+      "notes": "使用yolo_train_manager.py训练，默认50轮"
+    },
+    "搜索页": {
+      "name": "搜索页检测模型",
+      "page_type": "搜索页",
+      "model_path": "runs/detect\\runs\\detect\\yolo_runs\\搜索页_detector\\weights\\best.pt",
+      "classes": [
+        "返回按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.787,
+        "mAP50-95": 0.551,
+        "precision": 0.787,
+        "recall": 1.0
+      },
+      "training_date": "2026-01-27",
+      "dataset_size": {
+        "original": 93,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "original_data_path": "原始标注图\\搜索页_20260127_231745",
+      "notes": "使用yolo_train_manager.py训练，默认50轮"
+    },
+    "积分页": {
+      "name": "积分页检测模型",
+      "page_type": "积分页",
+      "model_path": "runs/detect\\runs\\detect\\yolo_runs\\积分页_detector\\weights\\best.pt",
+      "classes": [
+        "返回按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.539,
+        "mAP50-95": 0.377,
+        "precision": 0.539,
+        "recall": 1.0
+      },
+      "training_date": "2026-01-27",
+      "dataset_size": {
+        "original": 57,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "original_data_path": "原始标注图\\积分页_20260127_233206",
+      "notes": "使用yolo_train_manager.py训练，默认50轮"
+    },
+    "文章页": {
+      "name": "文章页检测模型",
+      "page_type": "文章页",
+      "model_path": "runs/detect\\runs\\detect\\yolo_runs\\文章页_detector\\weights\\best.pt",
+      "classes": [
+        "返回按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.899,
+        "mAP50-95": 0.629,
+        "precision": 0.899,
+        "recall": 1.0
+      },
+      "training_date": "2026-01-27",
+      "dataset_size": {
+        "original": 40,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "original_data_path": "原始标注图\\文章页_20260127_233947",
+      "notes": "使用yolo_train_manager.py训练，默认50轮"
+    },
+    "钱包页": {
+      "name": "钱包页检测模型",
+      "page_type": "钱包页",
+      "model_path": "runs/detect\\runs\\detect\\yolo_runs\\钱包页_detector\\weights\\best.pt",
+      "classes": [
+        "余额数字",
+        "转增按钮"
+      ],
+      "num_classes": 2,
+      "performance": {
+        "mAP50": 0.884,
+        "mAP50-95": 0.619,
+        "precision": 0.884,
+        "recall": 1.0
+      },
+      "training_date": "2026-01-27",
+      "dataset_size": {
+        "original": 53,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "original_data_path": "原始标注图\\钱包页_20260127_235136",
+      "notes": "使用yolo_train_manager.py训练，默认50轮"
+    },
+    "个人页广告": {
+      "name": "个人页广告检测模型",
+      "page_type": "个人页广告",
+      "model_path": "runs/detect\\runs\\detect\\yolo_runs\\个人页广告_detector\\weights\\best.pt",
+      "classes": [
+        "确认按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.861,
+        "mAP50-95": 0.603,
+        "precision": 0.861,
+        "recall": 1.0
+      },
+      "training_date": "2026-01-27",
+      "dataset_size": {
+        "original": 50,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "original_data_path": "原始标注图\\个人页广告_20260127_235956",
+      "notes": "使用yolo_train_manager.py训练，默认50轮"
+    },
+    "首页异常代码弹窗": {
+      "name": "首页异常代码弹窗检测模型",
+      "page_type": "首页异常代码弹窗",
+      "model_path": "runs/detect\\runs\\detect\\yolo_runs\\首页异常代码弹窗_detector\\weights\\best.pt",
+      "classes": [
+        "确认按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.761,
+        "mAP50-95": 0.533,
+        "precision": 0.761,
+        "recall": 1.0
+      },
+      "training_date": "2026-01-28",
+      "dataset_size": {
+        "original": 50,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "original_data_path": "原始标注图\\首页异常代码弹窗_20260128_000612",
+      "notes": "使用yolo_train_manager.py训练，默认50轮"
+    },
+    "coupon_detector": {
+      "model_name": "我的优惠劵检测器",
+      "model_path": "runs/detect/yolo_runs/coupon_detector/exp/weights/best.pt",
+      "classes": [
+        "返回按钮"
+      ],
+      "original_images": 13,
+      "augmented_images": 720,
+      "training_date": "20260127_221023",
+      "performance": {
+        "precision": 0.992,
+        "recall": 1.0,
+        "mAP50": 0.995,
+        "mAP50-95": 0.619
+      },
+      "original_data_path": "原始标注图\\我的优惠劵_20260127_221023"
+    },
+    "首页公告": {
+      "name": "首页公告检测模型",
+      "page_type": "首页公告",
+      "model_path": "runs/detect\\runs\\detect\\yolo_runs\\首页公告_detector\\weights\\best.pt",
+      "classes": [
+        "确认按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.995,
+        "mAP50-95": 0.704,
+        "precision": 1.0,
+        "recall": 1.0
+      },
+      "training_date": "2026-01-28",
+      "dataset_size": {
+        "original": 80,
+        "augmented": 720,
+        "train": 576,
+        "val": 144
+      },
+      "original_data_path": "原始标注图\\首页公告_20260128_030205",
+      "notes": "使用yolo_train_manager.py训练，默认50轮，10倍数据增强，测试100%检测成功率（720/720张图片）"
+    },
+    "签到成功弹窗": {
+      "name": "签到成功弹窗检测模型",
+      "page_type": "签到成功弹窗",
+      "model_path": "runs/detect\\runs\\detect\\yolo_runs\\签到成功弹窗_detector2\\weights\\best.pt",
+      "classes": [
+        "关闭按钮",
+        "签到成功文本",
+        "签到金额"
+      ],
+      "num_classes": 3,
+      "performance": {
+        "mAP50": 0.995,
+        "mAP50-95": 0.715,
+        "precision": 0.997,
+        "recall": 1.0
+      },
+      "training_date": "2026-01-30",
+      "dataset_size": {
+        "original": 51,
+        "augmented": 459,
+        "train": 367,
+        "val": 92
+      },
+      "original_data_path": "原始标注图\\签到成功弹窗_20260130_013633",
+      "notes": "使用yolo_train_manager.py训练，30轮，10倍数据增强"
+    },
+    "签到页": {
+      "name": "签到页检测模型",
+      "page_type": "签到页",
+      "model_path": "runs/detect\\runs\\detect\\yolo_runs\\签到页_detector2\\weights\\best.pt",
+      "classes": [
+        "签到按钮",
+        "签到次数"
+      ],
+      "num_classes": 2,
+      "performance": {
+        "mAP50": 0.995,
+        "mAP50-95": 0.793,
+        "precision": 0.999,
+        "recall": 1.0
+      },
+      "training_date": "2026-01-30",
+      "dataset_size": {
+        "original": 55,
+        "augmented": 495,
+        "train": 396,
+        "val": 99
+      },
+      "original_data_path": "原始标注图\\签到页_20260130_014729",
+      "notes": "使用yolo_train_manager.py训练，30轮，10倍数据增强"
+    },
+    "温馨提示": {
+      "name": "温馨提示检测模型",
+      "page_type": "温馨提示",
+      "model_path": "runs/detect\\runs\\detect\\yolo_runs\\温馨提示_detector\\weights\\best.pt",
+      "classes": [
+        "确认按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.995,
+        "mAP50-95": 0.798,
+        "precision": 0.999,
+        "recall": 1.0
+      },
+      "training_date": "2026-01-30",
+      "dataset_size": {
+        "original": 52,
+        "augmented": 468,
+        "train": 374,
+        "val": 94
+      },
+      "original_data_path": "原始标注图\\温馨提示_20260130_015651",
+      "notes": "使用yolo_train_manager.py训练，默认50轮，10倍数据增强，测试100%检测成功率（468/468张图片）"
+    },
+    "首页": {
+      "name": "首页检测模型",
+      "page_type": "首页",
+      "model_path": "runs/detect\\runs\\detect\\yolo_runs\\首页_detector2\\weights\\best.pt",
+      "classes": [
+        "我的按钮",
+        "每日签到按钮"
+      ],
+      "num_classes": 2,
+      "performance": {
+        "mAP50": 0.971,
+        "mAP50-95": 0.678,
+        "precision": 0.977,
+        "recall": 0.989
+      },
+      "training_date": "2026-01-30",
+      "dataset_size": {
+        "original": 49,
+        "augmented": 927,
+        "train": 671,
+        "val": 256
+      },
+      "original_data_path": "原始标注图\\首页_20260130_030231",
+      "notes": "使用yolo_train_manager.py训练，30轮，15倍数据增强，测试100%检测成功率（927/927张图片）"
+    },
+    "button": {
+      "name": "button检测模型",
+      "page_type": "button",
+      "model_path": "yolo_runs/button_detector/weights/best.pt",
+      "classes": [
+        "按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 5.96,
+      "file_hash": "fa3c551114485681",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:01:31"
+    },
+    "checkin": {
+      "name": "签到页检测模型",
+      "page_type": "签到页",
+      "model_path": "yolo_runs/checkin_detector/weights/best.pt",
+      "classes": [
+        "签到按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 17.48,
+      "file_hash": "0ab19fb92f9b7361",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:01:31"
+    },
+    "checkin_20260131_000131": {
+      "name": "签到页检测模型",
+      "page_type": "签到页",
+      "model_path": "runs/detect/runs/detect/yolo_runs/签到页_detector/weights/best.pt",
+      "classes": [
+        "签到按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 5.96,
+      "file_hash": "5d125116f76a3016",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:01:31"
+    },
+    "home": {
+      "name": "首页检测模型",
+      "page_type": "首页",
+      "model_path": "yolo_runs/homepage_detector/weights/best.pt",
+      "classes": [
+        "我的按钮",
+        "签到按钮"
+      ],
+      "num_classes": 2,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 5.97,
+      "file_hash": "baa338bc10cfb45c",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:01:31"
+    },
+    "transfer_20260131_000131": {
+      "name": "转账页检测模型",
+      "page_type": "转账页",
+      "model_path": "yolo_runs/transfer_detector9/weights/best.pt",
+      "classes": [
+        "转账按钮",
+        "输入框"
+      ],
+      "num_classes": 2,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 5.96,
+      "file_hash": "f90d872b76e0307a",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:01:31"
+    },
+    "个人页广告_20260131_000131": {
+      "name": "个人页广告检测模型",
+      "page_type": "个人页广告",
+      "model_path": "runs/detect/runs/detect/yolo_runs/个人页广告_detector/weights/best.pt",
+      "classes": [
+        "按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 5.95,
+      "file_hash": "e58b5b4a3ec2f497",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:01:31"
+    },
+    "category": {
+      "name": "分类页检测模型",
+      "page_type": "分类页",
+      "model_path": "runs/detect/runs/detect/yolo_runs/分类页_detector/weights/best.pt",
+      "classes": [
+        "按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 5.96,
+      "file_hash": "dae70a504a80b600",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:01:31"
+    },
+    "search": {
+      "name": "搜索页检测模型",
+      "page_type": "搜索页",
+      "model_path": "runs/detect/runs/detect/yolo_runs/搜索页_detector/weights/best.pt",
+      "classes": [
+        "返回按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 5.96,
+      "file_hash": "314679929163964d",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:01:31"
+    },
+    "article": {
+      "name": "文章页检测模型",
+      "page_type": "文章页",
+      "model_path": "runs/detect/runs/detect/yolo_runs/文章页_detector/weights/best.pt",
+      "classes": [
+        "按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 5.95,
+      "file_hash": "f9629b5fec76dfb4",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:01:31"
+    },
+    "warmtip_20260131_000131": {
+      "name": "温馨提示检测模型",
+      "page_type": "温馨提示",
+      "model_path": "runs/detect/runs/detect/yolo_runs/温馨提示_detector/weights/best.pt",
+      "classes": [
+        "确认按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 5.96,
+      "file_hash": "6e0d48ac3e056bc7",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:01:31"
+    },
+    "points": {
+      "name": "积分页检测模型",
+      "page_type": "积分页",
+      "model_path": "runs/detect/runs/detect/yolo_runs/积分页_detector/weights/best.pt",
+      "classes": [
+        "按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 5.96,
+      "file_hash": "4096d2eb18e82f83",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:01:31"
+    },
+    "签到成功弹窗_20260131_000131": {
+      "name": "签到成功弹窗检测模型",
+      "page_type": "签到成功弹窗",
+      "model_path": "runs/detect/runs/detect/yolo_runs/签到成功弹窗_detector/weights/best.pt",
+      "classes": [
+        "按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 5.96,
+      "file_hash": "f8d7050702262e87",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:01:31"
+    },
+    "签到成功弹窗_detector2": {
+      "name": "签到成功弹窗_detector2检测模型",
+      "page_type": "签到成功弹窗_detector2",
+      "model_path": "runs/detect/runs/detect/yolo_runs/签到成功弹窗_detector2/weights/best.pt",
+      "classes": [
+        "按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 5.95,
+      "file_hash": "bf043e7656dbf66e",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:01:31"
+    },
+    "签到页_detector2": {
+      "name": "签到页_detector2检测模型",
+      "page_type": "签到页_detector2",
+      "model_path": "runs/detect/runs/detect/yolo_runs/签到页_detector2/weights/best.pt",
+      "classes": [
+        "按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 5.95,
+      "file_hash": "9c1a0613ae9acec7",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:01:31"
+    },
+    "wallet": {
+      "name": "钱包页检测模型",
+      "page_type": "钱包页",
+      "model_path": "runs/detect/runs/detect/yolo_runs/钱包页_detector/weights/best.pt",
+      "classes": [
+        "余额数字",
+        "转增按钮"
+      ],
+      "num_classes": 2,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 5.96,
+      "file_hash": "8d9817e4772e31fc",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:01:31"
+    },
+    "home_20260131_000131": {
+      "name": "首页检测模型",
+      "page_type": "首页",
+      "model_path": "runs/detect/runs/detect/yolo_runs/首页_detector/weights/best.pt",
+      "classes": [
+        "我的按钮",
+        "签到按钮"
+      ],
+      "num_classes": 2,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 5.95,
+      "file_hash": "6dcea27647013a2a",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:01:31"
+    },
+    "首页_detector2": {
+      "name": "首页_detector2检测模型",
+      "page_type": "首页_detector2",
+      "model_path": "runs/detect/runs/detect/yolo_runs/首页_detector2/weights/best.pt",
+      "classes": [
+        "按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 5.95,
+      "file_hash": "69d058ca0c6f11d4",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:01:31"
+    },
+    "首页公告_20260131_000131": {
+      "name": "首页公告检测模型",
+      "page_type": "首页公告",
+      "model_path": "runs/detect/runs/detect/yolo_runs/首页公告_detector/weights/best.pt",
+      "classes": [
+        "按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 5.96,
+      "file_hash": "b44f384ab5974829",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:01:31"
+    },
+    "首页异常代码弹窗_20260131_000131": {
+      "name": "首页异常代码弹窗检测模型",
+      "page_type": "首页异常代码弹窗",
+      "model_path": "runs/detect/runs/detect/yolo_runs/首页异常代码弹窗_detector/weights/best.pt",
+      "classes": [
+        "按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 5.95,
+      "file_hash": "a328e072ee41d40f",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:01:31"
+    },
+    "train": {
+      "name": "train检测模型",
+      "page_type": "train",
+      "model_path": "runs/detect/yolo_runs/balance_detector/train/weights/best.pt",
+      "classes": [
+        "按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 17.5,
+      "file_hash": "5a79cc86b63f5afb",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:01:31"
+    },
+    "train2": {
+      "name": "train2检测模型",
+      "page_type": "train2",
+      "model_path": "runs/detect/yolo_runs/balance_detector/train2/weights/best.pt",
+      "classes": [
+        "按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 5.95,
+      "file_hash": "e57b8b1508cee9f1",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:01:31"
+    },
+    "train3": {
+      "name": "train3检测模型",
+      "page_type": "train3",
+      "model_path": "runs/detect/yolo_runs/balance_detector/train3/weights/best.pt",
+      "classes": [
+        "按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 17.5,
+      "file_hash": "4b2d1f1509e39689",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:01:31"
+    },
+    "train_20260131_000131": {
+      "name": "train检测模型",
+      "page_type": "train",
+      "model_path": "runs/detect/yolo_runs/warmtip_detector/train/weights/best.pt",
+      "classes": [
+        "按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 5.95,
+      "file_hash": "8578bb1a70d5ed3e",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:01:31"
+    },
+    "train3_20260131_000131": {
+      "name": "train3检测模型",
+      "page_type": "train3",
+      "model_path": "runs/detect/yolo_runs/checkin_popup_detector/train3/weights/best.pt",
+      "classes": [
+        "按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 17.5,
+      "file_hash": "125a2dd81a69b365",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:01:31"
+    },
+    "train4": {
+      "name": "train4检测模型",
+      "page_type": "train4",
+      "model_path": "runs/detect/yolo_runs/checkin_popup_detector/train4/weights/best.pt",
+      "classes": [
+        "按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 17.5,
+      "file_hash": "80509ee350536a0b",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:01:31"
+    },
+    "exp2": {
+      "name": "exp2检测模型",
+      "page_type": "exp2",
+      "model_path": "runs/detect/yolo_runs/coupon_detector/exp2/weights/best.pt",
+      "classes": [
+        "按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 17.49,
+      "file_hash": "5d00776898576f40",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:01:31"
+    },
+    "exp": {
+      "name": "exp检测模型",
+      "page_type": "exp",
+      "model_path": "runs/detect/yolo_runs/transfer_confirm_detector/exp/weights/best.pt",
+      "classes": [
+        "按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 17.5,
+      "file_hash": "a8062eaa10c4281f",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:01:31"
+    },
+    "checkin_20260131_000413": {
+      "name": "签到页检测模型",
+      "page_type": "签到页",
+      "model_path": "yolo_runs/checkin_detector2/weights/best.pt",
+      "classes": [
+        "签到按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 5.95,
+      "file_hash": "dd89afd055809678",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:04:13"
+    },
+    "transfer_20260131_000413": {
+      "name": "转账页检测模型",
+      "page_type": "转账页",
+      "model_path": "yolo_runs/transfer_detector8/weights/best.pt",
+      "classes": [
+        "转账按钮",
+        "输入框"
+      ],
+      "num_classes": 2,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 5.96,
+      "file_hash": "ae5abb2d6f546eca",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:04:13"
+    },
+    "train_20260131_000413": {
+      "name": "train检测模型",
+      "page_type": "train",
+      "model_path": "runs/detect/yolo_runs/checkin_popup_detector/train/weights/best.pt",
+      "classes": [
+        "按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 17.49,
+      "file_hash": "fb83d99f1ab6f309",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:04:13"
+    },
+    "transfer_20260131_001357": {
+      "name": "转账页检测模型",
+      "page_type": "转账页",
+      "model_path": "yolo_runs/transfer_detector2/weights/best.pt",
+      "classes": [
+        "转账按钮",
+        "输入框"
+      ],
+      "num_classes": 2,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 17.5,
+      "file_hash": "34716a942eebc0c9",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:13:57"
+    },
+    "transfer_20260131_001632": {
+      "name": "转账页检测模型",
+      "page_type": "转账页",
+      "model_path": "yolo_runs/transfer_detector10/weights/best.pt",
+      "classes": [
+        "转账按钮",
+        "输入框"
+      ],
+      "num_classes": 2,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 17.5,
+      "file_hash": "513ac79e3e744ee0",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:16:32"
+    },
+    "transfer_20260131_004231": {
+      "name": "转账页检测模型",
+      "page_type": "转账页",
+      "model_path": "yolo_runs/transfer_detector/weights/best.pt",
+      "classes": [
+        "转账按钮",
+        "输入框"
+      ],
+      "num_classes": 2,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-01-31",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 17.5,
+      "file_hash": "2ec5b1b5e0c369d2",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-01-31 00:42:31"
+    }
+  },
+  "usage": {
+    "description": "YOLO模型注册表，记录所有训练完成的模型信息",
+    "how_to_use": {
+      "load_model": "from ultralytics import YOLO; model = YOLO(registry['models']['homepage']['model_path'])",
+      "get_classes": "classes = registry['models']['homepage']['classes']",
+      "check_performance": "performance = registry['models']['homepage']['performance']"
+    }
+  },
+  "version": "1.0",
+  "last_updated": "2026-01-31"
+}

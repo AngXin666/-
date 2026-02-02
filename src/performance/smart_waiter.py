@@ -1,0 +1,269 @@
+﻿"""
+智能等待器
+Smart Waiter - 真正的页面变化检测
+"""
+
+import asyncio
+from typing import List, Optional
+
+
+class SmartWaiter:
+    """智能等待器
+    
+    核心理念：
+    1. 高频轮询检测页面变化（不是等待固定时间）
+    2. 检测到变化后立即用深度学习确认
+    3. 超时只是防止卡死的保护机制，不影响正常检测
+    """
+    
+    async def wait_for_page_change(
+        self,
+        device_id: str,
+        detector,  # PageDetectorHybrid 或 PageDetectorIntegrated
+        expected_states: List,  # List[PageState]
+        max_wait: float = 30.0,  # 超时保护（防止卡死）
+        poll_interval: float = 0.1,  # 高频轮询
+        log_callback=None,
+        ignore_loading: bool = True,
+        stability_check: bool = True,
+        stability_count: int = 2
+    ) -> Optional[any]:
+        """等待页面变化到期望状态（真正的页面变化检测）
+        
+        工作流程：
+        1. 高频轮询（0.1秒）检测页面状态变化
+        2. 检测到状态变化 → 立即用深度学习确认
+        3. 如果是期望状态 → 连续确认N次后立即返回
+        4. 超时保护：30秒后强制返回（防止卡死）
+        
+        支持的检测器：
+        - PageDetectorHybrid（混合检测器）
+        - PageDetectorIntegrated（整合检测器，GPU加速）
+        
+        Args:
+            device_id: 设备ID
+            detector: 页面检测器（混合检测器或整合检测器）
+            expected_states: 期望的页面状态列表
+            max_wait: 超时保护时间（秒，默认30秒）
+            poll_interval: 轮询间隔（秒，默认0.1秒）
+            log_callback: 日志回调函数
+            ignore_loading: 是否忽略loading状态
+            stability_check: 是否进行稳定性检测
+            stability_count: 稳定性检测次数
+            
+        Returns:
+            检测到的页面结果，超时返回None
+        """
+        from ..page_detector import PageState
+        
+        start_time = asyncio.get_event_loop().time()
+        
+        # 页面变化检测
+        last_state = None
+        last_confidence = 0.0
+        same_state_count = 0
+        
+        # 统计信息
+        total_checks = 0
+        state_changes = 0
+        
+        # 检测器类型
+        detector_type = type(detector).__name__
+        
+        # 调试日志：输出检测器类型
+        if log_callback:
+            log_callback(f"[智能等待器] 检测器类型: {detector_type}")
+        
+        # 开始等待前，先清除缓存，确保第一次检测就是最新状态
+        if detector_type == 'PageDetectorIntegrated' and hasattr(detector, '_detection_cache'):
+            detector._detection_cache.clear(device_id)
+        
+        # 自适应轮询间隔
+        current_poll_interval = poll_interval
+        max_poll_interval = 0.3  # 最大轮询间隔（秒）
+        
+        while asyncio.get_event_loop().time() - start_time < max_wait:
+            total_checks += 1
+            
+            # 根据检测器类型调用不同的方法
+            if detector_type == 'PageDetectorIntegrated':
+                # 整合检测器（GPU加速，只检测页面类型，不检测元素）
+                # 启用缓存，但TTL很短（0.5秒），在状态变化时会清除
+                result = await detector.detect_page(device_id, use_cache=True, detect_elements=False)
+            else:
+                # 混合检测器（使用深度学习，最准确）
+                result = await detector.detect_page(device_id, use_ocr=False, use_dl=True)
+            
+            if not result or not result.state:
+                await asyncio.sleep(poll_interval)
+                continue
+            
+            current_state = result.state
+            current_confidence = result.confidence
+            
+            # 检测到状态变化
+            if current_state != last_state:
+                state_changes += 1
+                if log_callback and last_state is not None:
+                    elapsed = asyncio.get_event_loop().time() - start_time
+                    log_callback(f"页面变化: {last_state.value} → {current_state.value} (耗时{elapsed:.2f}秒)")
+                
+                # 重置稳定性计数
+                same_state_count = 1
+                last_state = current_state
+                last_confidence = current_confidence
+                
+                # 状态变化后，重置为快速轮询
+                current_poll_interval = poll_interval
+                
+                # 清除缓存，确保下次检测到最新状态
+                if detector_type == 'PageDetectorIntegrated' and hasattr(detector, '_detection_cache'):
+                    detector._detection_cache.clear(device_id)
+            else:
+                # 状态相同，增加计数
+                same_state_count += 1
+                
+                # 如果状态持续不变，逐渐增加轮询间隔（减少CPU占用）
+                if same_state_count > 3:
+                    current_poll_interval = min(current_poll_interval * 1.5, max_poll_interval)
+            
+            # 检查是否是期望状态
+            if current_state in expected_states:
+                # 如果启用稳定性检测
+                if stability_check:
+                    if same_state_count >= stability_count:
+                        # 页面已稳定在期望状态，立即返回
+                        elapsed = asyncio.get_event_loop().time() - start_time
+                        if log_callback:
+                            log_callback(f"✓ 页面稳定在 {current_state.value}（连续{same_state_count}次，置信度{current_confidence:.2%}），耗时{elapsed:.2f}秒")
+                        return result
+                    else:
+                        # 还需要继续确认
+                        if log_callback:
+                            log_callback(f"确认中: {current_state.value}（{same_state_count}/{stability_count}次）")
+                else:
+                    # 不需要稳定性检测，直接返回
+                    elapsed = asyncio.get_event_loop().time() - start_time
+                    if log_callback:
+                        log_callback(f"✓ 检测到 {current_state.value}，耗时{elapsed:.2f}秒")
+                    return result
+            
+            # 如果是loading状态且ignore_loading=True
+            elif ignore_loading and current_state == PageState.LOADING:
+                # loading是过渡状态，重置稳定性计数
+                same_state_count = 0
+                if log_callback and total_checks % 10 == 1:  # 每10次打印一次
+                    elapsed = asyncio.get_event_loop().time() - start_time
+                    log_callback(f"页面加载中...（已等待{elapsed:.1f}秒）")
+            
+            # 继续轮询
+            await asyncio.sleep(current_poll_interval)
+        
+        # 超时保护触发
+        elapsed = asyncio.get_event_loop().time() - start_time
+        if log_callback:
+            log_callback(f"⚠️ 超时保护触发（{elapsed:.1f}秒），共检测{total_checks}次，状态变化{state_changes}次")
+            if last_state:
+                log_callback(f"   最后状态: {last_state.value}（置信度{last_confidence:.2%}）")
+        
+        return None
+    
+    async def wait_for_condition(
+        self,
+        condition_func,
+        max_wait: float = 5.0,
+        poll_interval: float = 0.5,
+        log_callback=None
+    ) -> bool:
+        """等待条件满足
+        
+        Args:
+            condition_func: 条件函数，返回True表示条件满足
+            max_wait: 最大等待时间（秒）
+            poll_interval: 轮询间隔（秒）
+            log_callback: 可选的日志回调函数
+            
+        Returns:
+            条件是否在超时前满足
+        """
+        start_time = asyncio.get_event_loop().time()
+        attempt = 0
+        
+        while asyncio.get_event_loop().time() - start_time < max_wait:
+            attempt += 1
+            
+            # 检查条件
+            if await condition_func() if asyncio.iscoroutinefunction(condition_func) else condition_func():
+                # 条件满足，立即返回
+                if log_callback:
+                    elapsed = asyncio.get_event_loop().time() - start_time
+                    log_callback(f"✓ 条件满足，耗时 {elapsed:.2f}秒（尝试{attempt}次）")
+                return True
+            
+            # 条件未满足，等待后继续
+            await asyncio.sleep(poll_interval)
+        
+        # 超时
+        if log_callback:
+            log_callback(f"⚠️ 等待超时（{max_wait}秒），条件未满足")
+        return False
+
+
+# ============================================================================
+# 全局便捷函数
+# ============================================================================
+
+# 全局单例
+_global_waiter = SmartWaiter()
+
+
+async def wait_for_page(
+    device_id: str,
+    detector,
+    expected_states: List,
+    log_callback=None
+) -> Optional[any]:
+    """全局便捷函数：等待页面变化
+    
+    可以在项目任何地方直接调用，无需创建实例。
+    内置最佳实践参数：
+    - max_wait=30.0 (超时保护，不是等待时间)
+    - poll_interval=0.1 (高频轮询，0.1秒/次)
+    - stability_check=True (稳定性检测)
+    - stability_count=1 (检测到即返回，不需要多次确认)
+    - ignore_loading=True (忽略loading状态)
+    
+    实际耗时通常0.5-2秒，不是30秒！
+    
+    Args:
+        device_id: 设备ID
+        detector: 页面检测器
+        expected_states: 期望的页面状态列表
+        log_callback: 日志回调函数
+        
+    Returns:
+        检测到的页面结果，超时返回None
+        
+    示例：
+        from src.performance.smart_waiter import wait_for_page
+        
+        # 简单调用
+        result = await wait_for_page(device_id, detector, [PageState.HOME])
+        
+        # 带日志
+        result = await wait_for_page(
+            device_id, detector, [PageState.PROFILE_LOGGED],
+            log_callback=lambda msg: print(f"[等待] {msg}")
+        )
+    """
+    return await _global_waiter.wait_for_page_change(
+        device_id=device_id,
+        detector=detector,
+        expected_states=expected_states,
+        max_wait=30.0,
+        poll_interval=0.1,  # 恢复为0.1秒，快速检测页面变化
+        log_callback=log_callback,
+        ignore_loading=True,
+        stability_check=True,
+        stability_count=1  # 检测到即返回
+    )

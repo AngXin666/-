@@ -1,0 +1,70 @@
+{
+  "mode": "with_manager",
+  "timestamp": "2026-01-29T16:42:14.448881",
+  "single_account": {
+    "total_time": 0.0009732246398925781,
+    "model_access_time": 0.0,
+    "model_loading_time": 0,
+    "memory_delta": 0
+  },
+  "multiple_accounts": {
+    "num_accounts": 30,
+    "total_time": 0.0,
+    "avg_time_per_account": 0.0,
+    "min_time": 0.0,
+    "max_time": 0.0,
+    "memory_delta": 0,
+    "account_times": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "memory": {
+    "memory_initial": 940093440,
+    "memory_after_loading": 940093440,
+    "memory_after_accounts": 940093440,
+    "loading_delta": 0,
+    "accounts_delta": 0,
+    "total_delta": 0
+  },
+  "model_loading": {
+    "total_time": 6.09813666343689,
+    "models_loaded": [
+      "page_detector_integrated",
+      "page_detector_hybrid",
+      "ocr_thread_pool"
+    ],
+    "memory_before": 88289280,
+    "memory_after": 940093440,
+    "memory_delta": 851804160,
+    "model_times": {}
+  }
+}
