@@ -227,22 +227,20 @@ class Navigator:
             
             # 如果是个人页广告，使用YOLO关闭广告
             if current_state == PageState.PROFILE_AD:
-                # 使用YOLO检测"确认按钮"
-                close_button_pos = None
-                if hasattr(self.detector, '_yolo_detector') and self.detector._yolo_detector:
-                    self._silent_log.log(f"[导航到首页] 检测到个人页广告，使用YOLO检测确认按钮...")
-                    close_button_pos = await self.detector.find_button_yolo(
-                        device_id, 
-                        '个人页广告',
-                        '确认按钮',
-                        conf_threshold=0.5
-                    )
+                # 方法1: 使用YOLO检测"确认按钮"
+                self._silent_log.log(f"[导航到首页] 检测到个人页广告，使用YOLO检测确认按钮...")
+                close_button_pos = await self.detector.find_button_yolo(
+                    device_id, 
+                    '个人页广告',
+                    '确认按钮',
+                    conf_threshold=0.5
+                )
                 
                 if close_button_pos:
                     self._silent_log.log(f"[导航到首页] YOLO检测到确认按钮: {close_button_pos}，点击关闭")
                     await self.adb.tap(device_id, close_button_pos[0], close_button_pos[1])
                     
-                    # 使用智能等待器等待页面变化（替换固定等待1秒）
+                    # 使用智能等待器等待页面变化
                     from .performance.smart_waiter import wait_for_page
                     wait_result = await wait_for_page(
                         device_id,
@@ -256,8 +254,22 @@ class Navigator:
                     self.detector.clear_cache()
                     continue
                 else:
-                    self._silent_log.log(f"[导航到首页] YOLO未检测到按钮，降级到通用方法")
-                    success = await self.detector.close_popup(device_id)
+                    # 方法2: 使用返回键关闭（更可靠）
+                    self._silent_log.log(f"[导航到首页] YOLO未检测到按钮，使用返回键关闭")
+                    await self.adb.press_back(device_id)
+                    
+                    # 使用智能等待器等待页面变化
+                    from .performance.smart_waiter import wait_for_page
+                    wait_result = await wait_for_page(
+                        device_id,
+                        self.detector,
+                        [PageState.HOME, PageState.PROFILE, PageState.PROFILE_LOGGED],
+                        timeout=TimeoutsConfig.SMART_WAIT_TIMEOUT,
+                        log_callback=lambda msg: self._silent_log.log(f"  [智能等待] {msg}")
+                    )
+                    
+                    # 清除缓存，重新检测
+                    self.detector.clear_cache()
                     if success:
                         # 使用智能等待器等待页面变化（替换固定等待1秒）
                         from .performance.smart_waiter import wait_for_page
@@ -649,13 +661,6 @@ class Navigator:
                         self._silent_log.info(f"[导航到我的页面] ✗ 确实不在首页: {recheck_result.state.value if recheck_result else 'unknown'}")
                         continue
                 await asyncio.sleep(0.5)
-            
-            # ===== 优化：减少预加载模型数量，只预加载必要的 =====
-            # 只预加载个人页广告模型（最常用）
-            if hasattr(self.detector, '_yolo_detector') and self.detector._yolo_detector:
-                self._silent_log.log(f"[导航到我的页面] 🚀 预加载个人页广告模型...")
-                # 只预加载1个最常用的模型
-                asyncio.create_task(self.detector._yolo_detector.detect(device_id, '个人页广告', conf_threshold=0.5))
             
             # 优先使用YOLO检测"我的"按钮位置（更准确）
             self._silent_log.log(f"[导航到我的页面] 使用YOLO检测'我的'按钮位置...")
