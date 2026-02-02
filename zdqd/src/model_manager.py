@@ -871,15 +871,15 @@ class ModelManager:
             RuntimeError: 如果模型加载失败
         """
         try:
-            from .page_detector_hybrid_optimized import PageDetectorHybridOptimized
+            from .page_detector_hybrid import PageDetectorHybrid
         except (ImportError, ValueError):
             # 如果相对导入失败，尝试从src包导入
             try:
-                from src.page_detector_hybrid_optimized import PageDetectorHybridOptimized
+                from src.page_detector_hybrid import PageDetectorHybrid
             except ImportError:
                 # 最后尝试直接导入
-                import page_detector_hybrid_optimized
-                PageDetectorHybridOptimized = page_detector_hybrid_optimized.PageDetectorHybridOptimized
+                import page_detector_hybrid
+                PageDetectorHybrid = page_detector_hybrid.PageDetectorHybrid
         
         config = self._config['models']['page_detector_hybrid']
         
@@ -896,7 +896,7 @@ class ModelManager:
         # self._log(f"  - 映射文件: {mapping_path}")
         # self._log(f"  - 注册表: {registry_path}")
         
-        detector = PageDetectorHybridOptimized(
+        detector = PageDetectorHybrid(
             adb=adb_bridge,
             log_callback=self._log_callback
         )
