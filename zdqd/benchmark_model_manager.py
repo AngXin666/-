@@ -96,7 +96,7 @@ class PerformanceBenchmark:
             # 这里我们模拟加载一次的时间
             # 实际上在旧系统中，每个账号都会重复这个过程
             from src.page_detector_integrated import PageDetectorIntegrated
-            from src.page_detector_hybrid_optimized import PageDetectorHybridOptimized
+            from src.page_detector_hybrid import PageDetectorHybrid
             from src.ocr_thread_pool import OCRThreadPool
             
             adb = ADBBridge()
@@ -108,7 +108,7 @@ class PerformanceBenchmark:
             
             # 加载第二个模型
             t2 = time.time()
-            detector2 = PageDetectorHybridOptimized(adb, log_callback=print)
+            detector2 = PageDetectorHybrid(adb, log_callback=print)
             time2 = time.time() - t2
             
             # 加载OCR线程池
@@ -194,7 +194,7 @@ class PerformanceBenchmark:
             
             # 模拟每次都重新加载模型
             from src.page_detector_integrated import PageDetectorIntegrated
-            from src.page_detector_hybrid_optimized import PageDetectorHybridOptimized
+            from src.page_detector_hybrid import PageDetectorHybrid
             from src.ocr_thread_pool import OCRThreadPool
             
             adb = ADBBridge()
@@ -202,7 +202,7 @@ class PerformanceBenchmark:
             # 加载模型（每个账号都要做这个）
             load_start = time.time()
             detector1 = PageDetectorIntegrated(adb, log_callback=None)
-            detector2 = PageDetectorHybridOptimized(adb, log_callback=None)
+            detector2 = PageDetectorHybrid(adb, log_callback=None)
             ocr_pool = OCRThreadPool(thread_count=4)
             load_time = time.time() - load_start
             
@@ -265,7 +265,7 @@ class PerformanceBenchmark:
             print(f"不使用ModelManager处理{num_accounts}个账号...")
             
             from src.page_detector_integrated import PageDetectorIntegrated
-            from src.page_detector_hybrid_optimized import PageDetectorHybridOptimized
+            from src.page_detector_hybrid import PageDetectorHybrid
             from src.ocr_thread_pool import OCRThreadPool
             
             adb = ADBBridge()
@@ -275,7 +275,7 @@ class PerformanceBenchmark:
                 
                 # 模拟每个账号都重新加载模型
                 detector1 = PageDetectorIntegrated(adb, log_callback=None)
-                detector2 = PageDetectorHybridOptimized(adb, log_callback=None)
+                detector2 = PageDetectorHybrid(adb, log_callback=None)
                 ocr_pool = OCRThreadPool(thread_count=4)
                 
                 account_time = time.time() - account_start
@@ -342,13 +342,13 @@ class PerformanceBenchmark:
                 ocr_pool = manager.get_ocr_thread_pool()
         else:
             from src.page_detector_integrated import PageDetectorIntegrated
-            from src.page_detector_hybrid_optimized import PageDetectorHybridOptimized
+            from src.page_detector_hybrid import PageDetectorHybrid
             from src.ocr_thread_pool import OCRThreadPool
             
             adb = ADBBridge()
             for i in range(10):
                 detector1 = PageDetectorIntegrated(adb, log_callback=None)
-                detector2 = PageDetectorHybridOptimized(adb, log_callback=None)
+                detector2 = PageDetectorHybrid(adb, log_callback=None)
                 ocr_pool = OCRThreadPool(thread_count=4)
         
         memory_after_accounts = self.measure_memory()
