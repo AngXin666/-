@@ -111,7 +111,7 @@ class UIAutomation:
         return False
 
     async def wait_for_element(self, device_id: str, template_path: str, 
-                               threshold: float = 0.8, timeout: int = 30) -> bool:
+                               threshold: float = 0.8, timeout: int = 15) -> bool:
         """等待元素出现
         
         Args:
@@ -136,7 +136,7 @@ class UIAutomation:
         return False
     
     async def wait_for_text(self, device_id: str, text: str, 
-                            timeout: int = 30) -> bool:
+                            timeout: int = 15) -> bool:
         """等待文字出现
         
         Args:

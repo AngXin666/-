@@ -94,7 +94,7 @@ class XimengAutomation:
         from .balance_transfer import BalanceTransfer
         self.balance_transfer = BalanceTransfer(self.adb, self.detector)
     
-    async def wait_for_app_ready(self, device_id: str, timeout: int = 30) -> bool:
+    async def wait_for_app_ready(self, device_id: str, timeout: int = 15) -> bool:
         """等待应用准备就绪（处理启动页、广告等）
         
         Args:

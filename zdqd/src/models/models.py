@@ -183,7 +183,7 @@ class Config:
     accounts_file: str = "./accounts.txt"
     max_concurrent_instances: int = 5
     emulator_start_timeout: int = 120
-    app_start_timeout: int = 30
+    app_start_timeout: int = 15
     element_wait_timeout: int = 10
     max_retry_count: int = 3
     retry_interval: int = 10
@@ -229,7 +229,7 @@ class Config:
             accounts_file=data.get("accounts_file", "./accounts.csv"),
             max_concurrent_instances=data.get("max_concurrent_instances", 5),
             emulator_start_timeout=data.get("emulator_start_timeout", 120),
-            app_start_timeout=data.get("app_start_timeout", 30),
+            app_start_timeout=data.get("app_start_timeout", 15),
             element_wait_timeout=data.get("element_wait_timeout", 10),
             max_retry_count=data.get("max_retry_count", 3),
             retry_interval=data.get("retry_interval", 10),

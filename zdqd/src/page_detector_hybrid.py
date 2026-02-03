@@ -1171,7 +1171,7 @@ class PageDetectorHybrid:
         return False  # 明确返回失败
     
     async def wait_for_page(self, device_id: str, target_state: PageState,
-                           timeout: int = 30, check_interval: float = 1.0,
+                           timeout: int = 15, check_interval: float = 1.0,
                            auto_close_popup: bool = True) -> bool:
         """等待指定页面出现
         

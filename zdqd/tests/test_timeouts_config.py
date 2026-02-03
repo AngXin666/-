@@ -14,7 +14,7 @@ class TestTimeoutsConfig:
     def test_default_values(self):
         """测试默认值"""
         # 导航相关
-        assert TimeoutsConfig.NAVIGATION_TIMEOUT == 30.0
+        assert TimeoutsConfig.NAVIGATION_TIMEOUT == 15.0
         assert TimeoutsConfig.PAGE_LOAD_TIMEOUT == 10.0
         
         # 签到相关
@@ -37,7 +37,7 @@ class TestTimeoutsConfig:
     def test_get_timeout(self):
         """测试获取超时配置"""
         # 获取存在的配置
-        assert get_timeout("NAVIGATION_TIMEOUT") == 30.0
+        assert get_timeout("NAVIGATION_TIMEOUT") == 15.0
         assert get_timeout("CHECKIN_TIMEOUT") == 15.0
         
         # 获取不存在的配置（使用默认值）
@@ -88,7 +88,7 @@ class TestTimeoutsConfig:
         
         # 重置配置
         TimeoutsConfig.reset_to_defaults()
-        assert TimeoutsConfig.NAVIGATION_TIMEOUT == 30.0
+        assert TimeoutsConfig.NAVIGATION_TIMEOUT == 15.0
         assert TimeoutsConfig.CHECKIN_TIMEOUT == 15.0
         
         # 加载配置
@@ -109,7 +109,7 @@ class TestTimeoutsConfig:
         TimeoutsConfig.reset_to_defaults()
         
         # 验证已重置
-        assert TimeoutsConfig.NAVIGATION_TIMEOUT == 30.0
+        assert TimeoutsConfig.NAVIGATION_TIMEOUT == 15.0
         assert TimeoutsConfig.CHECKIN_TIMEOUT == 15.0
         assert TimeoutsConfig._custom_config == {}
     
