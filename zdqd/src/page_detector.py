@@ -650,7 +650,7 @@ class PageDetector:
         )
     
     async def wait_for_page(self, device_id: str, target_state: PageState,
-                           timeout: int = 30, check_interval: float = 1.0) -> bool:
+                           timeout: int = 15, check_interval: float = 1.0) -> bool:
         """等待指定页面出现"""
         start_time = asyncio.get_event_loop().time()
         

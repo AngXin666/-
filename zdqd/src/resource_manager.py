@@ -31,7 +31,7 @@ class DatabaseConnectionPool:
             results = cursor.fetchall()
     """
     
-    def __init__(self, db_path: str, max_connections: int = 5, timeout: float = 30.0):
+    def __init__(self, db_path: str, max_connections: int = 5, timeout: float = 15.0):
         """初始化连接池
         
         Args:
