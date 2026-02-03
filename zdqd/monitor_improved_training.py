@@ -62,7 +62,7 @@ def monitor_training():
                     print(f"  mAP50-95: {result['map50_95']:.2%}")
                     last_reported_epoch = current_epoch
         
-        time.sleep(30)  # 每 30 秒检查一次
+        time.sleep(15)  # 每 15 秒检查一次
 
 
 if __name__ == "__main__":

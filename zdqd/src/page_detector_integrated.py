@@ -143,18 +143,26 @@ class PageDetectorIntegrated:
             return
         
         try:
-            # 加载类别列表
+            # 加载类别列表（尝试在models目录查找）
             if not os.path.exists(classes_path):
-                self._log(f"[整合检测器] ✗ 类别文件不存在: {classes_path}")
-                return
+                alt_classes_path = os.path.join('models', classes_path)
+                if os.path.exists(alt_classes_path):
+                    classes_path = alt_classes_path
+                else:
+                    self._log(f"[整合检测器] ✗ 类别文件不存在: {classes_path}")
+                    return
             
             with open(classes_path, 'r', encoding='utf-8') as f:
                 self._classes = json.load(f)
             
-            # 加载模型
+            # 加载模型（尝试在models目录查找）
             if not os.path.exists(model_path):
-                self._log(f"[整合检测器] ✗ 模型文件不存在: {model_path}")
-                return
+                alt_model_path = os.path.join('models', model_path)
+                if os.path.exists(alt_model_path):
+                    model_path = alt_model_path
+                else:
+                    self._log(f"[整合检测器] ✗ 模型文件不存在: {model_path}")
+                    return
             
             # 设置设备
             self._device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -336,13 +344,18 @@ class PageDetectorIntegrated:
     def _detect_elements(self, image: Image.Image, page_class: str) -> List[PageElement]:
         """使用YOLO模型检测页面元素"""
         if not HAS_YOLO:
+            print(f"  [_detect_elements] ✗ YOLO库未安装")
             return []
         
         # 获取该页面类型对应的YOLO模型
         mapping = self._page_yolo_mapping.get(page_class, {})
         yolo_models = mapping.get('yolo_models', [])
         
+        print(f"  [_detect_elements] 页面类型: {page_class}")
+        print(f"  [_detect_elements] 映射的YOLO模型数量: {len(yolo_models)}")
+        
         if not yolo_models:
+            print(f"  [_detect_elements] ⚠️ 该页面类型没有配置YOLO模型")
             return []
         
         elements = []
@@ -353,9 +366,13 @@ class PageDetectorIntegrated:
             if not model_key:
                 continue
             
+            print(f"  [_detect_elements] 尝试加载模型: {model_key}")
             model = self._load_yolo_model(model_key)
             if not model:
+                print(f"  [_detect_elements] ✗ 模型加载失败: {model_key}")
                 continue
+            
+            print(f"  [_detect_elements] ✓ 模型加载成功: {model_key}")
             
             try:
                 # 使用YOLO检测
@@ -363,6 +380,8 @@ class PageDetectorIntegrated:
                 
                 for result in results:
                     boxes = result.boxes
+                    print(f"  [_detect_elements] 检测到 {len(boxes)} 个目标")
+                    
                     for box in boxes:
                         # 提取检测信息
                         x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
@@ -381,10 +400,15 @@ class PageDetectorIntegrated:
                             center=(center_x, center_y)
                         )
                         elements.append(element)
+                        print(f"  [_detect_elements]   - {class_name}: 置信度={conf:.2f}")
                 
             except Exception as e:
                 self._log(f"[整合检测器] ✗ YOLO检测失败 {model_key}: {e}")
+                print(f"  [_detect_elements] ✗ YOLO检测异常: {e}")
+                import traceback
+                traceback.print_exc()
         
+        print(f"  [_detect_elements] 总共检测到 {len(elements)} 个元素")
         return elements
     
     async def detect_page(self, device_id: str, use_cache: bool = True, 

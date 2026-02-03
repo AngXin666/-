@@ -1,0 +1,17 @@
+# 个人页区域检测数据集配置
+# Profile Regions Detection Dataset
+
+path: D:\360MoveData\Users\Administrator\Desktop\模拟\zdqd\yolo_dataset\profile_regions
+train: images/train
+val: images/val
+
+# 类别定义
+nc: 2
+names:
+  0: 确认按钮区域
+  1: 数据区域
+
+# 说明：
+# - 确认按钮区域：包含昵称和用户ID
+# - 数据区域：包含余额、积分、抵扣劵、优惠劵
+# - 检测到区域后，使用OCR识别具体内容

@@ -33,7 +33,7 @@ class LocalDatabase:
         # 优化 SQLite 配置以支持多线程并发
         self._optimize_sqlite_settings()
     
-    def _get_connection(self, timeout=30.0):
+    def _get_connection(self, timeout=15.0):
         """获取数据库连接（确保UTF-8编码）
         
         Args:
@@ -138,7 +138,7 @@ class LocalDatabase:
         """
         try:
             with self._lock:
-                conn = sqlite3.connect(str(self.db_path), timeout=30.0)
+                conn = sqlite3.connect(str(self.db_path), timeout=15.0)
                 cursor = conn.cursor()
                 
                 # 启用 WAL 模式（Write-Ahead Logging）
@@ -157,8 +157,8 @@ class LocalDatabase:
                 cursor.execute("PRAGMA temp_store=MEMORY")
                 
                 # 设置忙碌超时（毫秒）
-                # 当数据库被锁定时，等待最多 30 秒
-                cursor.execute("PRAGMA busy_timeout=30000")
+                # 当数据库被锁定时，等待最多 15 秒
+                cursor.execute("PRAGMA busy_timeout=15000")
                 
                 conn.commit()
                 conn.close()
@@ -761,8 +761,8 @@ class LocalDatabase:
         for attempt in range(max_retries):
             try:
                 with self._lock:
-                    # 增加超时时间到30秒
-                    conn = sqlite3.connect(str(self.db_path), timeout=30.0)
+                    # 增加超时时间到15秒
+                    conn = sqlite3.connect(str(self.db_path), timeout=15.0)
                     cursor = conn.cursor()
                     
                     # 先查询是否存在
@@ -1487,7 +1487,7 @@ class LocalDatabase:
         """
         try:
             with self._lock:
-                conn = sqlite3.connect(str(self.db_path), timeout=30.0)
+                conn = sqlite3.connect(str(self.db_path), timeout=15.0)
                 cursor = conn.cursor()
                 
                 # 更新该手机号的所有记录

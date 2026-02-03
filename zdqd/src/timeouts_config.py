@@ -15,7 +15,7 @@ class TimeoutsConfig:
     """
     
     # ===== 导航相关超时 =====
-    NAVIGATION_TIMEOUT = 30.0  # 导航超时（秒）
+    NAVIGATION_TIMEOUT = 15.0  # 导航超时（秒）
     PAGE_LOAD_TIMEOUT = 10.0   # 页面加载超时（秒）
     PAGE_TRANSITION_TIMEOUT = 5.0  # 页面切换超时（秒）
     
@@ -69,7 +69,7 @@ class TimeoutsConfig:
         
         配置文件格式（JSON）：
         {
-            "NAVIGATION_TIMEOUT": 30.0,
+            "NAVIGATION_TIMEOUT": 15.0,
             "PAGE_LOAD_TIMEOUT": 10.0,
             ...
         }
@@ -203,7 +203,7 @@ class TimeoutsConfig:
         
         # 重新加载默认值（通过重新导入模块）
         # 这里简单地重新赋值
-        cls.NAVIGATION_TIMEOUT = 30.0
+        cls.NAVIGATION_TIMEOUT = 15.0
         cls.PAGE_LOAD_TIMEOUT = 10.0
         cls.PAGE_TRANSITION_TIMEOUT = 5.0
         cls.CHECKIN_TIMEOUT = 15.0

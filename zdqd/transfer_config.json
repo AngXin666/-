@@ -2,11 +2,11 @@
   "min_balance": 0.0,
   "min_transfer_amount": 30.0,
   "recipient_ids": [
-    "1802004"
+    "226077"
   ],
   "level_recipients": {
     "1": [
-      "1802004"
+      "226077"
     ],
     "2": [],
     "3": []

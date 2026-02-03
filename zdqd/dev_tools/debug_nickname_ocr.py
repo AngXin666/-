@@ -28,13 +28,30 @@ async def debug_nickname_ocr():
     print("调试昵称OCR识别")
     print("=" * 60)
     
-    # 初始化ADB
-    adb_path = r"D:\Program Files\Netease\MuMu\nx_device\12.0\shell\adb.exe"
-    adb = ADBBridge(adb_path=adb_path)
+    # 初始化模拟器控制器
+    from src.emulator_controller import EmulatorController
+    emulator = EmulatorController()
     
-    # 使用MuMu模拟器实例0
-    device_id = "127.0.0.1:16384"
-    print(f"\n使用设备: {device_id}")
+    # 获取运行的实例
+    print("\n正在检测运行的模拟器实例...")
+    running_instances = await emulator.get_running_instances()
+    
+    if not running_instances:
+        print("❌ 没有找到运行的模拟器实例")
+        print("提示: 请先启动MuMu模拟器")
+        return
+    
+    print(f"✓ 找到 {len(running_instances)} 个运行的实例: {running_instances}")
+    
+    # 使用第一个实例
+    instance_id = running_instances[0]
+    port = 16384 + instance_id * 32
+    device_id = f"127.0.0.1:{port}"
+    
+    print(f"\n使用实例 {instance_id}: {device_id}")
+    
+    # 初始化ADB
+    adb = ADBBridge(adb_path=emulator._adb_path)
     
     # 获取OCR线程池
     ocr_pool = get_ocr_pool()
@@ -95,7 +112,7 @@ async def debug_nickname_ocr():
                 small_font = ImageFont.load_default()
         
         # 标注每个文本块
-        if boxes:
+        if boxes is not None and len(boxes) > 0:
             for i, (text, box) in enumerate(zip(texts, boxes)):
                 # 绘制边框
                 points = [(int(p[0]), int(p[1])) for p in box]

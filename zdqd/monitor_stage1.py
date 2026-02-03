@@ -60,7 +60,7 @@ def monitor_training():
                     print(f"  mAP50-95: {result['map50_95']:.2%}")
                     last_reported_epoch = current_epoch
         
-        time.sleep(30)
+        time.sleep(15)
 
 
 if __name__ == "__main__":

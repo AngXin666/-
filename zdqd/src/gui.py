@@ -4461,6 +4461,41 @@ class TransferConfigWindow:
         ttk.Checkbutton(config_frame, text="启用自动转账", variable=self.enabled_var,
                        command=self._on_enabled_changed).pack(anchor=tk.W, pady=(0, 5))
         
+        # 转账目标模式选择
+        mode_frame = ttk.Frame(config_frame)
+        mode_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(mode_frame, text="转账目标模式:").pack(side=tk.LEFT)
+        
+        # 获取当前模式
+        current_mode = getattr(self.transfer_config, 'transfer_target_mode', 'manager_recipients')
+        
+        # 模式选项
+        mode_options = [
+            ("转给管理员自己", "manager_account"),
+            ("转给管理员的收款人", "manager_recipients"),
+            ("转给系统配置收款人", "system_recipients")
+        ]
+        
+        self.transfer_mode_var = tk.StringVar(value=current_mode)
+        
+        for display_name, mode_value in mode_options:
+            ttk.Radiobutton(
+                mode_frame,
+                text=display_name,
+                variable=self.transfer_mode_var,
+                value=mode_value,
+                command=self._on_transfer_mode_changed
+            ).pack(side=tk.LEFT, padx=(10, 0))
+        
+        # 模式说明
+        mode_info_label = ttk.Label(
+            config_frame,
+            text="说明：管理员自己=转给管理员的其他账号 | 管理员的收款人=转给管理员配置的收款人 | 系统配置=转给下方收款账户",
+            foreground="green"
+        )
+        mode_info_label.pack(anchor=tk.W, pady=(0, 5))
+        
         # 多级转账设置
         multi_level_frame = ttk.Frame(config_frame)
         multi_level_frame.pack(fill=tk.X, pady=(0, 10))
@@ -4938,6 +4973,19 @@ class TransferConfigWindow:
                 self.gui_instance.auto_transfer_switch.set_state(self.enabled_var.get())
         except:
             pass
+    
+    def _on_transfer_mode_changed(self):
+        """转账目标模式改变"""
+        mode = self.transfer_mode_var.get()
+        try:
+            self.transfer_config.set_transfer_target_mode(mode)
+            display_name = self.transfer_config.get_transfer_target_mode_display()
+            self.log(f"转账目标模式已设置为: {display_name}")
+            messagebox.showinfo("成功", f"转账目标模式已设置为: {display_name}")
+        except Exception as e:
+            messagebox.showerror("错误", f"设置失败: {e}")
+            # 恢复到之前的值
+            self.transfer_mode_var.set(self.transfer_config.transfer_target_mode)
     
     def _on_multi_level_changed(self):
         """多级转账启用状态改变"""

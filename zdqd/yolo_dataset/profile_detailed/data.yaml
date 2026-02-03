@@ -1,0 +1,12 @@
+# 个人页详细标注数据集配置
+# Profile Detailed Annotation Dataset Configuration
+
+path: D:\360MoveData\Users\Administrator\Desktop\模拟\zdqd\yolo_dataset\profile_detailed
+train: train/images
+val: val/images
+
+# 类别数量
+nc: 8
+
+# 类别名称
+names: ['首页', '我的', '抵扣券数字', '优惠券数字', '余额数字', '积分数字', '昵称文字', 'ID文字']
