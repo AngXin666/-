@@ -1,0 +1,34 @@
+{
+  "min_balance": 0.0,
+  "min_transfer_amount": 30.0,
+  "recipient_ids": [
+    "13900139000",
+    "14000140000"
+  ],
+  "level_recipients": {
+    "1": [
+      "13900139000",
+      "14000140000"
+    ],
+    "2": [],
+    "3": []
+  },
+  "enabled": true,
+  "multi_level_enabled": false,
+  "max_transfer_level": 1,
+  "use_user_manager_recipients": true,
+  "transfer_target_mode": "manager_recipients",
+  
+  "_comment": {
+    "transfer_target_mode说明": {
+      "manager_account": "转给管理员自己的账号 - 余额集中到管理员的其他账号",
+      "manager_recipients": "转给管理员配置的收款人（默认） - 每个管理员有自己的收款人",
+      "system_recipients": "转给系统配置的收款人 - 所有账号统一转给系统配置的收款人"
+    },
+    "使用建议": {
+      "多管理员独立管理": "使用 manager_recipients",
+      "集中统一管理": "使用 system_recipients",
+      "余额集中到管理员账号": "使用 manager_account"
+    }
+  }
+}

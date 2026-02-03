@@ -423,6 +423,8 @@ class ProfileReader:
             
             # ===== 优先使用整合检测器检测页面类型 =====
             # ===== 优先使用整合检测器检测页面类型 =====
+            use_yolo_fallback = True  # 标记是否需要降级到YOLO检测器
+            
             if self._integrated_detector:
                 detect_start = time.time()
                 print(f"  [整合检测器] 检测页面类型...")
@@ -443,7 +445,7 @@ class ProfileReader:
                 if page_result.state in [PageState.POPUP, PageState.PROFILE_AD]:
                     print(f"  [整合检测器] ⚠️ 检测到弹窗页面: {page_result.state.chinese_name}")
                     
-                    # 弹窗关闭逻辑：每5秒重试一次，最多4次（总共30秒超时）
+                    # 弹窗关闭逻辑：每5秒重试一次，最多4次（总共15秒超时）
                     max_attempts = 4
                     retry_interval = 5.0  # 每5秒重试一次
                     close_start_time = time.time()
@@ -522,7 +524,7 @@ class ProfileReader:
                         
                         # 检查是否超时（累计计时，不清零）
                         elapsed = time.time() - close_start_time
-                        if elapsed >= 30.0:
+                        if elapsed >= 15.0:
                             print(f"  [弹窗处理] ⚠️ 超时（{elapsed:.1f}秒），停止尝试")
                             break
                         
@@ -537,6 +539,7 @@ class ProfileReader:
                 # 现在开始检测页面元素（昵称、余额等）
                 yolo_start = time.time()
                 print(f"  [整合检测器] 开始检测页面元素...")
+                print(f"  [调试] 页面类型: {page_result.state.chinese_name}")
                 
                 # 使用整合检测器的detect_page方法，启用元素检测
                 detection_result = await self._integrated_detector.detect_page(
@@ -548,6 +551,14 @@ class ProfileReader:
                 yolo_time = time.time() - yolo_start
                 print(f"  [性能] 整合检测器耗时: {yolo_time:.3f}秒")
                 print(f"  [整合检测器] 检测到 {len(detection_result.elements)} 个元素")
+                print(f"  [调试] 使用的YOLO模型: {detection_result.yolo_model_used}")
+                
+                # 打印检测到的元素详情
+                if detection_result.elements:
+                    for elem in detection_result.elements:
+                        print(f"  [调试] 元素: {elem.class_name}, 置信度: {elem.confidence:.2f}")
+                else:
+                    print(f"  [调试] ⚠️ 未检测到任何元素！")
                 
                 # ===== 优化：全屏OCR一次，然后根据YOLO位置匹配文本 =====
                 if detection_result.elements:
@@ -665,9 +676,14 @@ class ProfileReader:
                                         elif '优惠' in element.class_name and result['coupons'] is None:
                                             result['coupons'] = int(value)
                                             print(f"  ✓ 优惠券: {result['coupons']}")
+                
+                # 如果整合检测器成功检测到元素，则不需要降级到YOLO
+                if detection_result.elements:
+                    use_yolo_fallback = False
             
             # ===== 降级：使用旧的YOLO检测器 =====
-            elif self._yolo_detector:
+            # 修复：当整合检测器未检测到元素时，也应该尝试YOLO检测器
+            if use_yolo_fallback and self._yolo_detector:
                 # 创建并行YOLO检测任务（降低置信度阈值以提高检测成功率）
                 yolo_start = time.time()
                 yolo_tasks = [
@@ -2010,6 +2026,8 @@ class ProfileReader:
             image = Image.open(BytesIO(screenshot_data))
             
             # 优先使用整合检测器（全屏OCR优化）
+            use_yolo_fallback = True  # 标记是否需要降级到YOLO检测器
+            
             if self._integrated_detector:
                 detection_result = await self._integrated_detector.detect_page(
                     device_id, 
@@ -2061,10 +2079,11 @@ class ProfileReader:
                                                 continue
                                         
                                         if valid_numbers:
+                                            use_yolo_fallback = False  # 成功获取余额，不需要降级
                                             return max(valid_numbers)
             
             # 降级：使用旧的YOLO检测器
-            elif self._yolo_detector:
+            if use_yolo_fallback and self._yolo_detector:
                 detections = await self._yolo_detector.detect(
                     device_id, 
                     'balance',

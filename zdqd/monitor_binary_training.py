@@ -36,8 +36,8 @@ def monitor_training():
             print("=" * 60)
             break
         
-        # 等待30秒
-        time.sleep(30)
+        # 等待15秒
+        time.sleep(15)
 
 if __name__ == '__main__':
     monitor_training()

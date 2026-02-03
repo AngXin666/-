@@ -25,6 +25,13 @@ class TransferConfig:
         self.multi_level_enabled = False  # 是否启用多级转账
         self.max_transfer_level = 1  # 最大转账级数（1-3）
         self.use_user_manager_recipients = True  # 是否使用用户管理的收款人配置（用于回滚）
+        
+        # 新增：转账目标模式
+        # "manager_account" - 转给管理员自己的账号
+        # "manager_recipients" - 转给管理员配置的收款人（默认）
+        # "system_recipients" - 转给系统配置的收款人
+        self.transfer_target_mode = "manager_recipients"
+        
         self.load()
     
     def load(self):
@@ -68,6 +75,13 @@ class TransferConfig:
                     
                     # 加载用户管理收款人配置开关
                     self.use_user_manager_recipients = data.get('use_user_manager_recipients', True)
+                    
+                    # 加载转账目标模式
+                    self.transfer_target_mode = data.get('transfer_target_mode', 'manager_recipients')
+                    # 验证模式有效性
+                    valid_modes = ['manager_account', 'manager_recipients', 'system_recipients']
+                    if self.transfer_target_mode not in valid_modes:
+                        self.transfer_target_mode = 'manager_recipients'
             except Exception as e:
                 print(f"加载转账配置失败: {e}")
     
@@ -89,7 +103,8 @@ class TransferConfig:
                 'enabled': self.enabled,
                 'multi_level_enabled': self.multi_level_enabled,
                 'max_transfer_level': self.max_transfer_level,
-                'use_user_manager_recipients': self.use_user_manager_recipients
+                'use_user_manager_recipients': self.use_user_manager_recipients,
+                'transfer_target_mode': self.transfer_target_mode
             }
             with open(self.config_file, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
@@ -152,6 +167,35 @@ class TransferConfig:
         """设置是否启用"""
         self.enabled = enabled
         self.save()
+    
+    def set_transfer_target_mode(self, mode: str):
+        """设置转账目标模式
+        
+        Args:
+            mode: 转账目标模式
+                - "manager_account": 转给管理员自己的账号
+                - "manager_recipients": 转给管理员配置的收款人（默认）
+                - "system_recipients": 转给系统配置的收款人
+        """
+        valid_modes = ['manager_account', 'manager_recipients', 'system_recipients']
+        if mode in valid_modes:
+            self.transfer_target_mode = mode
+            self.save()
+        else:
+            raise ValueError(f"无效的转账目标模式: {mode}，有效值: {', '.join(valid_modes)}")
+    
+    def get_transfer_target_mode_display(self) -> str:
+        """获取转账目标模式的显示名称
+        
+        Returns:
+            str: 显示名称
+        """
+        mode_names = {
+            'manager_account': '转给管理员自己',
+            'manager_recipients': '转给管理员的收款人',
+            'system_recipients': '转给系统配置收款人'
+        }
+        return mode_names.get(self.transfer_target_mode, '未知模式')
     
     def should_transfer(self, user_id: str, balance: float, current_level: int = 0) -> bool:
         """判断是否应该转账
@@ -334,8 +378,10 @@ class TransferConfig:
     ) -> Optional[str]:
         """获取转账收款人（增强版）
         
-        优先从用户管理读取，失败则降级到转账配置。
-        支持多收款人轮询/随机选择。
+        根据转账目标模式选择收款人：
+        - manager_account: 转给管理员自己的账号
+        - manager_recipients: 转给管理员配置的收款人（默认）
+        - system_recipients: 转给系统配置的收款人
         
         Args:
             phone: 发送人手机号
@@ -351,20 +397,72 @@ class TransferConfig:
             print(f"  [转账配置] 用户管理收款人配置已禁用，使用转账配置")
             return self.get_transfer_recipient(user_id, current_level)
         
-        # 1. 尝试从用户管理获取（只对初始账号有效）
-        if current_level == 0 and selector:
-            recipient = self.get_transfer_recipient_from_user_manager(
-                phone, 
-                selector
-            )
-            if recipient:
-                return recipient
-            else:
-                # 降级日志
-                print(f"  [转账配置] 用户管理未配置收款人，降级到转账配置")
+        # 只对初始账号有效（current_level == 0）
+        if current_level != 0:
+            # 多级转账使用原有逻辑
+            return self.get_transfer_recipient(user_id, current_level)
         
-        # 2. 降级到转账配置（原有逻辑）
-        return self.get_transfer_recipient(user_id, current_level)
+        # 根据转账目标模式选择收款人
+        try:
+            from .user_manager import UserManager
+            manager = UserManager()
+            
+            # 获取账号的管理员
+            user = manager.get_account_user(phone)
+            if not user or not user.enabled:
+                print(f"  [转账配置] 账号未分配管理员或管理员已禁用，降级到转账配置")
+                return self.get_transfer_recipient(user_id, current_level)
+            
+            # 根据模式选择
+            if self.transfer_target_mode == "manager_account":
+                # 模式1：转给管理员自己的账号
+                print(f"  [转账配置] 模式：转给管理员自己 ({user.user_name})")
+                # 从管理员的账号列表中选择一个（通常是第一个）
+                manager_accounts = manager.get_user_accounts(user.user_id)
+                if manager_accounts:
+                    # 过滤掉发送人自己
+                    filtered = [acc for acc in manager_accounts if acc != phone]
+                    if filtered:
+                        if selector:
+                            # 使用选择器选择
+                            selected = selector.select_recipient(
+                                filtered,
+                                sender_phone=phone,
+                                key=f"{user.user_id}_accounts"
+                            )
+                            return selected
+                        else:
+                            return filtered[0]
+                print(f"  [转账配置] 管理员没有其他账号，降级到转账配置")
+                return self.get_transfer_recipient(user_id, current_level)
+            
+            elif self.transfer_target_mode == "manager_recipients":
+                # 模式2：转给管理员配置的收款人（默认）
+                print(f"  [转账配置] 模式：转给管理员的收款人")
+                if selector:
+                    recipient = self.get_transfer_recipient_from_user_manager(phone, selector)
+                    if recipient:
+                        return recipient
+                print(f"  [转账配置] 管理员未配置收款人，降级到转账配置")
+                return self.get_transfer_recipient(user_id, current_level)
+            
+            elif self.transfer_target_mode == "system_recipients":
+                # 模式3：转给系统配置的收款人
+                print(f"  [转账配置] 模式：转给系统配置收款人")
+                return self.get_transfer_recipient(user_id, current_level)
+            
+            else:
+                # 未知模式，使用默认（管理员收款人）
+                print(f"  [转账配置] 未知模式 '{self.transfer_target_mode}'，使用默认模式")
+                if selector:
+                    recipient = self.get_transfer_recipient_from_user_manager(phone, selector)
+                    if recipient:
+                        return recipient
+                return self.get_transfer_recipient(user_id, current_level)
+                
+        except Exception as e:
+            print(f"  [转账配置] 获取收款人失败: {e}，降级到转账配置")
+            return self.get_transfer_recipient(user_id, current_level)
 
 
 # 全局配置实例

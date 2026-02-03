@@ -54,7 +54,7 @@ class LicenseManagerGUI:
         
         # 自动刷新
         self.auto_refresh = True
-        self.refresh_interval = 30000  # 30秒
+        self.refresh_interval = 15000  # 15秒
         self.last_refresh_time = None
         
         # 创建界面
@@ -1556,7 +1556,7 @@ class LicenseManagerGUI:
         """切换自动刷新"""
         self.auto_refresh = self.auto_refresh_var.get()
         if self.auto_refresh:
-            self.status_label.config(text="已启用自动同步（每30秒）")
+            self.status_label.config(text="已启用自动同步（每15秒）")
             self.start_auto_refresh()
         else:
             self.status_label.config(text="已禁用自动同步")
@@ -1565,7 +1565,7 @@ class LicenseManagerGUI:
         """启动自动刷新（强制刷新，更新缓存）"""
         if self.auto_refresh:
             self.refresh_list(force=True)
-            # 30秒后再次刷新
+            # 15秒后再次刷新
             self.root.after(self.refresh_interval, self.start_auto_refresh)
     
     def update_sync_time(self):

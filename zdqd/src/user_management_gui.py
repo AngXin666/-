@@ -22,10 +22,10 @@ class UserManagementDialog:
         self.parent = parent
         self.log = log_callback if log_callback else print
         
-        # 创建窗口
+        # 创建窗口（宽度改为1400，左右各700）
         self.dialog = tk.Toplevel(parent)
-        self.dialog.title("用户管理")
-        self.dialog.geometry("900x600")
+        self.dialog.title("用户管理 & 批量添加账号")
+        self.dialog.geometry("1400x700")
         self.dialog.resizable(True, True)
         
         # 居中显示
@@ -43,8 +43,8 @@ class UserManagementDialog:
     def _center_window(self):
         """将窗口居中显示"""
         self.dialog.update_idletasks()
-        width = 900
-        height = 600
+        width = 1400
+        height = 700
         screen_width = self.dialog.winfo_screenwidth()
         screen_height = self.dialog.winfo_screenheight()
         x = (screen_width // 2) - (width // 2)
@@ -56,8 +56,21 @@ class UserManagementDialog:
         main_frame = ttk.Frame(self.dialog, padding="10")
         main_frame.pack(fill=tk.BOTH, expand=True)
         
+        # === 创建左右分栏 ===
+        # 左侧：用户管理
+        left_frame = ttk.Frame(main_frame)
+        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+        
+        # 右侧：批量添加账号
+        right_frame = ttk.Frame(main_frame)
+        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0))
+        
+        # === 左侧：用户管理区域 ===
+        left_title = ttk.Label(left_frame, text="用户管理", font=("Microsoft YaHei UI", 12, "bold"), foreground="blue")
+        left_title.pack(pady=(0, 10))
+        
         # === 上半部分：用户列表区域 ===
-        user_frame = ttk.LabelFrame(main_frame, text="管理员列表", padding="10")
+        user_frame = ttk.LabelFrame(left_frame, text="管理员列表", padding="10")
         user_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         
         # 创建用户Treeview
@@ -101,17 +114,16 @@ class UserManagementDialog:
         self.user_tree.bind("<Double-Button-1>", lambda e: self._edit_user())
         
         # === 用户操作按钮 ===
-        user_button_frame = ttk.Frame(main_frame)
+        user_button_frame = ttk.Frame(left_frame)
         user_button_frame.pack(fill=tk.X, pady=(0, 10))
         
         ttk.Button(user_button_frame, text="➕ 添加管理员", command=self._add_user, width=12).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(user_button_frame, text="✏️ 编辑管理员", command=self._edit_user, width=12).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(user_button_frame, text="🗑️ 删除管理员", command=self._delete_user, width=12).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(user_button_frame, text="📋 批量添加账号", command=self._batch_add_accounts, width=14).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(user_button_frame, text="🔄 刷新", command=self._refresh_user_list, width=10).pack(side=tk.LEFT, padx=(0, 5))
         
         # === 下半部分：该管理员的账号列表区域 ===
-        account_frame = ttk.LabelFrame(main_frame, text="该管理员的账号列表（可勾选后移除）", padding="10")
+        account_frame = ttk.LabelFrame(left_frame, text="该管理员的账号列表（可勾选后移除）", padding="10")
         account_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         
         # 创建账号Treeview（带勾选框）
@@ -155,7 +167,7 @@ class UserManagementDialog:
         account_frame.grid_columnconfigure(0, weight=1)
         
         # === 账号操作按钮 ===
-        account_button_frame = ttk.Frame(main_frame)
+        account_button_frame = ttk.Frame(left_frame)
         account_button_frame.pack(fill=tk.X)
         
         ttk.Button(account_button_frame, text="全选", command=self._select_all_accounts, width=8).pack(side=tk.LEFT, padx=(0, 5))
@@ -163,7 +175,9 @@ class UserManagementDialog:
         ttk.Button(account_button_frame, text="📋 添加账号", command=self._add_accounts_to_user, width=12).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(account_button_frame, text="🗑️ 移除选中账号", command=self._remove_owner_from_selected, width=15).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(account_button_frame, text="🔄 刷新", command=self._refresh_current_user_accounts, width=10).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(account_button_frame, text="关闭", command=self.dialog.destroy, width=10).pack(side=tk.RIGHT)
+        
+        # === 右侧：批量添加账号区域 ===
+        self._create_batch_add_widgets(right_frame)
     
     def _refresh_user_list(self):
         """刷新用户列表"""
@@ -595,9 +609,243 @@ class UserManagementDialog:
             self.dialog.focus_force()
     
     def _batch_add_accounts(self):
-        """批量添加账号到账号文件"""
-        # 打开批量添加账号对话框，传递user_manager
-        BatchAddAccountsDialog(self.dialog, self.log, self.user_manager)
+        """批量添加账号到账号文件（已集成到主窗口右侧，此方法保留用于兼容性）"""
+        # 不再打开新对话框，功能已集成到主窗口右侧
+        pass
+    
+    def _create_batch_add_widgets(self, parent_frame):
+        """创建批量添加账号的界面组件（集成到主窗口右侧）
+        
+        Args:
+            parent_frame: 父容器
+        """
+        # 标题
+        right_title = ttk.Label(parent_frame, text="批量添加账号", font=("Microsoft YaHei UI", 12, "bold"), foreground="blue")
+        right_title.pack(pady=(0, 10))
+        
+        # 说明文字
+        info_label = ttk.Label(
+            parent_frame,
+            text="批量添加账号到账号文件\n格式：手机号----密码（每行一个）\n例如：13800138000----password123",
+            font=("Microsoft YaHei UI", 9),
+            foreground="gray",
+            justify=tk.LEFT
+        )
+        info_label.pack(pady=(0, 10))
+        
+        # === 管理员选择区域 ===
+        owner_frame = ttk.LabelFrame(parent_frame, text="选择管理员（可选）", padding="10")
+        owner_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # 获取所有启用的用户
+        users = self.user_manager.get_all_users()
+        enabled_users = [u for u in users if u.enabled]
+        
+        # 创建下拉选择框
+        owner_select_frame = ttk.Frame(owner_frame)
+        owner_select_frame.pack(fill=tk.X)
+        
+        ttk.Label(owner_select_frame, text="管理员:", width=10).pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.batch_owner_var = tk.StringVar(value="不分配")
+        self.batch_owner_combo = ttk.Combobox(
+            owner_select_frame,
+            textvariable=self.batch_owner_var,
+            state='readonly',
+            width=25
+        )
+        
+        # 填充用户列表
+        self.batch_user_list = []
+        owner_options = ["不分配"]
+        
+        for user in enabled_users:
+            display_text = f"{user.user_name} (ID: {user.user_id})"
+            owner_options.append(display_text)
+            self.batch_user_list.append(user)
+        
+        self.batch_owner_combo['values'] = owner_options
+        self.batch_owner_combo.current(0)  # 默认选择"不分配"
+        self.batch_owner_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        # 提示文字
+        hint_label = ttk.Label(
+            owner_frame,
+            text="💡 提示：选择管理员后，添加的账号将自动分配给该用户",
+            font=("Microsoft YaHei UI", 8),
+            foreground="gray"
+        )
+        hint_label.pack(pady=(5, 0))
+        
+        # === 账号输入区域 ===
+        text_frame = ttk.LabelFrame(parent_frame, text="账号列表（已有账号只显示手机号，新增账号格式：手机号----密码）", padding="10")
+        text_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
+        
+        # 添加滚动条的文本框
+        text_container = ttk.Frame(text_frame)
+        text_container.pack(fill=tk.BOTH, expand=True)
+        
+        scrollbar = ttk.Scrollbar(text_container)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.batch_accounts_text = tk.Text(text_container, height=15, width=50, yscrollcommand=scrollbar.set)
+        self.batch_accounts_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self.batch_accounts_text.yview)
+        
+        # 统计信息
+        self.batch_stats_var = tk.StringVar(value="待添加: 0 个账号")
+        ttk.Label(parent_frame, textvariable=self.batch_stats_var, foreground="gray").pack(pady=(0, 10))
+        
+        # 绑定文本变化事件
+        self.batch_accounts_text.bind('<KeyRelease>', self._on_batch_text_changed)
+        
+        # 加载已有账号到文本框
+        self._load_existing_accounts_to_batch()
+        
+        # 按钮区域
+        button_frame = ttk.Frame(parent_frame)
+        button_frame.pack(fill=tk.X)
+        
+        # 第一行按钮
+        button_row1 = ttk.Frame(button_frame)
+        button_row1.pack(fill=tk.X, pady=(0, 5))
+        
+        ttk.Button(button_row1, text="➕ 添加到账号文件", command=self._batch_add_accounts_action, width=15).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(button_row1, text="🗑️ 删除选中账号", command=self._batch_delete_accounts, width=15).pack(side=tk.LEFT, padx=(0, 5))
+        
+        # 第二行按钮
+        button_row2 = ttk.Frame(button_frame)
+        button_row2.pack(fill=tk.X)
+        
+        ttk.Button(button_row2, text="🧹 清空所有账号", command=self._batch_clear_all_accounts, width=15).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(button_row2, text="关闭", command=self.dialog.destroy, width=10).pack(side=tk.RIGHT)
+    
+    def _on_batch_text_changed(self, event=None):
+        """批量添加文本变化时更新统计信息"""
+        text = self.batch_accounts_text.get("1.0", tk.END).strip()
+        if not text:
+            self.batch_stats_var.set("待添加: 0 个账号")
+            return
+        
+        # 简单统计行数
+        lines = [line.strip() for line in text.split('\n') if line.strip() and not line.strip().startswith('#')]
+        self.batch_stats_var.set(f"当前: {len(lines)} 行")
+    
+    def _load_existing_accounts_to_batch(self):
+        """加载已有账号到批量添加文本框（只显示手机号）"""
+        try:
+            # 获取账号文件路径
+            from .config import ConfigLoader
+            config = ConfigLoader().load()
+            accounts_file = config.accounts_file
+            
+            if not accounts_file:
+                return
+            
+            # 使用加密账号文件管理器读取
+            try:
+                from .encrypted_accounts_file import EncryptedAccountsFile
+            except ImportError:
+                try:
+                    from encrypted_accounts_file import EncryptedAccountsFile
+                except ImportError:
+                    from src.encrypted_accounts_file import EncryptedAccountsFile
+            
+            encrypted_file = EncryptedAccountsFile(accounts_file)
+            accounts_list = encrypted_file.read_accounts()
+            
+            if accounts_list:
+                # 只显示手机号（不显示密码）
+                lines = [phone for phone, password in accounts_list]
+                text = '\n'.join(lines)
+                
+                # 插入到文本框
+                self.batch_accounts_text.delete("1.0", tk.END)
+                self.batch_accounts_text.insert("1.0", text)
+                
+                # 更新统计
+                self._on_batch_text_changed()
+                
+                self.log(f"✓ 已加载 {len(accounts_list)} 个已有账号")
+        except Exception as e:
+            # 如果加载失败，不影响使用（可能是新文件）
+            print(f"[批量添加] 加载已有账号失败: {e}")
+    
+    def _batch_add_accounts_action(self):
+        """批量添加账号到账号文件的实际操作"""
+        # 这里复用 BatchAddAccountsDialog 的 _add_accounts 方法逻辑
+        # 为了简化，我们直接调用一个临时的 BatchAddAccountsDialog 实例的方法
+        # 但使用当前窗口的文本框和变量
+        
+        # 获取账号文本
+        text = self.batch_accounts_text.get("1.0", tk.END).strip()
+        if not text:
+            messagebox.showwarning("提示", "请输入账号信息", parent=self.dialog)
+            return
+        
+        # 获取选中的管理员
+        selected_owner = self.batch_owner_var.get()
+        selected_user_id = None
+        
+        if selected_owner != "不分配":
+            # 从下拉框选项中提取用户ID
+            for i, user in enumerate(self.batch_user_list):
+                display_text = f"{user.user_name} (ID: {user.user_id})"
+                if display_text == selected_owner:
+                    selected_user_id = user.user_id
+                    break
+        
+        # 创建临时的批量添加对话框实例来处理逻辑
+        temp_dialog = BatchAddAccountsDialog.__new__(BatchAddAccountsDialog)
+        temp_dialog.parent = self.dialog
+        temp_dialog.log = self.log
+        temp_dialog.user_manager = self.user_manager
+        temp_dialog.dialog = self.dialog  # 使用主窗口作为父窗口
+        temp_dialog.accounts_text = self.batch_accounts_text
+        temp_dialog.owner_var = self.batch_owner_var
+        temp_dialog.user_list = self.batch_user_list
+        temp_dialog.stats_var = self.batch_stats_var
+        temp_dialog.refresh_callback = None  # 不需要刷新回调
+        
+        # 调用添加账号方法
+        temp_dialog._add_accounts()
+        
+        # 刷新用户列表（更新账号数量）
+        self._refresh_user_list()
+    
+    def _batch_delete_accounts(self):
+        """删除选中的账号"""
+        # 创建临时实例来处理删除逻辑
+        temp_dialog = BatchAddAccountsDialog.__new__(BatchAddAccountsDialog)
+        temp_dialog.parent = self.dialog
+        temp_dialog.log = self.log
+        temp_dialog.user_manager = self.user_manager
+        temp_dialog.dialog = self.dialog
+        temp_dialog.accounts_text = self.batch_accounts_text
+        temp_dialog.stats_var = self.batch_stats_var
+        temp_dialog.refresh_callback = None
+        
+        temp_dialog._delete_accounts()
+        
+        # 刷新用户列表
+        self._refresh_user_list()
+    
+    def _batch_clear_all_accounts(self):
+        """清空所有账号"""
+        # 创建临时实例来处理清空逻辑
+        temp_dialog = BatchAddAccountsDialog.__new__(BatchAddAccountsDialog)
+        temp_dialog.parent = self.dialog
+        temp_dialog.log = self.log
+        temp_dialog.user_manager = self.user_manager
+        temp_dialog.dialog = self.dialog
+        temp_dialog.accounts_text = self.batch_accounts_text
+        temp_dialog.stats_var = self.batch_stats_var
+        temp_dialog.refresh_callback = None
+        
+        temp_dialog._clear_all_accounts()
+        
+        # 刷新用户列表
+        self._refresh_user_list()
     
     def _assign_unassigned_accounts(self):
         """分配未分配的账号"""

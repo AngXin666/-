@@ -21,7 +21,7 @@ class SmartWaiter:
         device_id: str,
         detector,  # PageDetectorHybrid 或 PageDetectorIntegrated
         expected_states: List,  # List[PageState]
-        max_wait: float = 30.0,  # 超时保护（防止卡死）
+        max_wait: float = 15.0,  # 超时保护（防止卡死）
         poll_interval: float = 0.1,  # 高频轮询
         log_callback=None,
         ignore_loading: bool = True,
@@ -34,7 +34,7 @@ class SmartWaiter:
         1. 高频轮询（0.1秒）检测页面状态变化
         2. 检测到状态变化 → 立即用深度学习确认
         3. 如果是期望状态 → 连续确认N次后立即返回
-        4. 超时保护：30秒后强制返回（防止卡死）
+        4. 超时保护：15秒后强制返回（防止卡死）
         
         支持的检测器：
         - PageDetectorHybrid（混合检测器）
@@ -44,7 +44,7 @@ class SmartWaiter:
             device_id: 设备ID
             detector: 页面检测器（混合检测器或整合检测器）
             expected_states: 期望的页面状态列表
-            max_wait: 超时保护时间（秒，默认30秒）
+            max_wait: 超时保护时间（秒，默认15秒）
             poll_interval: 轮询间隔（秒，默认0.1秒）
             log_callback: 日志回调函数
             ignore_loading: 是否忽略loading状态
@@ -227,13 +227,13 @@ async def wait_for_page(
     
     可以在项目任何地方直接调用，无需创建实例。
     内置最佳实践参数：
-    - max_wait=30.0 (超时保护，不是等待时间)
+    - max_wait=15.0 (超时保护，不是等待时间)
     - poll_interval=0.1 (高频轮询，0.1秒/次)
     - stability_check=True (稳定性检测)
     - stability_count=1 (检测到即返回，不需要多次确认)
     - ignore_loading=True (忽略loading状态)
     
-    实际耗时通常0.5-2秒，不是30秒！
+    实际耗时通常0.5-2秒，不是15秒！
     
     Args:
         device_id: 设备ID
@@ -260,7 +260,7 @@ async def wait_for_page(
         device_id=device_id,
         detector=detector,
         expected_states=expected_states,
-        max_wait=30.0,
+        max_wait=15.0,
         poll_interval=0.1,  # 恢复为0.1秒，快速检测页面变化
         log_callback=log_callback,
         ignore_loading=True,
