@@ -395,8 +395,6 @@ class AutomationGUI:
         self.stop_btn = ttk.Button(control_frame, text="■ 停止", command=self._stop_automation, width=8, state=tk.DISABLED)
         self.stop_btn.pack(side=tk.LEFT, padx=(0, 5))
         
-        ttk.Button(control_frame, text="➕ 批量添加账号", command=self._open_batch_add_accounts, width=14).pack(side=tk.LEFT, padx=(0, 5))
-        
         ttk.Button(control_frame, text="💰 转账配置", command=self._open_transfer_config, width=10).pack(side=tk.LEFT, padx=(0, 5))
         
         ttk.Button(control_frame, text="📜 转账历史", command=self._open_transfer_history, width=10).pack(side=tk.LEFT, padx=(0, 5))
@@ -3425,26 +3423,6 @@ class AutomationGUI:
         # 创建新窗口
         from .user_management_gui import UserManagementDialog
         self._user_management_window = UserManagementDialog(self.root, self._log)
-    
-    def _open_batch_add_accounts(self):
-        """打开批量添加账号对话框"""
-        # 检查窗口是否已打开
-        if hasattr(self, '_batch_add_window') and self._batch_add_window and hasattr(self._batch_add_window, 'dialog') and self._batch_add_window.dialog.winfo_exists():
-            # 窗口已存在，激活它
-            self._batch_add_window.dialog.lift()
-            self._batch_add_window.dialog.focus_force()
-            return
-        
-        # 创建新窗口
-        from .user_management_gui import BatchAddAccountsDialog
-        from .user_manager import UserManager
-        user_manager = UserManager()
-        self._batch_add_window = BatchAddAccountsDialog(
-            self.root, 
-            self._log, 
-            user_manager,
-            refresh_callback=self._silent_reload_accounts  # 使用静默刷新回调
-        )
     
     def _auto_check_new_models(self):
         """自动检查并注册新模型（启动时调用）"""
