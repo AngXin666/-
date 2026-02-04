@@ -253,7 +253,8 @@ class AutoLogin:
         return True
 
     async def login(self, device_id: str, phone: str, password: str, 
-                    log_callback=None, use_cache: bool = True) -> LoginResult:
+                    log_callback=None, use_cache: bool = True, 
+                    step_number: int = 1, gui_logger=None) -> LoginResult:
         """执行登录操作（坐标方式 + 页面检测 + OCR + 缓存）
         
         Args:
@@ -262,10 +263,27 @@ class AutoLogin:
             password: 密码
             log_callback: 日志回调函数
             use_cache: 是否使用缓存登录（False表示直接执行正常登录）
+            step_number: 步骤编号（用于简洁日志）
+            gui_logger: GUI日志记录器（用于简洁日志）
             
         Returns:
             登录结果
         """
+        # 创建简洁日志记录器
+        from .concise_logger import ConciseLogger
+        import logging
+        
+        # 获取文件日志记录器
+        file_logger = logging.getLogger(__name__)
+        concise_logger = ConciseLogger(
+            module_name="auto_login",
+            gui_logger=gui_logger,
+            file_logger=file_logger
+        )
+        
+        # 记录步骤开始
+        concise_logger.step(step_number, "登录账号")
+        
         def log(msg):
             if log_callback:
                 log_callback(msg)
@@ -288,12 +306,14 @@ class AutoLogin:
                 
                 # 如果不在登录页面，导航到登录页面
                 if current_state != PageState.LOGIN:
+                    concise_logger.action("导航到登录页")
                     log("导航到登录页面...")
                     if not await self.navigate_to_login(device_id, log_callback):
+                        concise_logger.error("无法导航到登录页面")
                         return LoginResult(success=False, error_message="无法导航到登录页面")
                 
                 # 执行正常登录
-                result = await self._do_normal_login(device_id, phone, password, log_callback)
+                result = await self._do_normal_login(device_id, phone, password, log_callback, gui_logger, step_number)
                 return result
             
             # 以下是 use_cache=True 的逻辑（缓存登录验证）
@@ -407,7 +427,7 @@ class AutoLogin:
             # 4. 如果在登录页面，说明未登录或缓存失效，直接执行正常登录
             if current_state == PageState.LOGIN:
                 log("当前在登录页面，执行正常登录流程...")
-                result = await self._do_normal_login(device_id, phone, password, log_callback)
+                result = await self._do_normal_login(device_id, phone, password, log_callback, gui_logger, step_number)
                 
                 # 注意：缓存保存已移到GUI主流程中，在获取用户ID后统一保存
                 
@@ -423,7 +443,7 @@ class AutoLogin:
             return LoginResult(success=False, error_message=str(e))
     
     async def _do_normal_login(self, device_id: str, phone: str, password: str,
-                               log_callback=None) -> LoginResult:
+                               log_callback=None, gui_logger=None, step_number: int = 1) -> LoginResult:
         """执行正常登录流程（使用混合检测器）
         
         Args:
@@ -431,10 +451,24 @@ class AutoLogin:
             phone: 手机号
             password: 密码
             log_callback: 日志回调函数
+            gui_logger: GUI日志记录器（用于简洁日志）
+            step_number: 步骤编号（用于简洁日志）
             
         Returns:
             登录结果
         """
+        # 创建简洁日志记录器
+        from .concise_logger import ConciseLogger
+        import logging
+        
+        # 获取文件日志记录器
+        file_logger = logging.getLogger(__name__)
+        concise_logger = ConciseLogger(
+            module_name="auto_login",
+            gui_logger=gui_logger,
+            file_logger=file_logger
+        )
+        
         def log(msg):
             if log_callback:
                 log_callback(msg)
@@ -485,6 +519,7 @@ class AutoLogin:
                     # 不要直接返回错误，继续执行登录流程
             
             # 2. 输入账号密码
+            concise_logger.action("输入账号信息")
             # 点击手机号输入框并激活
             log(f"点击手机号输入框...")
             await self._tap_with_fallback(device_id, self.PHONE_INPUT, log_callback)
@@ -530,6 +565,7 @@ class AutoLogin:
             await wait_after_action(min_wait=0.5, max_wait=1.0)
             
             # 点击登录按钮
+            concise_logger.action("点击登录")
             log(f"点击登录按钮...")
             await self._tap_with_fallback(device_id, self.LOGIN_BUTTON, log_callback)
             await wait_after_action(min_wait=0.5, max_wait=1.5)
@@ -593,6 +629,7 @@ class AutoLogin:
                 if current_state != PageState.LOGIN:
                     if current_state in [PageState.HOME, PageState.PROFILE, PageState.PROFILE_LOGGED]:
                         log("✓ 登录成功！")
+                        concise_logger.success("登录成功")
                         return LoginResult(success=True)
                     
                     # 可能跳转到其他页面，尝试处理
@@ -604,6 +641,7 @@ class AutoLogin:
                     
                     # 其他已知页面状态，认为登录成功
                     log(f"✓ 登录成功，当前页面: {current_state.value}")
+                    concise_logger.success("登录成功")
                     return LoginResult(success=True)
             
             # 5. 超时后再次检测最终状态
@@ -613,6 +651,7 @@ class AutoLogin:
             
             if current_state in [PageState.HOME, PageState.PROFILE, PageState.PROFILE_LOGGED]:
                 log("✓ 登录成功！")
+                concise_logger.success("登录成功")
                 return LoginResult(success=True)
             elif current_state == PageState.LOGIN_ERROR:
                 # 处理错误弹窗

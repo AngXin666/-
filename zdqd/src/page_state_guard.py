@@ -193,14 +193,21 @@ class PageStateGuard:
             await asyncio.sleep(1)
             return True
         
-        # 6. 如果是签到页面，按返回键返回首页
+        # 6. 如果是首页公告弹窗，按返回键关闭
+        if current_state == PageState.HOME_NOTICE:
+            print(f"  [{operation_name}] ⚠️ 检测到首页公告弹窗，按返回键关闭...")
+            await self.adb.press_back(device_id)
+            await asyncio.sleep(1)
+            return True
+        
+        # 7. 如果是签到页面，按返回键返回首页
         if current_state == PageState.CHECKIN:
             print(f"  [{operation_name}] ⚠️ 检测到签到页面，按返回键返回首页...")
             await self.adb.press_back(device_id)
             await asyncio.sleep(2)
             return True
         
-        # 6. 如果是未知页面，获取详细信息判断如何处理
+        # 8. 如果是未知页面，获取详细信息判断如何处理
         if current_state == PageState.UNKNOWN:
             # 获取页面详细信息（使用异常处理专用模板）
             from .template_priority_config import get_priority_templates
@@ -242,7 +249,7 @@ class PageStateGuard:
                 await asyncio.sleep(2)
                 return True
         
-        # 7. 其他未知状态
+        # 9. 其他未知状态
         print(f"  [{operation_name}] ⚠️ 未处理的页面状态: {current_state.value}")
         return False
     

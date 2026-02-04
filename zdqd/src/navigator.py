@@ -311,6 +311,15 @@ class Navigator:
                     self._silent_log.info(f"[导航到首页] ⚠️ 等待返回首页超时")
                 continue
             
+            # 如果在首页公告弹窗，点击弹窗外上方空白区域关闭
+            if current_state == PageState.HOME_NOTICE:
+                self._silent_log.info(f"[导航到首页] 检测到首页公告弹窗，点击弹窗外上方空白区域关闭...")
+                await self.adb.tap(device_id, 270, 200)
+                await asyncio.sleep(1.5)
+                # 清除缓存，重新检测
+                self.detector.clear_cache()
+                continue
+            
             # 使用守卫处理异常页面
             if current_state in [PageState.POPUP, PageState.UNKNOWN]:
                 handled = await self.guard._handle_unexpected_page(device_id, current_state, PageState.HOME, "导航到首页")
@@ -718,6 +727,13 @@ class Navigator:
             if result.state == PageState.POPUP:
                 print(f"  → 检测到弹窗，关闭...")
                 await self.detector.close_popup(device_id)
+                await asyncio.sleep(1.5)
+                continue
+            
+            # 处理首页公告弹窗（点击弹窗外上方空白区域关闭）
+            if result.state == PageState.HOME_NOTICE:
+                print(f"  → 检测到首页公告弹窗，点击弹窗外上方空白区域关闭...")
+                await self.adb.tap(device_id, 270, 200)
                 await asyncio.sleep(1.5)
                 continue
             

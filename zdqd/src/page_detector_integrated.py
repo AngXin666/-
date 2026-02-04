@@ -82,6 +82,7 @@ class PageDetectorIntegrated:
         """
         self.adb = adb
         self._log_callback = log_callback
+        self._verbose = False  # 默认关闭详细日志，只输出关键信息
         
         # 页面分类器相关
         self._classifier_model = None
@@ -115,6 +116,7 @@ class PageDetectorIntegrated:
             '签到弹窗': PageState.CHECKIN_POPUP,
             '签到页': PageState.CHECKIN,
             '设置页': PageState.SETTINGS,
+            '转账确认弹窗': PageState.TRANSFER_CONFIRM,
             '转账页': PageState.TRANSFER,
             '钱包页': PageState.WALLET,
             '首页': PageState.HOME,
@@ -131,15 +133,36 @@ class PageDetectorIntegrated:
         self._load_yolo_registry(yolo_registry_path)
         self._load_mapping(mapping_path)
     
-    def _log(self, msg: str):
-        """输出日志"""
-        if self._log_callback:
-            self._log_callback(msg)
+    def _log(self, msg: str, level: str = "debug"):
+        """输出日志
+        
+        Args:
+            msg: 日志消息
+            level: 日志级别 ("info" 或 "debug")
+                - "info": 关键信息，总是输出
+                - "debug": 调试信息，只在verbose模式下输出
+        """
+        # 默认禁用所有整合检测器的详细日志
+        # 如果需要调试，可以设置 self._verbose = True
+        if not self._verbose:
+            return
+        
+        if level == "info" or self._verbose:
+            if self._log_callback:
+                self._log_callback(msg)
+    
+    def set_verbose(self, verbose: bool):
+        """设置是否输出详细日志
+        
+        Args:
+            verbose: True=输出详细日志，False=只输出关键信息
+        """
+        self._verbose = verbose
     
     def _load_classifier(self, model_path: str, classes_path: str):
         """加载页面分类器"""
         if not HAS_TORCH or not HAS_PIL:
-            self._log("[整合检测器] ✗ PyTorch或PIL未安装")
+            self._log("[整合检测器] ✗ PyTorch或PIL未安装", "debug")
             return
         
         try:
@@ -692,7 +715,7 @@ class PageDetectorIntegrated:
         POPUP_BUTTONS = {
             'user_agreement': (270, 600),      # 服务协议弹窗"同意并接受"
             'user_agreement_alt': (270, 608),  # 服务协议弹窗备用坐标
-            'home_announcement': (270, 690),   # 主页公告弹窗（底部中央按钮）
+            'home_announcement': (265, 637),   # 主页公告弹窗（确认按钮中心，根据标注数据修正）
             'login_error': (436, 557),         # 登录错误确定按钮
             'generic': (270, 600),             # 通用弹窗
         }
@@ -769,7 +792,7 @@ class PageDetectorIntegrated:
         # 如果是首页公告弹窗，点击弹窗外部关闭
         if popup_type == "home_announcement":
             self._log(f"[整合检测器] 首页公告弹窗，点击外部区域关闭...")
-            await self.adb.tap(device_id, 270, 100)
+            await self.adb.tap(device_id, 270, 200)
             await asyncio.sleep(2)
             
             result = await self.detect_page(device_id)

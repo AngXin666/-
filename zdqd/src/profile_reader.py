@@ -514,12 +514,14 @@ class ProfileReader:
             traceback.print_exc()
             return result
     
-    async def get_full_profile(self, device_id: str, account: Optional[str] = None) -> Dict[str, any]:
+    async def get_full_profile(self, device_id: str, account: Optional[str] = None, step_number: int = 3, gui_logger = None) -> Dict[str, any]:
         """获取完整的个人资料信息（并行优化版）
         
         Args:
             device_id: 设备ID
             account: 登录账号（可选），用于提取手机号
+            step_number: 步骤编号（用于简洁日志）
+            gui_logger: GUI日志记录器（可选）
             
         Returns:
             dict: 完整个人资料
@@ -531,6 +533,14 @@ class ProfileReader:
                 - vouchers: int, 抵扣券数量
         """
         import time
+        from .concise_logger import ConciseLogger
+        
+        # 创建简洁日志记录器
+        concise_logger = ConciseLogger("profile_reader", gui_logger, None)
+        
+        # 记录步骤开始
+        concise_logger.step(step_number, "获取资料")
+        
         start_time = time.time()
         
         result = {
@@ -545,14 +555,19 @@ class ProfileReader:
         
         if not HAS_PIL or not self._ocr_pool:
             print("  ! PIL 或 OCR 库未安装")
+            concise_logger.error("PIL 或 OCR 库未安装")
             return result
         
         try:
+            # 记录操作：进入个人页（假设已经在个人页）
+            concise_logger.action("进入个人页")
+            
             # 截图
             screenshot_start = time.time()
             screenshot_data = await self.adb.screencap(device_id)
             if not screenshot_data:
                 print("  ! 截图失败")
+                concise_logger.error("截图失败")
                 return result
             
             image = Image.open(BytesIO(screenshot_data))
@@ -582,6 +597,9 @@ class ProfileReader:
                 # 如果检测到弹窗，需要处理
                 if page_result.state in [PageState.POPUP, PageState.PROFILE_AD]:
                     print(f"  [整合检测器] ⚠️ 检测到弹窗页面: {page_result.state.chinese_name}")
+                    
+                    # 记录操作：关闭提示弹窗
+                    concise_logger.action("关闭提示弹窗")
                     
                     # 弹窗关闭逻辑：每5秒重试一次，最多4次（总共15秒超时）
                     max_attempts = 4
@@ -675,6 +693,9 @@ class ProfileReader:
 
                 
                 # 现在开始检测页面元素（昵称、余额等）
+                # 记录操作：获取详细资料
+                concise_logger.action("获取详细资料")
+                
                 yolo_start = time.time()
                 print(f"  [整合检测器] 开始检测页面元素...")
                 print(f"  [调试] 页面类型: {page_result.state.chinese_name}")
@@ -1026,10 +1047,33 @@ class ProfileReader:
             total_time = time.time() - start_time
             print(f"  [性能] 总耗时: {total_time:.3f}秒")
             
+            # 记录成功日志
+            concise_logger.action("获取详细资料")
+            concise_logger.success("资料获取完成")
+            
+            # 添加分隔线
+            if concise_logger.gui_logger:
+                concise_logger.gui_logger.info("=" * 60)
+            
+            # 显示详细资料，每个字段单独一行
+            if result.get('nickname'):
+                concise_logger.action(f"昵称: {result['nickname']}")
+            if result.get('user_id'):
+                concise_logger.action(f"用户ID: {result['user_id']}")
+            if result.get('balance') is not None:
+                concise_logger.action(f"余额: {result['balance']:.2f}元")
+            if result.get('points') is not None:
+                concise_logger.action(f"积分: {result['points']}")
+            if result.get('vouchers') is not None:
+                concise_logger.action(f"抵扣券: {result['vouchers']}")
+            if result.get('coupons') is not None:
+                concise_logger.action(f"优惠券: {result['coupons']}")
+            
             return result
             
         except Exception as e:
             print(f"  ! 获取完整个人资料失败: {e}")
+            concise_logger.error("获取资料失败", e)
             import traceback
             traceback.print_exc()
             return result
@@ -1268,7 +1312,8 @@ class ProfileReader:
         
         return best_candidate[0]
     
-    async def get_full_profile_with_retry(self, device_id: str, max_retries: int = 3, account: Optional[str] = None) -> Dict[str, any]:
+    async def get_full_profile_with_retry(self, device_id: str, max_retries: int = 3, account: Optional[str] = None, 
+                                          gui_logger=None, step_number: int = 2) -> Dict[str, any]:
         """获取完整个人资料，支持重试机制和缓存
         
         优化策略：
@@ -1281,6 +1326,8 @@ class ProfileReader:
             device_id: 设备ID
             max_retries: 最大重试次数，默认3次
             account: 登录账号（可选），用于提取手机号和使用缓存
+            gui_logger: GUI日志记录器（可选）
+            step_number: 步骤编号（用于简洁日志）
             
         Returns:
             dict: 完整个人资料（累积最佳结果）
@@ -1342,7 +1389,7 @@ class ProfileReader:
                 else:
                     print(f"[ProfileReader] 📝 缓存不完整：执行完整识别")
                     self._silent_log.log(f"[尝试 {attempt + 1}/{max_retries}] 开始完整OCR识别...")
-                    profile = await self.get_full_profile(device_id, account=account)
+                    profile = await self.get_full_profile(device_id, account=account, gui_logger=gui_logger, step_number=step_number)
                 
                 # 静默记录OCR识别到的原始数据
                 self._silent_log.log(f"[调试] OCR识别结果:")
@@ -1402,6 +1449,35 @@ class ProfileReader:
                 if not missing_fields:
                     print(f"  ✓ 成功获取个人资料数据")
                     self._log_collection_summary(collected_fields, [])
+                    
+                    # 使用 ConciseLogger 显示详细资料（如果提供了 gui_logger）
+                    if gui_logger:
+                        from .concise_logger import ConciseLogger
+                        import logging
+                        file_logger = logging.getLogger(__name__)
+                        concise = ConciseLogger("profile_reader", gui_logger, file_logger)
+                        
+                        # 显示成功消息
+                        concise.success("资料获取完成")
+                        
+                        # 添加分隔线
+                        if gui_logger:
+                            gui_logger.info("=" * 60)
+                        
+                        # 显示详细资料，每个字段单独一行，使用 → 前缀
+                        if best_result.get('nickname'):
+                            gui_logger.info(f"  → 昵称: {best_result['nickname']}")
+                        if best_result.get('user_id'):
+                            gui_logger.info(f"  → 用户ID: {best_result['user_id']}")
+                        if best_result.get('balance') is not None:
+                            gui_logger.info(f"  → 余额: {best_result['balance']:.2f}元")
+                        if best_result.get('points') is not None:
+                            gui_logger.info(f"  → 积分: {best_result['points']}")
+                        if best_result.get('vouchers') is not None:
+                            gui_logger.info(f"  → 抵扣券: {best_result['vouchers']}")
+                        if best_result.get('coupons') is not None:
+                            gui_logger.info(f"  → 优惠券: {best_result['coupons']}")
+                    
                     return best_result
                 
                 if attempt < max_retries - 1:
@@ -1556,6 +1632,38 @@ class ProfileReader:
         failed_field_names = [field_names.get(f, f) for f in final_missing]
         
         self._log_collection_summary(collected_field_names, failed_field_names)
+        
+        # 使用 ConciseLogger 显示详细资料（如果提供了 gui_logger）
+        # 注意：这里也需要显示，因为可能经过备选方案后才获取到完整数据
+        if gui_logger:
+            from .concise_logger import ConciseLogger
+            import logging
+            file_logger = logging.getLogger(__name__)
+            concise = ConciseLogger("profile_reader", gui_logger, file_logger)
+            
+            # 显示成功消息
+            if not final_missing:
+                concise.success("资料获取完成")
+            else:
+                concise.success("资料获取完成（部分字段缺失）")
+            
+            # 添加分隔线
+            if gui_logger:
+                gui_logger.info("=" * 60)
+            
+            # 显示详细资料，每个字段单独一行，使用 → 前缀
+            if best_result.get('nickname'):
+                gui_logger.info(f"  → 昵称: {best_result['nickname']}")
+            if best_result.get('user_id'):
+                gui_logger.info(f"  → 用户ID: {best_result['user_id']}")
+            if best_result.get('balance') is not None:
+                gui_logger.info(f"  → 余额: {best_result['balance']:.2f}元")
+            if best_result.get('points') is not None:
+                gui_logger.info(f"  → 积分: {best_result['points']}")
+            if best_result.get('vouchers') is not None:
+                gui_logger.info(f"  → 抵扣券: {best_result['vouchers']}")
+            if best_result.get('coupons') is not None:
+                gui_logger.info(f"  → 优惠券: {best_result['coupons']}")
         
         return best_result
     

@@ -549,11 +549,11 @@ class XimengAutomation:
             Returns:
                 bool: 是否成功检测并点击
             """
-            # 1. 尝试YOLO
+            # 1. 尝试YOLO（直接使用按钮名称，不添加后缀）
             button_pos = await self.integrated_detector.find_button_yolo(
                 device_id, 
                 model_name,
-                f'{button_name}按钮',
+                button_name,  # 直接使用按钮名称
                 conf_threshold=0.3
             )
             
@@ -1317,6 +1317,40 @@ class XimengAutomation:
                                                         result.transfer_amount = transfer_result.get('amount', 0.0)
                                                         result.transfer_recipient = recipient_id
                                                         log(f"    - 已保存转账信息: {result.transfer_amount:.2f} 元 → {result.transfer_recipient}")
+                                                        
+                                                        # 保存转账记录到数据库
+                                                        try:
+                                                            # 获取收款人信息
+                                                            recipient_name = transfer_result.get('recipient_name', '')
+                                                            # 收款人手机号暂时使用用户ID（因为配置中没有存储手机号）
+                                                            recipient_phone = recipient_id
+                                                            
+                                                            # 获取转账策略描述
+                                                            if transfer_config.multi_level_enabled:
+                                                                strategy = f"多级转账(最多{transfer_config.max_transfer_level}级)"
+                                                            else:
+                                                                strategy = "单级转账"
+                                                            
+                                                            # 保存转账记录
+                                                            save_success = transfer_history.save_transfer_record(
+                                                                sender_phone=account.phone,
+                                                                sender_user_id=result.user_id,
+                                                                sender_name=result.nickname or account.phone,
+                                                                recipient_phone=recipient_phone,
+                                                                recipient_name=recipient_name or recipient_id,
+                                                                amount=transfer_result['amount'],
+                                                                strategy=strategy,
+                                                                success=True,
+                                                                error_message="",
+                                                                owner=account.owner or ""
+                                                            )
+                                                            
+                                                            if save_success:
+                                                                log(f"    - ✓ 转账记录已保存到数据库")
+                                                            else:
+                                                                log(f"    - ⚠️ 转账记录保存失败")
+                                                        except Exception as e:
+                                                            log(f"    - ⚠️ 保存转账记录异常: {e}")
                                                 else:
                                                     # 转账失败，设置错误类型
                                                     from .models.error_types import ErrorType
@@ -1326,6 +1360,33 @@ class XimengAutomation:
                                                     # 转账失败时，设置收款人为"失败"
                                                     result.transfer_amount = 0.0
                                                     result.transfer_recipient = "失败"
+                                                    
+                                                    # 保存失败记录到数据库
+                                                    try:
+                                                        recipient_name = transfer_result.get('recipient_name', '')
+                                                        recipient_phone = recipient_id
+                                                        
+                                                        # 获取转账策略描述
+                                                        if transfer_config.multi_level_enabled:
+                                                            strategy = f"多级转账(最多{transfer_config.max_transfer_level}级)"
+                                                        else:
+                                                            strategy = "单级转账"
+                                                        
+                                                        transfer_history.save_transfer_record(
+                                                            sender_phone=account.phone,
+                                                            sender_user_id=result.user_id,
+                                                            sender_name=result.nickname or account.phone,
+                                                            recipient_phone=recipient_phone,
+                                                            recipient_name=recipient_name or recipient_id,
+                                                            amount=0.0,
+                                                            strategy=strategy,
+                                                            success=False,
+                                                            error_message=result.error_message,
+                                                            owner=account.owner or ""
+                                                        )
+                                                        log(f"    - ✓ 失败记录已保存到数据库")
+                                                    except Exception as e:
+                                                        log(f"    - ⚠️ 保存失败记录异常: {e}")
                                             except Exception as e:
                                                 # 转账异常，设置错误类型
                                                 from .models.error_types import ErrorType
@@ -1337,6 +1398,26 @@ class XimengAutomation:
                                                 # 转账异常时，设置收款人为"失败"
                                                 result.transfer_amount = 0.0
                                                 result.transfer_recipient = "失败"
+                                                
+                                                # 保存异常记录到数据库
+                                                try:
+                                                    strategy = transfer_config.strategy
+                                                    
+                                                    transfer_history.save_transfer_record(
+                                                        sender_phone=account.phone,
+                                                        sender_user_id=result.user_id,
+                                                        sender_name=result.nickname or account.phone,
+                                                        recipient_phone=recipient_id,
+                                                        recipient_name=recipient_id,
+                                                        amount=0.0,
+                                                        strategy=strategy,
+                                                        success=False,
+                                                        error_message=result.error_message,
+                                                        owner=account.owner or ""
+                                                    )
+                                                    log(f"    - ✓ 异常记录已保存到数据库")
+                                                except Exception as save_error:
+                                                    log(f"    - ⚠️ 保存异常记录失败: {save_error}")
                                             finally:
                                                 # 【安全机制】释放转账锁
                                                 transfer_lock.release_lock(account.phone)

@@ -604,21 +604,15 @@ class ModelManager:
         process = psutil.Process(os.getpid())
         self._loading_stats.memory_before = process.memory_info().rss
         
-        self._log("=" * 70)
-        self._log("开始加载模型...")
-        self._log("=" * 70)
-        self._log(f"初始内存: {self._loading_stats.memory_before / 1024 / 1024:.1f}MB")
-        self._log("")
+        # 简洁日志：正在加载模型
+        self._log("正在加载模型...")
         
-        # 预先验证所有模型文件
-        self._log("[验证] 检查模型文件...")
+        # 预先验证所有模型文件（静默）
         missing_files = self._validate_model_files()
         if missing_files:
             error_msg = f"以下模型文件缺失:\n" + "\n".join(f"  - {f}" for f in missing_files)
-            self._log(f"[ERROR] {error_msg}")
+            self._log(f"❌ {error_msg}")
             raise FileNotFoundError(error_msg)
-        self._log("[OK] 所有模型文件验证通过")
-        self._log("")
         
         # 要加载的模型列表
         # 注意：page_detector_hybrid 已被 page_detector_integrated 替代
@@ -635,12 +629,7 @@ class ModelManager:
         for idx, (model_name, load_func) in enumerate(models_to_load, 1):
             # 检查配置是否启用
             if not self._is_model_enabled(model_name):
-                self._log(f"[{idx}/{len(models_to_load)}] 跳过模型: {model_name} (已禁用)")
-                self._log("")
                 continue
-            
-            # 计算进度百分比
-            progress_percent = (idx - 1) / len(models_to_load) * 100
             
             # 进度回调
             if progress_callback:
@@ -650,13 +639,8 @@ class ModelManager:
                     len(models_to_load)
                 )
             
-            # 显示进度条
-            self._log(f"[{idx}/{len(models_to_load)}] [{progress_percent:5.1f}%] 正在加载 {model_name}...")
-            
             # 记录当前内存
             current_memory = process.memory_info().rss
-            current_memory_mb = current_memory / 1024 / 1024
-            self._log(f"  当前内存: {current_memory_mb:.1f}MB")
             
             # 加载模型（带重试机制）
             try:
@@ -671,7 +655,6 @@ class ModelManager:
                 # 计算模型占用的内存
                 after_memory = process.memory_info().rss
                 model_memory = after_memory - current_memory
-                model_memory_mb = model_memory / 1024 / 1024
                 
                 # 保存模型
                 self._models[model_name] = model_instance
@@ -689,70 +672,44 @@ class ModelManager:
                     config=self._config['models'][model_name].copy()
                 )
                 
-                # 显示加载成功信息（带时间和内存）
-                self._log(f"  [OK] 加载成功")
-                self._log(f"  ├─ 耗时: {model_time:.2f}秒")
-                self._log(f"  ├─ 内存增量: {model_memory_mb:.1f}MB")
-                self._log(f"  └─ 设备: {self._model_info[model_name].device}")
-                self._log("")
-                
             except Exception as e:
                 error_msg = f"[ERROR] {model_name} 加载失败: {e}"
-                self._log(f"  {error_msg}")
-                self._log("")
+                self._log(f"❌ {error_msg}")
                 self._loading_stats.errors.append(error_msg)
                 self._loading_stats.failed_models += 1
                 
                 # 如果是关键模型，抛出异常
                 if self._is_critical_model(model_name):
                     raise RuntimeError(f"关键模型加载失败: {model_name}") from e
-                else:
-                    self._log(f"  [WARNING] 可选模型加载失败，程序将继续运行")
-                    self._log("")
         
         # 记录最终内存
         self._loading_stats.memory_after = process.memory_info().rss
         self._loading_stats.total_time = time.time() - start_time
         
-        # 显示加载统计（结构化输出）
+        # 简洁日志：加载完成
         memory_delta = self._loading_stats.memory_after - self._loading_stats.memory_before
         
-        self._log("=" * 70)
-        self._log("模型加载完成")
-        self._log("=" * 70)
-        self._log("")
+        self._log("✅ 模型加载完成")
+        self._log(f"   加载时间: {self._loading_stats.total_time:.1f}秒, 内存: {self._loading_stats.memory_after / 1024 / 1024:.0f}MB")
         
-        self._log("【统计信息】")
-        self._log(f"  总加载时间:   {self._loading_stats.total_time:.2f}秒")
-        self._log(f"  已加载模型:   {self._loading_stats.loaded_models}/{self._loading_stats.total_models}")
-        self._log(f"  失败模型:     {self._loading_stats.failed_models}")
-        
-        if self._loading_stats.loaded_models > 0:
-            avg_time = self._loading_stats.total_time / self._loading_stats.loaded_models
-            self._log(f"  平均时间:     {avg_time:.2f}秒/模型")
-        
-        self._log("")
-        self._log("【内存使用】")
-        self._log(f"  加载前:       {self._loading_stats.memory_before / 1024 / 1024:.1f}MB")
-        self._log(f"  加载后:       {self._loading_stats.memory_after / 1024 / 1024:.1f}MB")
-        self._log(f"  增量:         {memory_delta / 1024 / 1024:.1f}MB")
-        
-        # 显示各模型的时间占比
+        # 详细日志：各模型的时间占比（仅文件日志）
         if self._loading_stats.model_times:
-            self._log("")
-            self._log("【各模型加载时间】")
+            import logging
+            file_logger = logging.getLogger(__name__)
+            file_logger.info("各模型加载时间:")
             for model_name, load_time in self._loading_stats.model_times.items():
                 percentage = (load_time / self._loading_stats.total_time * 100) if self._loading_stats.total_time > 0 else 0
-                self._log(f"  {model_name:30s} {load_time:6.2f}秒 ({percentage:5.1f}%)")
+                file_logger.info(f"  {model_name}: {load_time:.2f}秒 ({percentage:.1f}%)")
         
-        # 显示各模型的内存占比
+        # 详细日志：各模型的内存占比（仅文件日志）
         if self._model_info:
-            self._log("")
-            self._log("【各模型内存占用】")
+            import logging
+            file_logger = logging.getLogger(__name__)
+            file_logger.info("各模型内存占用:")
             for model_name, info in self._model_info.items():
                 memory_mb = info.memory_usage / 1024 / 1024
                 percentage = (info.memory_usage / memory_delta * 100) if memory_delta > 0 else 0
-                self._log(f"  {model_name:30s} {memory_mb:6.1f}MB ({percentage:5.1f}%)")
+                file_logger.info(f"  {model_name:30s} {memory_mb:6.1f}MB ({percentage:5.1f}%)")
         
         # 显示错误信息
         if self._loading_stats.errors:
@@ -760,9 +717,6 @@ class ModelManager:
             self._log("【错误列表】")
             for i, error in enumerate(self._loading_stats.errors, 1):
                 self._log(f"  {i}. {error}")
-        
-        self._log("")
-        self._log("=" * 70)
         
         # 返回统计信息
         return {
@@ -932,9 +886,10 @@ class ModelManager:
         
         config = self._config['models']['ocr_thread_pool']
         
-        # OCRThreadPool是单例，直接创建即可
-        self._log(f"  - 线程数: {config.get('thread_count', 4)}")
-        self._log(f"  - GPU加速: {config.get('use_gpu', True)}")
+        # 详细日志：记录到文件（仅文件日志）
+        import logging
+        file_logger = logging.getLogger(__name__)
+        file_logger.debug(f"OCR线程池配置 - 线程数: {config.get('thread_count', 4)}, GPU加速: {config.get('use_gpu', True)}")
         
         pool = OCRThreadPool()
         
@@ -945,28 +900,32 @@ class ModelManager:
         return pool
     
     def _check_gpu_availability(self, device_config: str):
-        """检查GPU可用性并记录日志
+        """检查GPU可用性并记录日志（仅文件日志）
         
         Args:
             device_config: 设备配置 ('auto', 'cuda', 'cpu')
         """
         try:
             import torch
+            import logging
+            file_logger = logging.getLogger(__name__)
             
             if device_config == 'auto':
                 if torch.cuda.is_available():
-                    self._log("  [OK] 检测到GPU，使用CUDA加速")
+                    file_logger.info("检测到GPU，使用CUDA加速")
                 else:
-                    self._log("  [WARNING] GPU不可用，使用CPU模式")
+                    file_logger.warning("GPU不可用，使用CPU模式")
             elif device_config == 'cuda':
                 if not torch.cuda.is_available():
-                    self._log("  [WARNING] 配置要求GPU但不可用，降级到CPU模式")
+                    file_logger.warning("配置要求GPU但不可用，降级到CPU模式")
                 else:
-                    self._log("  [OK] 使用GPU加速")
+                    file_logger.info("使用GPU加速")
             else:
-                self._log(f"  - 使用设备: {device_config}")
+                file_logger.info(f"使用设备: {device_config}")
         except ImportError:
-            self._log("  [WARNING] PyTorch未安装，无法检测GPU")
+            import logging
+            file_logger = logging.getLogger(__name__)
+            file_logger.warning("PyTorch未安装，无法检测GPU")
 
     
     def _validate_model_files(self) -> List[str]:

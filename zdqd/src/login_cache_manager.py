@@ -263,6 +263,9 @@ class LoginCacheManager:
                     # 先复制到 sdcard（不需要 root）
                     await self.adb.shell(device_id, f"su -c 'cp {source_path} {temp_path}'")
                     
+                    # 确保临时文件的父目录存在
+                    temp_plain_file.parent.mkdir(parents=True, exist_ok=True)
+                    
                     # 从 sdcard 拉取到本地临时文件
                     await self.adb.pull(device_id, temp_path, str(temp_plain_file))
                     

@@ -464,7 +464,8 @@ class DailyCheckin:
             return None
     
     async def do_checkin(self, device_id: str, phone: str = "unknown", password: str = None, 
-                        login_callback=None, log_callback=None, profile_data: Optional[Dict] = None) -> Dict[str, any]:
+                        login_callback=None, log_callback=None, profile_data: Optional[Dict] = None,
+                        step_number: int = 1, gui_logger=None) -> Dict[str, any]:
         """执行每日签到（循环签到直到次数用完）
         
         Args:
@@ -477,6 +478,8 @@ class DailyCheckin:
                 - balance: float, 余额
                 - points: int, 积分
                 - vouchers: float, 抵扣券
+            step_number: 步骤编号（用于简洁日志）
+            gui_logger: GUI日志记录器（用于简洁日志输出）
             
         Returns:
             dict: 签到结果
@@ -494,6 +497,13 @@ class DailyCheckin:
         # 导入日志记录器
         from .logger import get_logger
         logger = get_logger()
+        
+        # 创建简洁日志记录器
+        from .concise_logger import ConciseLogger
+        concise = ConciseLogger("daily_checkin", gui_logger, logger)
+        
+        # 记录步骤开始
+        concise.step(step_number, "签到")
         
         # 定义日志函数（同时输出到控制台和日志文件）
         def log(msg):
@@ -590,6 +600,7 @@ class DailyCheckin:
             # 优化：删除不必要的1秒等待
             
             # 4. 导航到首页准备签到
+            concise.action("导航到首页")
             log(f"  [签到] 导航到首页...")
             success = await self.guard.ensure_page_state(
                 device_id,
@@ -618,6 +629,7 @@ class DailyCheckin:
                 log(f"  [签到] YOLO检测到按钮: {checkin_button_pos}")
             
             # 6. 点击签到按钮进入签到页面
+            concise.action("点击每日签到")
             log(f"  [签到] 点击签到按钮 ({checkin_button_pos[0]}, {checkin_button_pos[1]})...")
             await self.adb.tap(device_id, checkin_button_pos[0], checkin_button_pos[1])
             
@@ -653,6 +665,15 @@ class DailyCheckin:
                 
                 result['total_times'] = initial_info['total_times']
                 result['remaining_times'] = initial_info['daily_remaining_times']
+                
+                # 添加简洁日志：验证页面和获取次数
+                concise.action("验证当前页面")
+                concise.action("签到页")
+                concise.action("获取签到次数")
+                if initial_info['total_times'] is not None:
+                    concise.action(f"总次数: {initial_info['total_times']}")
+                if initial_info['daily_remaining_times'] is not None:
+                    concise.action(f"当日剩余: {initial_info['daily_remaining_times']}")
             else:
                 # OCR识别失败，尝试使用深度学习检测页面状态
                 log(f"  [签到] OCR识别失败，使用深度学习检测页面状态...")
@@ -883,6 +904,12 @@ class DailyCheckin:
                 
                 # 5.4.2 点击签到按钮
                 log(f"  [签到 {attempt + 1}] 点击签到按钮 ({x}, {y})...")
+                
+                # 添加简洁日志：点击立即签到
+                if attempt == 0:
+                    concise.action("开始签到")
+                concise.action(f"第{attempt + 1}次签到")
+                
                 await self.adb.tap(device_id, x, y)
                 
                 # 5.4.3 清除页面检测缓存，确保智能等待器检测到最新状态
@@ -921,6 +948,7 @@ class DailyCheckin:
                 # 5.5.1 如果检测到温馨提示弹窗，直接处理
                 if is_warmtip:
                     log(f"  [签到] ⚠️ 检测到温馨提示弹窗（次数用完）")
+                    concise.action("出现温馨提示")
                     log(f"  [签到] 关闭温馨提示弹窗并返回首页...")
                     
                     # 关闭弹窗（按返回键）
@@ -1021,6 +1049,7 @@ class DailyCheckin:
                     # 签到计数+1
                     checkin_count += 1
                     log(f"  [签到] ✓ 第{checkin_count}次签到完成")
+                    concise.action(f"第{checkin_count}次签到完成")
                     
                     # 继续下一轮循环
                     continue
@@ -1043,6 +1072,7 @@ class DailyCheckin:
                                 
                                 if has_warmtip or has_no_times:
                                     log(f"  [签到] ⚠️ OCR检测到温馨提示弹窗（次数用完）")
+                                    concise.action("出现温馨提示")
                                     # 调试模式下打印OCR文本（生产环境应关闭）
                                     # log(f"  [签到] OCR文本: {text_str[:100]}...")
                                     log(f"  [签到] 关闭温馨提示弹窗并返回首页...")
@@ -1085,6 +1115,7 @@ class DailyCheckin:
                                     
                                     checkin_count += 1
                                     log(f"  [签到] ✓ 第{checkin_count}次签到完成")
+                                    concise.action(f"第{checkin_count}次签到完成")
                                     continue
                         except Exception as e:
                             log(f"  [签到] OCR验证失败: {e}")
@@ -1183,9 +1214,13 @@ class DailyCheckin:
             if result['checkin_count'] > 0:
                 result['success'] = True
                 result['message'] = f"签到完成，共签到 {result['checkin_count']} 次，总奖励 {round(result['reward_amount'], 3)} 元"
+                # 添加简洁日志：签到完成
+                concise.success("签到完成")
             elif result['already_checked']:
                 result['success'] = True
                 result['message'] = "今日已签到完成（签到次数已用完）"
+                # 添加简洁日志：签到完成
+                concise.success("签到完成")
             else:
                 result['success'] = False
                 result['message'] = "签到失败，未能进入签到页面或识别签到信息"

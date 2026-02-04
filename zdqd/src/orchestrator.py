@@ -4,6 +4,7 @@ Orchestrator Module
 """
 
 import asyncio
+import logging
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
@@ -110,11 +111,16 @@ class Orchestrator:
         
         # 使用GPU加速的启动流程处理（包含白屏卡死检测、弹窗处理、广告跳过）
         log("处理应用启动流程（GPU加速）...")
+        
+        # 获取文件日志记录器
+        file_logger = logging.getLogger(__name__)
+        
         startup_success = await automation.handle_startup_flow_integrated(
             device_id, 
             log_callback=log_callback,
             stop_check=stop_check,
-            package_name=self.config.target_app_package
+            package_name=self.config.target_app_package,
+            file_logger=file_logger
         )
         
         if not startup_success:

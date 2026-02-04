@@ -40,6 +40,7 @@ class PageState(Enum):
     SPLASH = "splash"            # 启动页
     # 新增页面状态
     TRANSFER = "transfer"        # 转账页
+    TRANSFER_CONFIRM = "transfer_confirm"  # 转账确认弹窗
     WALLET = "wallet"            # 钱包页
     TRANSACTION_HISTORY = "transaction_history"  # 交易流水
     CATEGORY = "category"        # 分类页
@@ -72,6 +73,7 @@ class PageState(Enum):
             "points_page": "积分页",
             "splash": "启动页",
             "transfer": "转账页",
+            "transfer_confirm": "转账确认弹窗",
             "wallet": "钱包页",
             "transaction_history": "交易流水",
             "category": "分类页",
