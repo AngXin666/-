@@ -5374,3 +5374,17 @@ class WindowArrangerDialog:
                 self.log_callback(f"❌ {error_msg}")
             messagebox.showerror("错误", error_msg, parent=self.dialog)
 
+
+
+def main(adb_bridge=None):
+    """GUI主函数入口
+    
+    Args:
+        adb_bridge: ADBBridge实例（可选），用于后台加载模型
+    """
+    gui = AutomationGUI(adb_bridge=adb_bridge)
+    gui.root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
