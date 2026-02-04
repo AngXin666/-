@@ -809,21 +809,7 @@ class DailyCheckin:
                     # 第一次循环：直接使用进入页面时已读取的次数信息（避免重复OCR）
                     total_times = result['total_times']
                     remaining_times = result['remaining_times']
-                    
-                    # 修复：如果进入页面时OCR识别失败（total_times为None），在第一次循环时再次尝试OCR
-                    if total_times is None:
-                        log(f"  [签到 1] 进入页面时未获取到次数信息，重新尝试OCR识别...")
-                        retry_info = await self.reader.get_checkin_info(device_id)
-                        if retry_info and retry_info['total_times'] is not None:
-                            total_times = retry_info['total_times']
-                            remaining_times = retry_info['daily_remaining_times']
-                            result['total_times'] = total_times
-                            result['remaining_times'] = remaining_times
-                            log(f"  [签到 1] ✓ 重新识别成功 - 总次数: {total_times}, 剩余次数: {remaining_times}")
-                        else:
-                            log(f"  [签到 1] ⚠️ 重新识别失败，继续执行签到（无法显示次数信息）")
-                    else:
-                        log(f"  [签到 1] 使用已读取的次数信息 - 总次数: {total_times}, 剩余次数: {remaining_times}")
+                    log(f"  [签到 1] 使用已读取的次数信息 - 总次数: {total_times}, 剩余次数: {remaining_times}")
                 else:
                     # 后续循环：通过计数推算剩余次数（不需要OCR）
                     remaining_times = total_times - checkin_count if total_times else None

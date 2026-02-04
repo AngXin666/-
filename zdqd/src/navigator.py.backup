@@ -324,11 +324,11 @@ class Navigator:
             
             # 定义辅助函数：YOLO + OCR检测
             async def try_detect_button(button_name: str, model_name: str) -> Optional[Tuple[int, int]]:
-                # 1. 尝试YOLO（直接使用按钮名称，不添加后缀）
+                # 1. 尝试YOLO
                 button_pos = await self.detector.find_button_yolo(
                     device_id, 
                     model_name,
-                    button_name,  # 直接使用按钮名称
+                    f'{button_name}按钮',
                     conf_threshold=0.5
                 )
                 if button_pos:
@@ -470,12 +470,13 @@ class Navigator:
             # 定义辅助函数：YOLO + OCR检测按钮
             async def try_detect_and_tap(button_name: str, model_name: str = '首页') -> bool:
                 # 1. 尝试YOLO
-                # 注意：profile_detailed模型的类别名称是 '首页'、'我的'（不带"按钮"后缀）
-                # 其他模型的类别名称可能带"按钮"后缀
+                # 注意：所有模型的类别名称都是带"按钮"后缀的
+                search_name = f'{button_name}按钮'
+                
                 button_pos = await self.detector.find_button_yolo(
                     device_id, 
                     model_name,
-                    button_name,  # 直接使用按钮名称，不添加后缀
+                    search_name,
                     conf_threshold=0.5
                 )
                 

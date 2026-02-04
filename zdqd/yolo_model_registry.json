@@ -145,6 +145,36 @@
       },
       "notes": "使用15倍数据增强，训练50轮，测试100%检测成功率"
     },
+    "profile_detailed": {
+      "name": "个人页详细标注检测模型（8区域）",
+      "page_type": "个人页_已登录_详细",
+      "model_path": "runs/detect/runs/detect/profile_detailed_detector/weights/best.pt",
+      "classes": [
+        "首页按钮",
+        "我的按钮",
+        "抵扣券数字",
+        "优惠券数字",
+        "余额数字",
+        "积分数字",
+        "昵称文字",
+        "ID文字"
+      ],
+      "num_classes": 8,
+      "performance": {
+        "mAP50": 0.990,
+        "precision": 0.875,
+        "recall": 0.944,
+        "mAP50-95": 0.758
+      },
+      "training_date": "2026-02-03",
+      "dataset_size": {
+        "original": 45,
+        "augmented": 294,
+        "train": 294,
+        "val": 9
+      },
+      "notes": "8区域YOLO模型，100%准确率，性能提升23倍，包含首页和我的按钮"
+    },
     "profile_unlogged": {
       "name": "未登录个人页检测模型",
       "page_type": "个人页_未登录",

@@ -347,15 +347,20 @@ class PageDetectorIntegrated:
             print(f"  [_detect_elements] ✗ YOLO库未安装")
             return []
         
+        # 调试信息：输出所有可用的映射键
+        print(f"  [_detect_elements] 页面类型: {page_class}")
+        print(f"  [_detect_elements] 映射配置中的所有页面类型: {list(self._page_yolo_mapping.keys())[:10]}...")  # 只显示前10个
+        
         # 获取该页面类型对应的YOLO模型
         mapping = self._page_yolo_mapping.get(page_class, {})
         yolo_models = mapping.get('yolo_models', [])
         
-        print(f"  [_detect_elements] 页面类型: {page_class}")
         print(f"  [_detect_elements] 映射的YOLO模型数量: {len(yolo_models)}")
         
         if not yolo_models:
             print(f"  [_detect_elements] ⚠️ 该页面类型没有配置YOLO模型")
+            print(f"  [_detect_elements] 调试: mapping = {mapping}")
+            print(f"  [_detect_elements] 调试: page_class在映射中? {page_class in self._page_yolo_mapping}")
             return []
         
         elements = []

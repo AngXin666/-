@@ -678,11 +678,11 @@ class AutoLogin:
             # 优先使用YOLO检测"我的"按钮位置
             # 定义辅助函数：YOLO + OCR检测
             async def try_detect_button(button_name: str) -> Optional[Tuple[int, int]]:
-                # 1. 尝试YOLO（直接使用按钮名称，不添加后缀）
+                # 1. 尝试YOLO
                 button_pos = await self.detector.find_button_yolo(
                     device_id, 
                     '首页',
-                    button_name,  # 直接使用按钮名称
+                    f'{button_name}按钮',
                     conf_threshold=0.5
                 )
                 if button_pos:

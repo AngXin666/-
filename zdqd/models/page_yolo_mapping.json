@@ -4,19 +4,9 @@
       "page_state": "PROFILE_LOGGED",
       "yolo_models": [
         {
-          "model_key": "profile_logged",
-          "purpose": "检测昵称和用户ID",
+          "model_key": "profile_detailed",
+          "purpose": "检测8个区域（首页按钮、我的按钮、余额、积分、抵扣券、优惠券、昵称、ID）",
           "priority": 1
-        },
-        {
-          "model_key": "balance",
-          "purpose": "检测余额和积分",
-          "priority": 2
-        },
-        {
-          "model_key": "avatar_homepage",
-          "purpose": "检测头像和首页按钮",
-          "priority": 3
         }
       ]
     },
