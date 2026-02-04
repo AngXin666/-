@@ -162,7 +162,8 @@ class PageDetectorIntegrated:
     def _load_classifier(self, model_path: str, classes_path: str):
         """加载页面分类器"""
         if not HAS_TORCH or not HAS_PIL:
-            self._log("[整合检测器] ✗ PyTorch或PIL未安装", "debug")
+            # 关键错误，强制输出
+            print("[整合检测器] ✗ PyTorch或PIL未安装")
             return
         
         try:
@@ -172,7 +173,8 @@ class PageDetectorIntegrated:
                 if os.path.exists(alt_classes_path):
                     classes_path = alt_classes_path
                 else:
-                    self._log(f"[整合检测器] ✗ 类别文件不存在: {classes_path}")
+                    # 关键错误，强制输出
+                    print(f"[整合检测器] ✗ 类别文件不存在: {classes_path}")
                     return
             
             with open(classes_path, 'r', encoding='utf-8') as f:
@@ -184,7 +186,8 @@ class PageDetectorIntegrated:
                 if os.path.exists(alt_model_path):
                     model_path = alt_model_path
                 else:
-                    self._log(f"[整合检测器] ✗ 模型文件不存在: {model_path}")
+                    # 关键错误，强制输出
+                    print(f"[整合检测器] ✗ 模型文件不存在: {model_path}")
                     return
             
             # 设置设备
@@ -231,7 +234,10 @@ class PageDetectorIntegrated:
             self._log(f"[整合检测器] ✓ 页面分类器已加载 (设备: {self._device})")
             
         except Exception as e:
-            self._log(f"[整合检测器] ✗ 加载页面分类器失败: {e}")
+            # 关键错误，强制输出
+            print(f"[整合检测器] ✗ 加载页面分类器失败: {e}")
+            import traceback
+            traceback.print_exc()
             self._classifier_model = None
     
     def _load_yolo_registry(self, registry_path: str):
