@@ -850,6 +850,8 @@ class ModelManager:
             adb=adb_bridge,
             classifier_model_path=model_path,
             classes_path=classes_path,
+            yolo_registry_path='yolo_model_registry.json',
+            mapping_path='page_yolo_mapping.json',
             log_callback=self._log_callback
         )
         

@@ -229,7 +229,7 @@ class LoginCacheManager:
         try:
             # 创建账号缓存目录（使用 手机号_用户ID 作为目录名）
             account_cache_dir = self._get_account_cache_dir(phone, user_id)
-            account_cache_dir.mkdir(exist_ok=True)
+            account_cache_dir.mkdir(parents=True, exist_ok=True)  # 创建所有必需的父目录
             
             print(f"  [缓存] 保存到目录: {account_cache_dir}")
             

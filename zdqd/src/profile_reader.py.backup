@@ -168,25 +168,20 @@ class ProfileReader:
         }
         
         if not HAS_PIL or not self._ocr_pool:
-            self._silent_log.log("  ! PIL 或 OCR 库未安装")
+            print("  ! PIL 或 OCR 库未安装")
             return result
         
         try:
-            self._silent_log.log(f"  [_get_dynamic_data_only] ========== 开始执行 ==========")
-            
             # 截图
             screenshot_data = await self.adb.screencap(device_id)
             if not screenshot_data:
-                self._silent_log.log("  ! 截图失败")
+                print("  ! 截图失败")
                 return result
             
             image = Image.open(BytesIO(screenshot_data))
             
             # 优先使用整合检测器（与get_balance相同的策略）
             use_yolo_fallback = True
-            
-            self._silent_log.log(f"  [调试] _get_dynamic_data_only 开始执行")
-            self._silent_log.log(f"  [调试] _integrated_detector 是否存在: {self._integrated_detector is not None}")
             
             if self._integrated_detector:
                 detection_result = await self._integrated_detector.detect_page(
@@ -195,29 +190,15 @@ class ProfileReader:
                     detect_elements=True
                 )
                 
-                self._silent_log.log(f"  [整合检测器] 检测到 {len(detection_result.elements) if detection_result.elements else 0} 个元素")
+                print(f"  [整合检测器] 检测到 {len(detection_result.elements) if detection_result.elements else 0} 个元素")
                 if detection_result.elements:
                     for elem in detection_result.elements:
-                        self._silent_log.log(f"  [整合检测器] 元素: {elem.class_name}, 置信度: {elem.confidence:.2f}, 位置: {elem.bbox}")
-                else:
-                    self._silent_log.log(f"  [整合检测器] ⚠️ 未检测到任何元素，将使用降级方案")
+                        print(f"  [整合检测器] 元素: {elem.class_name}, 置信度: {elem.confidence:.2f}, 位置: {elem.bbox}")
                 
                 if detection_result.elements:
                     # 全屏OCR识别（只调用一次）
                     enhanced_image = enhance_for_ocr(image)
                     full_ocr_result = await self._ocr_pool.recognize(enhanced_image)
-                    
-                    # 记录检测到的元素类型，用于后续判断
-                    detected_elements = set()
-                    for element in detection_result.elements:
-                        if '余额' in element.class_name:
-                            detected_elements.add('balance')
-                        elif '积分' in element.class_name:
-                            detected_elements.add('points')
-                        elif '抵扣' in element.class_name:
-                            detected_elements.add('vouchers')
-                        elif '优惠' in element.class_name:
-                            detected_elements.add('coupons')
                     
                     if full_ocr_result and full_ocr_result.texts and full_ocr_result.boxes is not None:
                         # 根据YOLO检测到的元素位置，从全屏OCR结果中匹配文本
@@ -259,42 +240,20 @@ class ProfileReader:
                                     if valid_numbers:
                                         value = max(valid_numbers)
                                         
-                                        # 添加详细调试日志
-                                        self._silent_log.log(f"  [数据映射调试] 元素: {element.class_name}, 值: {value}, 匹配文本: {combined_text}")
-                                        self._silent_log.log(f"  [数据映射调试] 当前状态 - balance: {result['balance']}, points: {result['points']}, vouchers: {result['vouchers']}, coupons: {result['coupons']}")
-                                        
                                         # 根据类别名称分配到对应字段
                                         if '余额' in element.class_name and result['balance'] is None:
                                             result['balance'] = value
                                             use_yolo_fallback = False
-                                            self._silent_log.log(f"  ✓ 余额: {result['balance']:.2f} 元")
+                                            print(f"  ✓ 余额: {result['balance']:.2f} 元")
                                         elif '积分' in element.class_name and result['points'] is None:
                                             result['points'] = int(value)
-                                            self._silent_log.log(f"  ✓ 积分: {result['points']}")
+                                            print(f"  ✓ 积分: {result['points']}")
                                         elif '抵扣' in element.class_name and result['vouchers'] is None:
                                             result['vouchers'] = value
-                                            self._silent_log.log(f"  ✓ 抵扣券: {result['vouchers']}")
+                                            print(f"  ✓ 抵扣券: {result['vouchers']}")
                                         elif '优惠' in element.class_name and result['coupons'] is None:
                                             result['coupons'] = int(value)
-                                            self._silent_log.log(f"  ✓ 优惠券: {result['coupons']}")
-                                        else:
-                                            self._silent_log.log(f"  ⚠️ 未匹配到任何字段！元素类别: {element.class_name}")
-                            else:
-                                # 检测到元素但没有匹配到文本，设置为0避免进入区域OCR降级
-                                if '积分' in element.class_name and result['points'] is None:
-                                    result['points'] = 0
-                                    self._silent_log.log(f"  ⚠️ 积分区域未识别到文本，设置为0")
-                                elif '优惠' in element.class_name and result['coupons'] is None:
-                                    result['coupons'] = 0
-                                    self._silent_log.log(f"  ⚠️ 优惠券区域未识别到文本，设置为0")
-                    
-                    # 如果检测到了某个元素但OCR完全失败，也设置为0
-                    if 'points' in detected_elements and result['points'] is None:
-                        result['points'] = 0
-                        self._silent_log.log(f"  ⚠️ 检测到积分元素但OCR失败，设置为0")
-                    if 'coupons' in detected_elements and result['coupons'] is None:
-                        result['coupons'] = 0
-                        self._silent_log.log(f"  ⚠️ 检测到优惠券元素但OCR失败，设置为0")
+                                            print(f"  ✓ 优惠券: {result['coupons']}")
             
             # 降级：使用旧的YOLO检测器
             if use_yolo_fallback and self._yolo_detector:
@@ -323,16 +282,16 @@ class ProfileReader:
                                         # 根据类别名称分配到对应字段
                                         if '余额' in det.class_name and result['balance'] is None:
                                             result['balance'] = value
-                                            self._silent_log.log(f"  ✓ 余额: {result['balance']:.2f} 元")
+                                            print(f"  ✓ 余额: {result['balance']:.2f} 元")
                                         elif '积分' in det.class_name and result['points'] is None:
                                             result['points'] = int(value)
-                                            self._silent_log.log(f"  ✓ 积分: {result['points']}")
+                                            print(f"  ✓ 积分: {result['points']}")
                                         elif '抵扣' in det.class_name and result['vouchers'] is None:
                                             result['vouchers'] = value
-                                            self._silent_log.log(f"  ✓ 抵扣券: {result['vouchers']}")
+                                            print(f"  ✓ 抵扣券: {result['vouchers']}")
                                         elif '优惠' in det.class_name and result['coupons'] is None:
                                             result['coupons'] = int(value)
-                                            self._silent_log.log(f"  ✓ 优惠券: {result['coupons']}")
+                                            print(f"  ✓ 优惠券: {result['coupons']}")
                                         
                                         break
                                     except ValueError:
@@ -340,37 +299,28 @@ class ProfileReader:
             
             # 最后降级：使用区域OCR
             if result['balance'] is None or result['points'] is None or result['vouchers'] is None or result['coupons'] is None:
-                self._silent_log.log(f"  [调试] 进入区域OCR降级方案")
-                self._silent_log.log(f"  [调试] 当前状态 - balance: {result['balance']}, points: {result['points']}, vouchers: {result['vouchers']}, coupons: {result['coupons']}")
-                
                 region_results = await self._recognize_regions(device_id, image)
-                
-                self._silent_log.log(f"  [调试] 区域OCR结果 - balance: {region_results.get('balance')}, points: {region_results.get('points')}, vouchers: {region_results.get('vouchers')}, coupons: {region_results.get('coupons')}")
                 
                 if result['balance'] is None and region_results.get('balance') is not None:
                     result['balance'] = region_results['balance']
-                    self._silent_log.log(f"  [区域OCR] 余额: {result['balance']}")
+                    print(f"  [区域OCR] 余额: {result['balance']}")
                 
                 if result['points'] is None and region_results.get('points') is not None:
                     result['points'] = int(region_results['points'])
-                    self._silent_log.log(f"  [区域OCR] 积分: {result['points']}")
+                    print(f"  [区域OCR] 积分: {result['points']}")
                 
                 if result['vouchers'] is None and region_results.get('vouchers') is not None:
                     result['vouchers'] = region_results['vouchers']
-                    self._silent_log.log(f"  [区域OCR] 抵扣券: {result['vouchers']}")
+                    print(f"  [区域OCR] 抵扣券: {result['vouchers']}")
                 
                 if result['coupons'] is None and region_results.get('coupons') is not None:
                     result['coupons'] = region_results['coupons']
-                    self._silent_log.log(f"  [区域OCR] 优惠券: {result['coupons']}")
-            
-            self._silent_log.log(f"  [调试] _get_dynamic_data_only 最终返回:")
-            self._silent_log.log(f"  [调试] balance: {result['balance']}, points: {result['points']}, vouchers: {result['vouchers']}, coupons: {result['coupons']}")
-            self._silent_log.log(f"  [_get_dynamic_data_only] ========== 执行完成 ==========")
+                    print(f"  [区域OCR] 优惠券: {result['coupons']}")
             
             return result
             
         except Exception as e:
-            self._silent_log.log(f"  ! 获取动态数据失败: {e}")
+            print(f"  ! 获取动态数据失败: {e}")
             import traceback
             traceback.print_exc()
             return result
@@ -805,10 +755,6 @@ class ProfileReader:
                                     if valid_numbers:
                                         value = max(valid_numbers)
                                         
-                                        # 添加详细调试日志
-                                        print(f"  [数据映射调试] 元素: {element.class_name}, 值: {value}, 匹配文本: {combined_text}")
-                                        print(f"  [数据映射调试] 当前状态 - balance: {result['balance']}, points: {result['points']}, vouchers: {result['vouchers']}, coupons: {result['coupons']}")
-                                        
                                         if '余额' in element.class_name and result['balance'] is None:
                                             result['balance'] = value
                                             print(f"  ✓ 余额: {result['balance']:.2f} 元")
@@ -822,8 +768,6 @@ class ProfileReader:
                                         elif '优惠' in element.class_name and result['coupons'] is None:
                                             result['coupons'] = int(value)
                                             print(f"  ✓ 优惠券: {result['coupons']}")
-                                        else:
-                                            print(f"  ⚠️ 未匹配到任何字段！元素类别: {element.class_name}")
                 
                 # 如果整合检测器成功检测到元素，则不需要降级到YOLO
                 if detection_result.elements:
@@ -1618,24 +1562,15 @@ class ProfileReader:
             boxes = ocr_result.boxes if hasattr(ocr_result, 'boxes') and ocr_result.boxes is not None else None
             
             print(f"  [全屏OCR] ✓ 识别到 {len(texts)} 个文本")
-            print(f"  [全屏OCR调试] 所有识别文本: {texts[:20]}")  # 只打印前20个
             
             # 如果有位置信息，使用位置辅助提取
             if boxes is not None and len(boxes) == len(texts):
-                print(f"  [全屏OCR调试] 使用位置辅助提取")
                 result = self._extract_values_with_positions(texts, boxes)
             else:
                 # 没有位置信息，使用文本顺序提取
-                print(f"  [全屏OCR调试] 使用文本顺序提取")
                 result = self._extract_values_from_texts(texts)
             
             # 打印结果
-            print(f"  [全屏OCR调试] 提取结果:")
-            print(f"    - balance: {result['balance']}")
-            print(f"    - points: {result['points']}")
-            print(f"    - vouchers: {result['vouchers']}")
-            print(f"    - coupons: {result['coupons']}")
-            
             if result['balance'] is not None:
                 print(f"  [全屏OCR] ✓ 余额: {result['balance']:.2f}")
             if result['points'] is not None:
@@ -1674,8 +1609,6 @@ class ProfileReader:
             'coupons': None
         }
         
-        print(f"  [位置提取调试] 开始使用位置信息提取数值")
-        
         # 构建文本-位置映射
         text_positions = []
         for i, (text, box) in enumerate(zip(texts, boxes)):
@@ -1706,15 +1639,12 @@ class ProfileReader:
         }
         
         for field, keyword_list in keywords.items():
-            print(f"  [位置提取调试] 查找字段: {field}, 关键字: {keyword_list}")
-            
             for keyword in keyword_list:
                 # 查找关键字
                 keyword_pos = None
                 for pos in text_positions:
                     if keyword in pos['text']:
                         keyword_pos = pos
-                        print(f"  [位置提取调试]   找到关键字 '{keyword}' 在文本 '{pos['text']}' (位置: {pos['center_x']:.0f}, {pos['center_y']:.0f})")
                         break
                 
                 if keyword_pos:
@@ -1750,34 +1680,19 @@ class ProfileReader:
                             # 计算距离（优先右侧）
                             if is_right:
                                 distance = abs(pos['center_x'] - keyword_pos['center_x'])
-                                direction = "右侧"
                             else:
                                 distance = abs(pos['center_y'] - keyword_pos['center_y']) + 1000  # 下方的距离加权
-                                direction = "下方"
-                            
-                            print(f"  [位置提取调试]   候选值: {value} (文本: '{pos['text']}', 方向: {direction}, 距离: {distance:.0f})")
                             
                             candidates.append({
                                 'value': value,
-                                'distance': distance,
-                                'text': pos['text']
+                                'distance': distance
                             })
                     
                     # 选择最近的候选
                     if candidates:
                         candidates.sort(key=lambda x: x['distance'])
-                        selected = candidates[0]
-                        result[field] = selected['value']
-                        print(f"  [位置提取调试]   ✓ 选择: {field} = {selected['value']} (文本: '{selected['text']}')")
+                        result[field] = candidates[0]['value']
                         break  # 找到就跳出keyword循环
-                    else:
-                        print(f"  [位置提取调试]   ✗ 未找到候选值")
-        
-        print(f"  [位置提取调试] 提取完成:")
-        print(f"    - balance: {result['balance']}")
-        print(f"    - points: {result['points']}")
-        print(f"    - vouchers: {result['vouchers']}")
-        print(f"    - coupons: {result['coupons']}")
         
         return result
     

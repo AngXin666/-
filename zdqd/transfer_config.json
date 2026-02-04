@@ -2,11 +2,11 @@
   "min_balance": 0.0,
   "min_transfer_amount": 30.0,
   "recipient_ids": [
-    "226077"
+    "1579219"
   ],
   "level_recipients": {
     "1": [
-      "226077"
+      "1579219"
     ],
     "2": [],
     "3": []
@@ -14,5 +14,6 @@
   "enabled": false,
   "multi_level_enabled": false,
   "max_transfer_level": 2,
-  "use_user_manager_recipients": true
+  "use_user_manager_recipients": true,
+  "transfer_target_mode": "system_recipients"
 }

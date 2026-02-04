@@ -549,11 +549,11 @@ class XimengAutomation:
             Returns:
                 bool: 是否成功检测并点击
             """
-            # 1. 尝试YOLO（直接使用按钮名称，不添加后缀）
+            # 1. 尝试YOLO
             button_pos = await self.integrated_detector.find_button_yolo(
                 device_id, 
                 model_name,
-                button_name,  # 直接使用按钮名称
+                f'{button_name}按钮',
                 conf_threshold=0.3
             )
             
