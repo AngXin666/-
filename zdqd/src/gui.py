@@ -3193,18 +3193,6 @@ class AutomationGUI:
         except Exception as e:
             self.root.after(0, lambda: self._log(f"保存异常截图失败: {e}"))
     
-    def _open_multi_emulator_config(self):
-        """打开多开模拟器配置窗口"""
-        # 检查窗口是否已打开
-        if hasattr(self, '_multi_emulator_window') and self._multi_emulator_window and self._multi_emulator_window.winfo_exists():
-            # 窗口已存在，激活它
-            self._multi_emulator_window.lift()
-            self._multi_emulator_window.focus_force()
-            return
-        
-        # 创建新窗口
-        self._multi_emulator_window = MultiEmulatorConfigWindow(self.root, self._log)
-    
     def _open_transfer_config(self):
         """打开转账配置窗口"""
         # 检查窗口是否已打开
