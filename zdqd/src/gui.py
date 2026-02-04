@@ -3657,6 +3657,9 @@ class MultiEmulatorConfigWindow:
         self.window.geometry("1000x700")
         self.window.resizable(True, True)
         
+        # 先隐藏窗口，避免白屏
+        self.window.withdraw()
+        
         # 设置窗口关闭协议
         self.window.protocol("WM_DELETE_WINDOW", self._on_closing)
         
@@ -3668,6 +3671,11 @@ class MultiEmulatorConfigWindow:
         
         # 加载配置到界面
         self._load_config_to_ui()
+        
+        # 所有内容准备完成后再显示窗口
+        self.window.deiconify()
+        self.window.lift()
+        self.window.focus_force()
     
     def _load_config(self):
         """加载配置文件"""
@@ -4481,6 +4489,9 @@ class TransferConfigWindow:
         self.window.geometry("800x700")
         self.window.resizable(True, True)
         
+        # 先隐藏窗口，避免白屏
+        self.window.withdraw()
+        
         # 设置窗口关闭协议
         self.window.protocol("WM_DELETE_WINDOW", self._on_closing)
         
@@ -4493,6 +4504,11 @@ class TransferConfigWindow:
         
         # 居中显示（不使用grab_set，允许主窗口操作）
         self.window.transient(parent)
+        
+        # 所有内容准备完成后再显示窗口
+        self.window.deiconify()
+        self.window.lift()
+        self.window.focus_force()
     
     def _load_accounts(self):
         """加载账号列表（从数据库）"""
@@ -5265,6 +5281,9 @@ class HistoryResultsWindow:
         self.window.geometry("1200x700")
         self.window.resizable(True, True)
         
+        # 先隐藏窗口，避免白屏
+        self.window.withdraw()
+        
         # 设置窗口关闭协议
         self.window.protocol("WM_DELETE_WINDOW", self._on_closing)
         
@@ -5281,6 +5300,11 @@ class HistoryResultsWindow:
         
         # 居中显示（不使用grab_set，允许主窗口操作）
         self.window.transient(parent)
+        
+        # 所有内容准备完成后再显示窗口
+        self.window.deiconify()
+        self.window.lift()
+        self.window.focus_force()
     
     def _load_results(self, date_filter=None):
         """加载历史结果（直接从数据库读取）

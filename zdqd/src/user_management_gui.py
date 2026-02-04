@@ -28,6 +28,9 @@ class UserManagementDialog:
         self.dialog.geometry("1400x700")
         self.dialog.resizable(True, True)
         
+        # 先隐藏窗口，避免白屏
+        self.dialog.withdraw()
+        
         # 居中显示
         self._center_window()
         
@@ -39,6 +42,11 @@ class UserManagementDialog:
         
         # 加载数据
         self._refresh_user_list()
+        
+        # 所有内容准备完成后再显示窗口
+        self.dialog.deiconify()
+        self.dialog.lift()
+        self.dialog.focus_force()
     
     def _center_window(self):
         """将窗口居中显示"""
@@ -1492,11 +1500,19 @@ class BatchAddAccountsDialog:
         self.dialog.geometry("700x700")
         self.dialog.resizable(True, True)
         
+        # 先隐藏窗口，避免白屏
+        self.dialog.withdraw()
+        
         # 居中显示
         self._center_window()
         
         # 创建界面
         self._create_widgets()
+        
+        # 所有内容准备完成后再显示窗口
+        self.dialog.deiconify()
+        self.dialog.lift()
+        self.dialog.focus_force()
     
     def _center_window(self):
         """将窗口居中显示"""

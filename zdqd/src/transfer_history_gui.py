@@ -22,12 +22,20 @@ class TransferHistoryGUI:
         self.window.title("转账历史记录")
         self.window.geometry("1000x700")
         
+        # 先隐藏窗口，避免白屏
+        self.window.withdraw()
+        
         # 导入转账历史管理器
         from .transfer_history import get_transfer_history
         self.history_manager = get_transfer_history()
         
         self._create_widgets()
         self._load_data()
+        
+        # 所有内容准备完成后再显示窗口
+        self.window.deiconify()
+        self.window.lift()
+        self.window.focus_force()
     
     def _create_widgets(self):
         """创建界面组件"""
