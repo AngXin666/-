@@ -781,76 +781,601 @@ class UserManagementDialog:
     
     def _batch_add_accounts_action(self):
         """批量添加账号到账号文件的实际操作"""
-        # 这里复用 BatchAddAccountsDialog 的 _add_accounts 方法逻辑
-        # 为了简化，我们直接调用一个临时的 BatchAddAccountsDialog 实例的方法
-        # 但使用当前窗口的文本框和变量
-        
         # 获取账号文本
         text = self.batch_accounts_text.get("1.0", tk.END).strip()
         if not text:
             messagebox.showwarning("提示", "请输入账号信息", parent=self.dialog)
             return
         
-        # 获取选中的管理员
-        selected_owner = self.batch_owner_var.get()
-        selected_user_id = None
+        # 获取账号文件路径（从配置中读取）
+        from .config import ConfigLoader
+        config = ConfigLoader().load()
+        accounts_file = config.accounts_file
         
-        if selected_owner != "不分配":
-            # 从下拉框选项中提取用户ID
-            for i, user in enumerate(self.batch_user_list):
-                display_text = f"{user.user_name} (ID: {user.user_id})"
-                if display_text == selected_owner:
-                    selected_user_id = user.user_id
-                    break
+        if not accounts_file:
+            messagebox.showerror("错误", "未配置账号文件路径", parent=self.dialog)
+            return
         
-        # 创建临时的批量添加对话框实例来处理逻辑
-        temp_dialog = BatchAddAccountsDialog.__new__(BatchAddAccountsDialog)
-        temp_dialog.parent = self.dialog
-        temp_dialog.log = self.log
-        temp_dialog.user_manager = self.user_manager
-        temp_dialog.dialog = self.dialog  # 使用主窗口作为父窗口
-        temp_dialog.accounts_text = self.batch_accounts_text
-        temp_dialog.owner_var = self.batch_owner_var
-        temp_dialog.user_list = self.batch_user_list
-        temp_dialog.stats_var = self.batch_stats_var
-        temp_dialog.refresh_callback = None  # 不需要刷新回调
+        # 解析账号（使用多线程加速）
+        import threading
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         
-        # 调用添加账号方法
-        temp_dialog._add_accounts()
+        lines = text.split('\n')
+        new_accounts = []
+        invalid_lines = []
+        parse_lock = threading.Lock()
         
-        # 刷新用户列表（更新账号数量）
-        self._refresh_user_list()
+        def parse_line(line_data):
+            """解析单行账号（线程安全）"""
+            line_num, line = line_data
+            line = line.strip()
+            
+            # 跳过空行和注释
+            if not line or line.startswith('#'):
+                return None
+            
+            # 如果只有手机号（已有账号），跳过
+            if line.isdigit() and len(line) == 11:
+                return None
+            
+            # 检查格式
+            if '----' not in line:
+                return ('error', line_num, "格式错误（缺少----分隔符）")
+            
+            parts = line.split('----')
+            
+            # 标准格式：手机号----密码（每行一个账号）
+            if len(parts) != 2:
+                return ('error', line_num, "格式错误（应为：手机号----密码）")
+            
+            phone = parts[0].strip()
+            password = parts[1].strip()
+            
+            if not phone.isdigit() or len(phone) != 11:
+                return ('error', line_num, "手机号格式错误")
+            
+            if not password:
+                return ('error', line_num, "密码为空")
+            
+            return ('success', line_num, phone, password)
+        
+        # 使用线程池并行解析（最多8个线程）
+        max_workers = min(8, len(lines))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # 提交所有解析任务
+            line_data = [(i+1, line) for i, line in enumerate(lines)]
+            futures = {executor.submit(parse_line, data): data for data in line_data}
+            
+            # 收集结果
+            for future in as_completed(futures):
+                result = future.result()
+                if result is None:
+                    continue
+                
+                if result[0] == 'error':
+                    _, line_num, error_msg = result
+                    with parse_lock:
+                        invalid_lines.append(f"第{line_num}行：{error_msg}")
+                elif result[0] == 'success':
+                    _, line_num, phone, password = result
+                    with parse_lock:
+                        new_accounts.append((phone, password, line_num))
+        
+        if not new_accounts:
+            if invalid_lines:
+                messagebox.showerror("错误", "没有有效的账号\n\n" + "\n".join(invalid_lines[:5]), parent=self.dialog)
+            return
+        
+        # 去重：检查输入中的重复账号
+        seen_phones = {}  # {phone: (password, line_num)}
+        unique_accounts = []
+        input_duplicates = []  # 输入中的重复账号
+        
+        for phone, password, line_num in new_accounts:
+            if phone in seen_phones:
+                # 发现重复
+                existing_password, existing_line = seen_phones[phone]
+                if existing_password == password:
+                    # 密码相同，记录为重复
+                    input_duplicates.append(f"第{line_num}行：手机号 {phone} 重复（与第{existing_line}行相同）")
+                else:
+                    # 密码不同，使用最后出现的密码
+                    input_duplicates.append(f"第{line_num}行：手机号 {phone} 重复但密码不同（将使用此密码）")
+                    # 更新为最新的密码
+                    seen_phones[phone] = (password, line_num)
+                    # 从unique_accounts中移除旧的，添加新的
+                    unique_accounts = [(p, pw) for p, pw in unique_accounts if p != phone]
+                    unique_accounts.append((phone, password))
+            else:
+                seen_phones[phone] = (password, line_num)
+                unique_accounts.append((phone, password))
+        
+        # 显示无效行和重复警告
+        warnings = []
+        if invalid_lines:
+            warnings.append(f"格式错误: {len(invalid_lines)} 行")
+        if input_duplicates:
+            warnings.append(f"输入重复: {len(input_duplicates)} 行")
+        
+        if warnings:
+            warning_message = "发现以下问题：\n\n"
+            
+            if invalid_lines:
+                warning_message += "【格式错误】\n" + "\n".join(invalid_lines[:3])
+                if len(invalid_lines) > 3:
+                    warning_message += f"\n... 还有 {len(invalid_lines) - 3} 行\n"
+                warning_message += "\n"
+            
+            if input_duplicates:
+                warning_message += "【输入重复】\n" + "\n".join(input_duplicates[:3])
+                if len(input_duplicates) > 3:
+                    warning_message += f"\n... 还有 {len(input_duplicates) - 3} 行\n"
+                warning_message += "\n"
+            
+            warning_message += f"是否继续添加 {len(unique_accounts)} 个有效账号？"
+            
+            result = messagebox.askyesno("警告", warning_message, parent=self.dialog)
+            if not result:
+                return
+        
+        # 使用去重后的账号列表
+        new_accounts = unique_accounts
+        
+        # 使用加密账号文件管理器读取现有账号（检查重复）
+        from pathlib import Path
+        try:
+            from .encrypted_accounts_file import EncryptedAccountsFile
+        except ImportError:
+            try:
+                from encrypted_accounts_file import EncryptedAccountsFile
+            except ImportError:
+                from src.encrypted_accounts_file import EncryptedAccountsFile
+        
+        encrypted_file = EncryptedAccountsFile(accounts_file)
+        existing_accounts_dict = {}  # {phone: (password, owner)}
+        
+        try:
+            existing_accounts_list = encrypted_file.read_accounts()
+            for item in existing_accounts_list:
+                if len(item) >= 2:
+                    phone = item[0]
+                    password = item[1]
+                    owner = item[2] if len(item) > 2 else None
+                    existing_accounts_dict[phone] = (password, owner)
+        except Exception as e:
+            print(f"[批量添加] 读取账号文件失败: {e}")
+            # 如果读取失败，继续（可能是新文件）
+        
+        # 分类账号：新增、更新、重复（密码相同）
+        accounts_to_add = []  # 新增的账号
+        accounts_to_update = []  # 需要更新密码的账号
+        duplicate_accounts = []  # 完全重复的账号（手机号和密码都相同）
+        
+        for phone, password in new_accounts:
+            if phone in existing_accounts_dict:
+                existing_password, existing_owner = existing_accounts_dict[phone]
+                if existing_password == password:
+                    # 密码相同，完全重复
+                    duplicate_accounts.append(phone)
+                else:
+                    # 密码不同，需要更新
+                    accounts_to_update.append((phone, password, existing_owner))
+            else:
+                # 新账号
+                accounts_to_add.append((phone, password))
+        
+        # 使用加密账号文件管理器处理账号
+        try:
+            # 确保目录存在
+            Path(accounts_file).parent.mkdir(parents=True, exist_ok=True)
+            
+            # 处理更新密码的账号（先删除旧的，再添加新的）
+            if accounts_to_update:
+                # 读取所有现有账号
+                all_accounts = encrypted_file.read_accounts()
+                
+                # 创建更新映射
+                update_map = {phone: (password, owner) for phone, password, owner in accounts_to_update}
+                
+                # 更新账号列表
+                updated_accounts = []
+                for item in all_accounts:
+                    phone = item[0]
+                    if phone in update_map:
+                        # 更新密码，保留管理员
+                        new_password, existing_owner = update_map[phone]
+                        if existing_owner:
+                            updated_accounts.append((phone, new_password, existing_owner))
+                        else:
+                            updated_accounts.append((phone, new_password))
+                    else:
+                        # 保持不变
+                        updated_accounts.append(item)
+                
+                # 写回文件
+                if encrypted_file.write_accounts(updated_accounts):
+                    self.log(f"✓ 成功更新 {len(accounts_to_update)} 个账号的密码（已加密）")
+                else:
+                    messagebox.showerror("错误", "更新账号密码失败", parent=self.dialog)
+                    return
+            
+            # 追加新账号（自动加密）
+            if accounts_to_add:
+                if encrypted_file.append_accounts(accounts_to_add):
+                    self.log(f"✓ 成功添加 {len(accounts_to_add)} 个账号到账号文件（已加密）")
+                else:
+                    messagebox.showerror("错误", "写入账号文件失败", parent=self.dialog)
+                    return
+            
+            if duplicate_accounts:
+                self.log(f"⚠️ 跳过 {len(duplicate_accounts)} 个完全重复的账号")
+            
+            # === 自动分配管理员 ===
+            owner_selection = self.batch_owner_var.get()
+            assigned_count = 0
+            
+            if owner_selection != "不分配":
+                # 获取选中的用户
+                selected_user = None
+                for user in self.batch_user_list:
+                    display_text = f"{user.user_name} (ID: {user.user_id})"
+                    if display_text == owner_selection:
+                        selected_user = user
+                        break
+                
+                if selected_user:
+                    # 只为新增的账号分配管理员（更新密码的账号保留原管理员）
+                    phones_to_assign = [phone for phone, _ in accounts_to_add]
+                    if phones_to_assign:
+                        assigned_count = self.user_manager.batch_assign_accounts(phones_to_assign, selected_user.user_id)
+                        self.log(f"✓ 已为 {assigned_count} 个新账号分配管理员: {selected_user.user_name}")
+            
+            # 显示成功消息
+            success_message = "操作完成\n\n"
+            
+            if accounts_to_add:
+                success_message += f"新增账号: {len(accounts_to_add)} 个\n"
+            
+            if accounts_to_update:
+                success_message += f"更新密码: {len(accounts_to_update)} 个\n"
+            
+            if duplicate_accounts:
+                success_message += f"跳过重复: {len(duplicate_accounts)} 个\n"
+            
+            if assigned_count > 0:
+                success_message += f"\n已为新账号分配管理员: {owner_selection}\n"
+            
+            # 确保对话框置顶
+            self.dialog.lift()
+            self.dialog.focus_force()
+            messagebox.showinfo("成功", success_message, parent=self.dialog)
+            
+            # 刷新用户列表（更新账号数量）
+            self._refresh_user_list()
+            
+        except Exception as e:
+            messagebox.showerror("错误", f"写入账号文件失败: {e}", parent=self.dialog)
     
     def _batch_delete_accounts(self):
         """删除选中的账号"""
-        # 创建临时实例来处理删除逻辑
-        temp_dialog = BatchAddAccountsDialog.__new__(BatchAddAccountsDialog)
-        temp_dialog.parent = self.dialog
-        temp_dialog.log = self.log
-        temp_dialog.user_manager = self.user_manager
-        temp_dialog.dialog = self.dialog
-        temp_dialog.accounts_text = self.batch_accounts_text
-        temp_dialog.stats_var = self.batch_stats_var
-        temp_dialog.refresh_callback = None
+        # 获取文本框中的内容
+        text = self.batch_accounts_text.get("1.0", tk.END).strip()
+        if not text:
+            messagebox.showwarning("提示", "请先输入要删除的账号", parent=self.dialog)
+            return
         
-        temp_dialog._delete_accounts()
+        # 解析要删除的账号
+        phones_to_delete = []
+        for line in text.split('\n'):
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            
+            # 如果只有手机号（已有账号）
+            if line.isdigit() and len(line) == 11:
+                phones_to_delete.append(line)
+                continue
+            
+            if '----' not in line:
+                continue
+            
+            # 标准格式
+            parts = line.split('----', 1)
+            phone = parts[0].strip()
+            if phone.isdigit() and len(phone) == 11:
+                phones_to_delete.append(phone)
+        
+        if not phones_to_delete:
+            messagebox.showwarning("提示", "没有有效的账号可删除", parent=self.dialog)
+            return
+        
+        # 确认删除
+        result = messagebox.askyesno(
+            "确认删除",
+            f"确定要删除 {len(phones_to_delete)} 个账号吗？\n\n" +
+            "删除操作将：\n" +
+            "1. 从账号文件中删除\n" +
+            "2. 从数据库中删除所有记录\n" +
+            "3. 删除登录缓存文件\n" +
+            "4. 删除账号信息缓存\n\n" +
+            "此操作不可恢复！",
+            parent=self.dialog
+        )
+        
+        if not result:
+            return
+        
+        # 获取账号文件路径
+        from .config import ConfigLoader
+        config = ConfigLoader().load()
+        accounts_file = config.accounts_file
+        
+        if not accounts_file:
+            messagebox.showerror("错误", "未配置账号文件路径", parent=self.dialog)
+            return
+        
+        from pathlib import Path
+        
+        # 使用加密账号文件管理器
+        try:
+            from .encrypted_accounts_file import EncryptedAccountsFile
+        except ImportError:
+            try:
+                from encrypted_accounts_file import EncryptedAccountsFile
+            except ImportError:
+                from src.encrypted_accounts_file import EncryptedAccountsFile
+        
+        encrypted_file = EncryptedAccountsFile(accounts_file)
+        
+        # 删除账号（自动加密）
+        try:
+            if encrypted_file.delete_accounts(phones_to_delete):
+                self.log(f"✓ 已从账号文件删除 {len(phones_to_delete)} 个账号（已加密）")
+            else:
+                messagebox.showerror("错误", "删除账号失败", parent=self.dialog)
+                return
+        except Exception as e:
+            messagebox.showerror("错误", f"删除账号失败: {e}", parent=self.dialog)
+            return
+        
+        # 从数据库删除
+        from .local_db import LocalDatabase
+        db = LocalDatabase()
+        deleted_db_count = 0
+        
+        for phone in phones_to_delete:
+            try:
+                # 删除历史记录
+                conn = db._get_connection()
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM history_records WHERE phone = ?", (phone,))
+                conn.commit()
+                conn.close()
+                deleted_db_count += 1
+            except Exception as e:
+                self.log(f"⚠️ 删除数据库记录失败 ({phone}): {e}")
+        
+        self.log(f"✓ 已从数据库删除 {deleted_db_count} 个账号的记录")
+        
+        # 删除登录缓存
+        from .login_cache_manager import LoginCacheManager
+        from .adb_bridge import ADBBridge
+        adb = ADBBridge()
+        cache_manager = LoginCacheManager(adb)
+        deleted_cache_count = 0
+        
+        for phone in phones_to_delete:
+            try:
+                if cache_manager.delete_cache(phone):
+                    deleted_cache_count += 1
+            except Exception as e:
+                self.log(f"⚠️ 删除登录缓存失败 ({phone}): {e}")
+        
+        self.log(f"✓ 已删除 {deleted_cache_count} 个账号的登录缓存")
+        
+        # 删除账号信息缓存
+        from .account_cache import get_account_cache
+        account_cache = get_account_cache()
+        deleted_account_cache_count = 0
+        
+        for phone in phones_to_delete:
+            try:
+                account_cache.clear(phone)
+                deleted_account_cache_count += 1
+            except Exception as e:
+                self.log(f"⚠️ 删除账号缓存失败 ({phone}): {e}")
+        
+        self.log(f"✓ 已删除 {deleted_account_cache_count} 个账号的信息缓存")
+        
+        # 从用户管理器中移除账号分配
+        removed_assignments = 0
+        for phone in phones_to_delete:
+            try:
+                if self.user_manager.unassign_account(phone):
+                    removed_assignments += 1
+            except Exception as e:
+                self.log(f"⚠️ 移除账号分配失败 ({phone}): {e}")
+        
+        if removed_assignments > 0:
+            self.log(f"✓ 已移除 {removed_assignments} 个账号的管理员分配")
+        
+        # 显示成功消息
+        # 确保对话框置顶
+        self.dialog.lift()
+        self.dialog.focus_force()
+        messagebox.showinfo(
+            "删除成功",
+            f"已成功删除 {len(phones_to_delete)} 个账号\n\n" +
+            f"- 账号文件: {len(phones_to_delete)} 个\n" +
+            f"- 数据库记录: {deleted_db_count} 个\n" +
+            f"- 登录缓存: {deleted_cache_count} 个\n" +
+            f"- 账号缓存: {deleted_account_cache_count} 个\n" +
+            f"- 管理员分配: {removed_assignments} 个",
+            parent=self.dialog
+        )
+        
+        # 清空文本框
+        self.batch_accounts_text.delete("1.0", tk.END)
+        self._on_batch_text_changed()
         
         # 刷新用户列表
         self._refresh_user_list()
     
     def _batch_clear_all_accounts(self):
         """清空所有账号"""
-        # 创建临时实例来处理清空逻辑
-        temp_dialog = BatchAddAccountsDialog.__new__(BatchAddAccountsDialog)
-        temp_dialog.parent = self.dialog
-        temp_dialog.log = self.log
-        temp_dialog.user_manager = self.user_manager
-        temp_dialog.dialog = self.dialog
-        temp_dialog.accounts_text = self.batch_accounts_text
-        temp_dialog.stats_var = self.batch_stats_var
-        temp_dialog.refresh_callback = None
+        # 确认清空
+        result = messagebox.askyesno(
+            "确认清空",
+            "确定要清空所有账号吗？\n\n" +
+            "此操作将删除账号文件中的所有账号！\n\n" +
+            "此操作不可恢复！",
+            icon='warning',
+            parent=self.dialog
+        )
         
-        temp_dialog._clear_all_accounts()
+        if not result:
+            return
+        
+        # 询问是否清理缓存
+        clear_cache = messagebox.askyesno(
+            "清理缓存",
+            "是否同时清理所有账号的缓存？\n\n" +
+            "包括：\n" +
+            "- 登录缓存文件\n" +
+            "- 账号信息缓存\n" +
+            "- 数据库记录\n\n" +
+            "建议选择'是'以彻底清理",
+            parent=self.dialog
+        )
+        
+        # 获取账号文件路径
+        from .config import ConfigLoader
+        config = ConfigLoader().load()
+        accounts_file = config.accounts_file
+        
+        if not accounts_file:
+            messagebox.showerror("错误", "未配置账号文件路径", parent=self.dialog)
+            return
+        
+        from pathlib import Path
+        
+        # 使用加密账号文件管理器
+        try:
+            from .encrypted_accounts_file import EncryptedAccountsFile
+        except ImportError:
+            try:
+                from encrypted_accounts_file import EncryptedAccountsFile
+            except ImportError:
+                from src.encrypted_accounts_file import EncryptedAccountsFile
+        
+        encrypted_file = EncryptedAccountsFile(accounts_file)
+        
+        # 如果需要清理缓存，先读取所有账号
+        all_phones = []
+        if clear_cache:
+            try:
+                accounts_list = encrypted_file.read_accounts()
+                for item in accounts_list:
+                    if len(item) >= 1:
+                        all_phones.append(item[0])
+            except Exception as e:
+                print(f"[清空账号] 读取账号失败: {e}")
+        
+        # 清空账号文件（自动加密）
+        try:
+            if encrypted_file.clear_accounts():
+                self.log(f"✓ 已清空账号文件（已加密）")
+            else:
+                messagebox.showerror("错误", "清空账号文件失败", parent=self.dialog)
+                return
+        except Exception as e:
+            messagebox.showerror("错误", f"清空账号文件失败: {e}", parent=self.dialog)
+            return
+        
+        # 清理缓存
+        if clear_cache and all_phones:
+            self.log(f"正在清理 {len(all_phones)} 个账号的缓存...")
+            
+            # 删除数据库记录
+            from .local_db import LocalDatabase
+            db = LocalDatabase()
+            deleted_db_count = 0
+            
+            for phone in all_phones:
+                try:
+                    conn = db._get_connection()
+                    cursor = conn.cursor()
+                    cursor.execute("DELETE FROM history_records WHERE phone = ?", (phone,))
+                    conn.commit()
+                    conn.close()
+                    deleted_db_count += 1
+                except Exception as e:
+                    self.log(f"⚠️ 删除数据库记录失败 ({phone}): {e}")
+            
+            self.log(f"✓ 已从数据库删除 {deleted_db_count} 个账号的记录")
+            
+            # 删除登录缓存
+            from .login_cache_manager import LoginCacheManager
+            from .adb_bridge import ADBBridge
+            adb = ADBBridge()
+            cache_manager = LoginCacheManager(adb)
+            deleted_cache_count = 0
+            
+            for phone in all_phones:
+                try:
+                    if cache_manager.delete_cache(phone):
+                        deleted_cache_count += 1
+                except Exception as e:
+                    self.log(f"⚠️ 删除登录缓存失败 ({phone}): {e}")
+            
+            self.log(f"✓ 已删除 {deleted_cache_count} 个账号的登录缓存")
+            
+            # 删除账号信息缓存
+            from .account_cache import get_account_cache
+            account_cache = get_account_cache()
+            
+            try:
+                account_cache.clear()  # 清空所有缓存
+                self.log(f"✓ 已清空所有账号信息缓存")
+            except Exception as e:
+                self.log(f"⚠️ 清空账号缓存失败: {e}")
+            
+            # 清空所有用户的账号分配
+            try:
+                for user in self.user_manager.get_all_users():
+                    assigned_phones = self.user_manager.get_user_accounts(user.user_id)
+                    for phone in assigned_phones:
+                        self.user_manager.unassign_account(phone)
+                self.log(f"✓ 已清空所有管理员的账号分配")
+            except Exception as e:
+                self.log(f"⚠️ 清空账号分配失败: {e}")
+        
+        # 显示成功消息
+        # 确保对话框置顶
+        self.dialog.lift()
+        self.dialog.focus_force()
+        if clear_cache:
+            messagebox.showinfo(
+                "清空成功",
+                f"已成功清空所有账号\n\n" +
+                f"- 账号文件: 已清空\n" +
+                f"- 数据库记录: 已删除\n" +
+                f"- 登录缓存: 已删除\n" +
+                f"- 账号缓存: 已清空\n" +
+                f"- 管理员分配: 已清空",
+                parent=self.dialog
+            )
+        else:
+            messagebox.showinfo(
+                "清空成功",
+                "已成功清空账号文件\n\n" +
+                "缓存文件未清理，如需清理请重新执行清空操作",
+                parent=self.dialog
+            )
+        
+        # 清空文本框
+        self.batch_accounts_text.delete("1.0", tk.END)
+        self._on_batch_text_changed()
         
         # 刷新用户列表
         self._refresh_user_list()
