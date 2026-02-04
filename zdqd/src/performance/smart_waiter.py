@@ -16,6 +16,12 @@ class SmartWaiter:
     3. 超时只是防止卡死的保护机制，不影响正常检测
     """
     
+    def __init__(self):
+        """初始化智能等待器"""
+        # 获取静默日志记录器（用于详细调试信息）
+        from ..logger import get_silent_logger
+        self._debug_logger = get_silent_logger()
+    
     async def wait_for_page_change(
         self,
         device_id: str,
@@ -70,13 +76,13 @@ class SmartWaiter:
         # 检测器类型
         detector_type = type(detector).__name__
         
-        # 调试日志：输出检测器类型
-        if log_callback:
-            log_callback(f"[智能等待器] 检测器类型: {detector_type}")
+        # 详细日志：记录检测器类型（仅写入文件）
+        self._debug_logger.debug(f"[SmartWaiter] 检测器类型: {detector_type}")
         
         # 开始等待前，先清除缓存，确保第一次检测就是最新状态
         if detector_type == 'PageDetectorIntegrated' and hasattr(detector, '_detection_cache'):
             detector._detection_cache.clear(device_id)
+            self._debug_logger.debug(f"[SmartWaiter] 已清除检测缓存")
         
         # 自适应轮询间隔
         current_poll_interval = poll_interval
@@ -105,8 +111,15 @@ class SmartWaiter:
             if current_state != last_state:
                 state_changes += 1
                 if log_callback and last_state is not None:
+                    # 客户端：简洁信息
+                    log_callback(f"页面变化: {last_state.value} → {current_state.value}")
+                    
+                    # 详细日志：包含耗时和置信度（仅写入文件）
                     elapsed = asyncio.get_event_loop().time() - start_time
-                    log_callback(f"页面变化: {last_state.value} → {current_state.value} (耗时{elapsed:.2f}秒)")
+                    self._debug_logger.debug(
+                        f"[SmartWaiter] 页面变化: {last_state.value} → {current_state.value} "
+                        f"(耗时{elapsed:.2f}秒, 置信度{current_confidence:.2%})"
+                    )
                 
                 # 重置稳定性计数
                 same_state_count = 1
@@ -135,12 +148,25 @@ class SmartWaiter:
                         # 页面已稳定在期望状态，立即返回
                         elapsed = asyncio.get_event_loop().time() - start_time
                         if log_callback:
-                            log_callback(f"✓ 页面稳定在 {current_state.value}（连续{same_state_count}次，置信度{current_confidence:.2%}），耗时{elapsed:.2f}秒")
+                            # 客户端：简洁信息
+                            log_callback(f"✓ 页面稳定在 {current_state.value}，耗时{elapsed:.2f}秒")
+                        
+                        # 详细日志：包含连续次数和置信度（仅写入文件）
+                        self._debug_logger.debug(
+                            f"[SmartWaiter] ✓ 页面稳定在 {current_state.value} "
+                            f"(连续{same_state_count}次, 置信度{current_confidence:.2%}, 耗时{elapsed:.2f}秒)"
+                        )
                         return result
                     else:
                         # 还需要继续确认
                         if log_callback:
                             log_callback(f"确认中: {current_state.value}（{same_state_count}/{stability_count}次）")
+                        
+                        # 详细日志（仅写入文件）
+                        self._debug_logger.debug(
+                            f"[SmartWaiter] 确认中: {current_state.value} "
+                            f"({same_state_count}/{stability_count}次, 置信度{current_confidence:.2%})"
+                        )
                 else:
                     # 不需要稳定性检测，直接返回
                     elapsed = asyncio.get_event_loop().time() - start_time
@@ -152,9 +178,17 @@ class SmartWaiter:
             elif ignore_loading and current_state == PageState.LOADING:
                 # loading是过渡状态，重置稳定性计数
                 same_state_count = 0
-                if log_callback and total_checks % 10 == 1:  # 每10次打印一次
+                if log_callback and total_checks % 30 == 1:  # 每30次打印一次（约3秒）
                     elapsed = asyncio.get_event_loop().time() - start_time
-                    log_callback(f"页面加载中...（已等待{elapsed:.1f}秒）")
+                    # 客户端：简洁信息
+                    log_callback(f"页面加载中...（{elapsed:.0f}秒）")
+                
+                # 详细日志：每次都记录（仅写入文件）
+                if total_checks % 10 == 1:  # 每10次记录一次
+                    elapsed = asyncio.get_event_loop().time() - start_time
+                    self._debug_logger.debug(
+                        f"[SmartWaiter] 页面加载中 (已等待{elapsed:.1f}秒, 检测{total_checks}次)"
+                    )
             
             # 继续轮询
             await asyncio.sleep(current_poll_interval)
@@ -162,9 +196,17 @@ class SmartWaiter:
         # 超时保护触发
         elapsed = asyncio.get_event_loop().time() - start_time
         if log_callback:
-            log_callback(f"⚠️ 超时保护触发（{elapsed:.1f}秒），共检测{total_checks}次，状态变化{state_changes}次")
-            if last_state:
-                log_callback(f"   最后状态: {last_state.value}（置信度{last_confidence:.2%}）")
+            # 客户端：简洁信息
+            log_callback(f"⚠️ 等待超时（{elapsed:.1f}秒）")
+        
+        # 详细日志：包含统计信息（仅写入文件）
+        self._debug_logger.warning(
+            f"[SmartWaiter] ⚠️ 超时保护触发 (耗时{elapsed:.1f}秒, 检测{total_checks}次, 状态变化{state_changes}次)"
+        )
+        if last_state:
+            self._debug_logger.warning(
+                f"[SmartWaiter] 最后状态: {last_state.value} (置信度{last_confidence:.2%})"
+            )
         
         return None
     

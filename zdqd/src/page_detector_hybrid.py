@@ -31,7 +31,7 @@ class PageDetectorHybrid:
     POPUP_BUTTONS = {
         'user_agreement': (270, 600),      # 服务协议弹窗"同意并接受"（实际测量坐标）
         'user_agreement_alt': (270, 608),  # 服务协议弹窗备用坐标
-        'home_announcement': (270, 690),   # 主页公告弹窗（底部中央按钮）
+        'home_announcement': (265, 637),   # 主页公告弹窗（确认按钮中心，根据标注数据修正）
         'login_error': (436, 557),         # 登录错误确定按钮
         'generic': (270, 600),             # 通用弹窗
     }
@@ -1027,8 +1027,8 @@ class PageDetectorHybrid:
         # 如果是首页公告弹窗，点击弹窗外部关闭（更可靠）
         if popup_type == "home_announcement":
             print(f"    [弹窗] 首页公告弹窗，点击外部区域关闭...")
-            # 点击屏幕顶部区域（弹窗外）
-            await self.adb.tap(device_id, 270, 100)
+            # 点击弹窗外上方空白区域（避开搜索框）
+            await self.adb.tap(device_id, 270, 200)
             await asyncio.sleep(1.0)  # 减少等待时间：2秒 -> 1秒
             
             # 检查是否成功关闭

@@ -142,7 +142,7 @@ class XimengAutomation:
     
     async def handle_startup_flow_integrated(self, device_id: str, log_callback=None, stop_check=None,
                                             package_name: str = "com.ry.xmsc", activity_name: str = None,
-                                            max_retries: int = 3) -> bool:
+                                            max_retries: int = 3, file_logger=None) -> bool:
         """处理应用启动流程 - 使用整合检测器和智能等待器（GPU加速）
         
         优化点：
@@ -161,367 +161,422 @@ class XimengAutomation:
             package_name: 应用包名
             activity_name: Activity名称
             max_retries: 最大重试次数
+            file_logger: 文件日志记录器（用于详细技术日志）
             
         Returns:
             是否成功
         """
         import time
+        from .concise_logger import ConciseLogger
         
-        def log(msg):
-            if log_callback:
-                log_callback(msg)
+        # 创建简洁日志记录器（GUI日志 + 文件日志）
+        if log_callback:
+            class GuiLogger:
+                def __init__(self, callback):
+                    self.callback = callback
+                def info(self, msg):
+                    self.callback(msg)
+                def error(self, msg):
+                    self.callback(msg)
+            gui_logger_obj = GuiLogger(log_callback)
+        else:
+            gui_logger_obj = None
+        
+        concise = ConciseLogger(
+            module_name="startup",
+            gui_logger=gui_logger_obj,
+            file_logger=file_logger
+        )
         
         def should_stop():
             if stop_check:
                 return stop_check()
             return False
         
-        # 记录总开始时间
+        # 记录总开始时间（仅文件日志）
         total_start_time = time.time()
-        log(f"\n{'='*60}")
-        log(f"[时间记录] 启动流程开始 - {time.strftime('%H:%M:%S')}")
-        log(f"{'='*60}")
+        if file_logger:
+            file_logger.info(f"启动流程开始 - {time.strftime('%H:%M:%S')}")
+        
+        # 简洁日志：步骤1 - 启动应用
+        concise.step(1, "启动应用")
         
         # 使用已初始化的整合检测器（GPU加速深度学习）
-        log("[GPU加速] 使用已初始化的深度学习检测器")
         detector = self.integrated_detector
-        log("")
+        if file_logger:
+            file_logger.debug("使用已初始化的深度学习检测器（GPU加速）")
         
         for retry in range(max_retries):
             if should_stop():
-                log("用户请求停止")
+                if file_logger:
+                    file_logger.info("用户请求停止")
                 return False
             
             if retry > 0:
-                log(f"⚠️ 第 {retry + 1} 次尝试启动应用...")
+                if file_logger:
+                    file_logger.info(f"第 {retry + 1} 次尝试启动应用")
                 
                 # 停止应用
                 await self.adb.stop_app(device_id, package_name)
                 await asyncio.sleep(1)
                 
                 # 清理缓存
-                log("清理应用缓存...")
                 result = await self.adb.shell(device_id, f"pm clear-cache {package_name}")
                 if "Unknown" in result or "Error" in result:
                     result = await self.adb.shell(device_id, f"rm -rf /data/data/{package_name}/cache/*")
-                log(f"清理结果: {result.strip() if result.strip() else '成功'}")
+                if file_logger:
+                    file_logger.debug(f"清理缓存结果: {result.strip() if result.strip() else '成功'}")
                 
                 # 重新启动应用
                 await asyncio.sleep(1)
                 success = await self.adb.start_app(device_id, package_name, activity_name)
-                log(f"启动{'成功' if success else '失败'}")
+                if file_logger:
+                    file_logger.debug(f"启动{'成功' if success else '失败'}")
                 
-                # 智能等待应用启动（替换固定等待3秒）
-                log("[智能等待] 等待应用启动...")
+                # 智能等待应用启动
                 await asyncio.sleep(1)  # 最小等待，让应用开始启动
             else:
                 # 第一次启动
-                log("[GPU加速] 应用已启动，开始智能检测...")
+                if file_logger:
+                    file_logger.debug("应用已启动，开始智能检测")
             
             # 主循环：智能检测和处理页面
             max_wait_time = 60
             start_time = asyncio.get_event_loop().time()
             
-            log(f"\n{'='*60}")
-            log(f"开始智能启动流程检测（只检测5个启动相关页面）")
-            log(f"{'='*60}")
+            if file_logger:
+                file_logger.debug("开始智能启动流程检测")
             
             while asyncio.get_event_loop().time() - start_time < max_wait_time:
                 if should_stop():
-                    log("用户请求停止")
+                    if file_logger:
+                        file_logger.info("用户请求停止")
                     return False
                 
-                # 使用深度学习检测器检测当前页面（GPU加速，只检测启动相关页面）
+                # 使用深度学习检测器检测当前页面（GPU加速）
                 detect_start = time.time()
-                
-                # 定义启动流程需要检测的页面类别
-                startup_pages = [
-                    PageState.STARTUP_POPUP,  # 启动服务弹窗
-                    PageState.AD,              # 广告页
-                    PageState.LOADING,         # 加载页
-                    PageState.HOME_NOTICE,     # 首页广告
-                    PageState.HOME,            # 首页
-                    PageState.LOGIN,           # 登录页（可能直接到登录）
-                    PageState.PROFILE_LOGGED,  # 个人页（可能直接到个人页）
-                    PageState.LAUNCHER         # Android桌面
-                ]
                 
                 result = await detector.detect_page(device_id, use_cache=True, detect_elements=False)
                 detect_time = time.time() - detect_start
                 elapsed = asyncio.get_event_loop().time() - start_time
-                log(f"[{elapsed:.1f}s] {result.state.value} (置信度: {result.confidence:.2%}, 检测耗时: {detect_time*1000:.2f}ms)")
+                
+                # 详细日志：记录检测结果（仅文件日志）
+                if file_logger:
+                    file_logger.debug(
+                        f"[{elapsed:.1f}s] {result.state.value} "
+                        f"(置信度: {result.confidence:.2%}, 检测耗时: {detect_time*1000:.2f}ms)"
+                    )
                 
                 # 检查是否已到达目标页面（启动流程只检测到首页即可）
                 if result.state == PageState.HOME:
                     total_time = time.time() - total_start_time
-                    log(f"\n{'='*60}")
-                    log(f"[时间记录] ✓ 启动流程完成")
-                    log(f"[时间记录] 到达页面: {result.state.value}")
-                    log(f"[时间记录] 总耗时: {int(total_time)}秒")
-                    log(f"[时间记录] 完成时间: {time.strftime('%H:%M:%S')}")
-                    log(f"{'='*60}\n")
+                    
+                    # 简洁日志：到达首页
+                    concise.success("到达首页")
+                    
+                    # 详细日志（仅文件日志）
+                    if file_logger:
+                        file_logger.info(
+                            f"启动流程完成 - 到达页面: {result.state.value}, "
+                            f"总耗时: {int(total_time)}秒, 完成时间: {time.strftime('%H:%M:%S')}"
+                        )
                     return True
                 
                 # 如果到达登录页或个人页，说明启动流程异常（应该到首页）
                 if result.state in [PageState.PROFILE_LOGGED, PageState.PROFILE, PageState.LOGIN]:
-                    log(f"⚠️ 启动流程异常：到达 {result.state.value}，预期应该到达首页")
-                    log(f"⚠️ 可能是缓存登录或其他原因，继续等待...")
+                    if file_logger:
+                        file_logger.warning(
+                            f"启动流程异常：到达 {result.state.value}，预期应该到达首页，继续等待"
+                        )
                     await asyncio.sleep(0.5)
                     continue
                 
                 # 处理Android桌面
                 if result.state == PageState.LAUNCHER:
                     step_start = time.time()
-                    log("检测到Android桌面，启动应用...")
+                    if file_logger:
+                        file_logger.debug("检测到Android桌面，启动应用")
+                    
                     await self.adb.start_app(device_id, package_name, activity_name)
                     
-                    # 智能等待应用启动（替换固定等待3秒）
-                    log("[智能等待] 等待应用启动...")
+                    # 智能等待应用启动
                     wait_start = time.time()
                     from .performance.smart_waiter import wait_for_page
                     result = await wait_for_page(
                         device_id,
                         detector,
                         [PageState.LOADING, PageState.SPLASH, PageState.STARTUP_POPUP, PageState.AD],
-                        log_callback=lambda msg: log(f"  [等待] {msg}")
+                        log_callback=None  # 不传递日志回调，避免显示技术细节
                     )
                     wait_time = time.time() - wait_start
-                    log(f"✓ 应用启动完成 (耗时: {int(time.time() - step_start)}秒, 等待: {int(wait_time)}秒)")
+                    
+                    if file_logger:
+                        file_logger.debug(
+                            f"应用启动完成 (耗时: {int(time.time() - step_start)}秒, 等待: {int(wait_time)}秒)"
+                        )
                     continue
                 
                 # 处理启动页服务弹窗
                 if result.state == PageState.STARTUP_POPUP:
                     step_start = time.time()
-                    log(f"[步骤] 检测到启动页服务弹窗")
                     
-                    log("  [YOLO] 检测并点击'同意'按钮...")
+                    # 简洁日志：关闭服务弹窗
+                    concise.action("关闭服务弹窗")
                     
                     # 使用整合检测器点击元素（YOLO会在这里自动加载）
                     click_start = time.time()
                     success = await detector.click_element(device_id, "同意按钮")
                     click_time = time.time() - click_start
                     
-                    if success:
-                        log(f"  ✓ 成功点击'同意'按钮 (检测+点击耗时: {int(click_time)}秒)")
-                    else:
-                        log(f"  ⚠️ 未找到'同意'按钮，使用固定坐标... (检测耗时: {int(click_time)}秒)")
+                    # 详细日志（仅文件日志）
+                    if file_logger:
+                        if success:
+                            file_logger.debug(f"成功点击'同意'按钮 (检测+点击耗时: {int(click_time)}秒)")
+                        else:
+                            file_logger.debug(f"未找到'同意'按钮，使用固定坐标 (检测耗时: {int(click_time)}秒)")
+                    
+                    if not success:
                         await self.adb.tap(device_id, 270, 600)
                     
-                    # 优化：使用智能等待器等待页面变化（替换固定等待0.5秒）
-                    log("  [智能等待] 等待页面变化...")
+                    # 使用智能等待器等待页面变化
                     from .performance.smart_waiter import wait_for_page
                     wait_result = await wait_for_page(
                         device_id,
                         detector,
                         [PageState.HOME, PageState.AD, PageState.LOADING, PageState.HOME_NOTICE,
                          PageState.PROFILE_LOGGED, PageState.PROFILE, PageState.LOGIN],
-                        log_callback=lambda msg: log(f"    [等待] {msg}")
+                        log_callback=None  # 不传递日志回调
                     )
                     
                     step_time = time.time() - step_start
-                    log(f"[时间记录] 弹窗处理完成 - 总耗时: {int(step_time)}秒")
-                    log("")
+                    if file_logger:
+                        file_logger.debug(f"弹窗处理完成 - 总耗时: {int(step_time)}秒")
                     continue
                 
                 # 处理首页公告弹窗
                 if result.state == PageState.HOME_NOTICE:
                     step_start = time.time()
-                    log(f"[步骤] 检测到首页公告弹窗")
                     
-                    log("  [YOLO] 检测并点击'确认'按钮...")
+                    # 简洁日志：关闭首页广告
+                    concise.action("关闭首页广告")
                     
-                    # 使用整合检测器点击元素（YOLO会在这里自动加载）
-                    click_start = time.time()
-                    success = await detector.click_element(device_id, "确认按钮")
-                    click_time = time.time() - click_start
+                    # 点击弹窗外面的上方空白背景区域（避开搜索框）
+                    await self.adb.tap(device_id, 270, 200)
                     
-                    if success:
-                        log(f"  ✓ 成功点击'确认'按钮 (检测+点击耗时: {int(click_time)}秒)")
-                    else:
-                        log(f"  ⚠️ 未找到'确认'按钮，使用固定坐标... (检测耗时: {int(click_time)}秒)")
-                        await self.adb.tap(device_id, 270, 690)
-                    
-                    # 优化：使用智能等待器等待页面变化（替换固定等待1.5秒）
-                    log("  [智能等待] 等待页面变化...")
+                    # 使用智能等待器等待页面变化
                     from .performance.smart_waiter import wait_for_page
                     wait_result = await wait_for_page(
                         device_id,
                         detector,
                         [PageState.HOME],  # 启动流程只等待首页
-                        log_callback=lambda msg: log(f"    [等待] {msg}")
+                        log_callback=None  # 不传递日志回调
                     )
                     
                     step_time = time.time() - step_start
                     
                     if wait_result:
                         total_time = time.time() - total_start_time
-                        log(f"[时间记录] 弹窗处理完成 - 总耗时: {int(step_time)}秒")
-                        log(f"\n{'='*60}")
-                        log(f"[时间记录] ✓ 启动流程完成")
-                        log(f"[时间记录] 到达页面: {wait_result.state.value}")
-                        log(f"[时间记录] 总耗时: {int(total_time)}秒")
-                        log(f"[时间记录] 完成时间: {time.strftime('%H:%M:%S')}")
-                        log(f"{'='*60}\n")
+                        
+                        # 简洁日志：到达首页
+                        concise.success("到达首页")
+                        
+                        # 详细日志（仅文件日志）
+                        if file_logger:
+                            file_logger.info(
+                                f"弹窗处理完成 - 总耗时: {int(step_time)}秒"
+                            )
+                            file_logger.info(
+                                f"启动流程完成 - 到达页面: {wait_result.state.value}, "
+                                f"总耗时: {int(total_time)}秒, 完成时间: {time.strftime('%H:%M:%S')}"
+                            )
                         return True
                     
-                    log(f"[时间记录] 弹窗处理完成 - 总耗时: {int(step_time)}秒")
-                    log("")
+                    if file_logger:
+                        file_logger.debug(f"弹窗处理完成 - 总耗时: {int(step_time)}秒")
                     continue
                 
                 # 处理首页异常代码弹窗
                 if result.state == PageState.HOME_ERROR_POPUP:
-                    log("[YOLO] 检测到首页异常代码弹窗，点击'确认'按钮...")
+                    if file_logger:
+                        file_logger.debug("检测到首页异常代码弹窗，点击'确认'按钮")
                     
                     success = await detector.click_element(device_id, "确认按钮")
-                    if success:
-                        log("[YOLO] ✓ 成功点击'确认'按钮")
-                    else:
-                        log("[YOLO] ⚠️ 未找到'确认'按钮，使用固定坐标...")
-                        await self.adb.tap(device_id, 270, 690)
+                    
+                    if not success:
+                        # 修正坐标：根据标注数据,确认按钮中心约在 (265, 637)
+                        await self.adb.tap(device_id, 265, 637)
+                        if file_logger:
+                            file_logger.debug("未找到'确认'按钮，使用固定坐标")
                     
                     # 智能等待页面变化
-                    log("[智能等待] 等待页面变化...")
                     from .performance.smart_waiter import wait_for_page
                     result = await wait_for_page(
                         device_id,
                         detector,
                         [PageState.HOME, PageState.PROFILE_LOGGED, PageState.PROFILE, PageState.LOGIN],
-                        log_callback=lambda msg: log(f"  [等待] {msg}")
+                        log_callback=None  # 不传递日志回调
                     )
                     
                     if result:
-                        log(f"✓ 启动流程完成，到达: {result.state.value}")
+                        if file_logger:
+                            file_logger.info(f"启动流程完成，到达: {result.state.value}")
                         return True
                     continue
                 
                 # 处理广告页（使用智能等待器等待广告消失）
                 if result.state == PageState.AD:
                     step_start = time.time()
-                    log(f"[步骤] 检测到广告页，智能等待广告消失...")
                     
-                    # 优化：使用智能等待器等待广告消失（替换固定轮询）
+                    # 简洁日志：等待广告
+                    concise.action("等待广告")
+                    
+                    # 使用智能等待器等待广告消失
                     from .performance.smart_waiter import wait_for_page
                     wait_result = await wait_for_page(
                         device_id,
                         detector,
                         [PageState.HOME, PageState.PROFILE_LOGGED, PageState.PROFILE, PageState.LOGIN, 
                          PageState.HOME_NOTICE, PageState.STARTUP_POPUP],  # 广告后可能到达的页面
-                        log_callback=lambda msg: log(f"  [智能等待] {msg}")
+                        log_callback=None  # 不传递日志回调
                     )
                     
                     step_time = time.time() - step_start
                     
                     if wait_result:
-                        log(f"[时间记录] 广告已消失 - 当前页面: {wait_result.state.value}, 耗时: {int(step_time)}秒")
-                        log("")
+                        # 详细日志（仅文件日志）
+                        if file_logger:
+                            file_logger.debug(
+                                f"广告已消失 - 当前页面: {wait_result.state.value}, 耗时: {int(step_time)}秒"
+                            )
                         
                         # 如果已到达目标页面，直接返回
                         if wait_result.state in [PageState.HOME, PageState.PROFILE_LOGGED, PageState.PROFILE, PageState.LOGIN]:
                             total_time = time.time() - total_start_time
-                            log(f"\n{'='*60}")
-                            log(f"[时间记录] ✓ 启动流程完成")
-                            log(f"[时间记录] 到达页面: {wait_result.state.value}")
-                            log(f"[时间记录] 总耗时: {int(total_time)}秒")
-                            log(f"[时间记录] 完成时间: {time.strftime('%H:%M:%S')}")
-                            log(f"{'='*60}\n")
+                            
+                            # 如果到达首页，添加简洁日志
+                            if wait_result.state == PageState.HOME:
+                                concise.success("到达首页")
+                            
+                            # 详细日志（仅文件日志）
+                            if file_logger:
+                                file_logger.info(
+                                    f"启动流程完成 - 到达页面: {wait_result.state.value}, "
+                                    f"总耗时: {int(total_time)}秒, 完成时间: {time.strftime('%H:%M:%S')}"
+                                )
                             return True
                     else:
-                        log(f"[时间记录] ⚠️ 广告等待超时，继续流程... (耗时: {int(step_time)}秒)")
-                        log("")
+                        if file_logger:
+                            file_logger.warning(f"广告等待超时，继续流程 (耗时: {int(step_time)}秒)")
                     continue
                 
                 # 处理加载页
                 if result.state == PageState.LOADING:
-                    log("[智能等待] 页面加载中...")
-                    
-                    # 智能等待加载完成（替换固定等待）
+                    # 智能等待加载完成
                     from .performance.smart_waiter import wait_for_page
                     result = await wait_for_page(
                         device_id,
                         detector,
                         [PageState.HOME, PageState.AD, PageState.STARTUP_POPUP, PageState.HOME_NOTICE,
                          PageState.PROFILE_LOGGED, PageState.PROFILE, PageState.LOGIN],
-                        log_callback=lambda msg: log(f"  [等待] {msg}")
+                        log_callback=None  # 不传递日志回调
                     )
                     
                     if result:
-                        log(f"✓ 加载完成，当前页面: {result.state.value}")
+                        # 详细日志（仅文件日志）
+                        if file_logger:
+                            file_logger.debug(f"加载完成，当前页面: {result.state.value}")
                         
                         # 如果已到达首页，启动流程完成
                         if result.state == PageState.HOME:
-                            log(f"✓ 启动流程完成")
+                            concise.success("到达首页")
+                            if file_logger:
+                                file_logger.info("启动流程完成")
                             return True
                     continue
                 
                 # 处理温馨提示弹窗
                 if result.state == PageState.WARMTIP:
                     step_start = time.time()
-                    log(f"[步骤] 检测到温馨提示弹窗")
-                    
-                    log("  [YOLO] 检测并点击'关闭'按钮...")
                     
                     click_start = time.time()
                     success = await detector.click_element(device_id, "关闭按钮")
                     click_time = time.time() - click_start
                     
-                    if success:
-                        log(f"  ✓ 成功点击'关闭'按钮 (检测+点击耗时: {int(click_time)}秒)")
-                    else:
-                        log(f"  ⚠️ 未找到'关闭'按钮，按返回键... (检测耗时: {int(click_time)}秒)")
+                    # 详细日志（仅文件日志）
+                    if file_logger:
+                        if success:
+                            file_logger.debug(f"成功点击'关闭'按钮 (检测+点击耗时: {int(click_time)}秒)")
+                        else:
+                            file_logger.debug(f"未找到'关闭'按钮，按返回键 (检测耗时: {int(click_time)}秒)")
+                    
+                    if not success:
                         await self.adb.press_back(device_id)
                     
-                    # 优化：使用智能等待器等待页面变化（替换固定等待0.5秒）
-                    log("  [智能等待] 等待页面变化...")
+                    # 使用智能等待器等待页面变化
                     from .performance.smart_waiter import wait_for_page
                     wait_result = await wait_for_page(
                         device_id,
                         detector,
                         [PageState.HOME, PageState.PROFILE_LOGGED, PageState.PROFILE, PageState.LOGIN],
-                        log_callback=lambda msg: log(f"    [等待] {msg}")
+                        log_callback=None  # 不传递日志回调
                     )
                     
                     step_time = time.time() - step_start
                     
                     if wait_result:
                         total_time = time.time() - total_start_time
-                        log(f"[时间记录] 弹窗处理完成 - 总耗时: {int(step_time)}秒")
-                        log(f"\n{'='*60}")
-                        log(f"[时间记录] ✓ 启动流程完成")
-                        log(f"[时间记录] 到达页面: {wait_result.state.value}")
-                        log(f"[时间记录] 总耗时: {int(total_time)}秒")
-                        log(f"[时间记录] 完成时间: {time.strftime('%H:%M:%S')}")
-                        log(f"{'='*60}\n")
+                        
+                        # 如果到达首页，添加简洁日志
+                        if wait_result.state == PageState.HOME:
+                            concise.success("到达首页")
+                        
+                        # 详细日志（仅文件日志）
+                        if file_logger:
+                            file_logger.debug(f"弹窗处理完成 - 总耗时: {int(step_time)}秒")
+                            file_logger.info(
+                                f"启动流程完成 - 到达页面: {wait_result.state.value}, "
+                                f"总耗时: {int(total_time)}秒, 完成时间: {time.strftime('%H:%M:%S')}"
+                            )
                         return True
                     
-                    log(f"[时间记录] 弹窗处理完成 - 总耗时: {int(step_time)}秒")
-                    log("")
+                    if file_logger:
+                        file_logger.debug(f"弹窗处理完成 - 总耗时: {int(step_time)}秒")
                     continue
                 
                 # 处理未知页面
                 if result.state == PageState.UNKNOWN:
-                    log(f"⚠️ 检测到未知页面，等待...")
-                    await asyncio.sleep(0.5)  # 优化：从1秒改为0.5秒
+                    if file_logger:
+                        file_logger.debug("检测到未知页面，等待")
+                    await asyncio.sleep(0.5)
                     continue
                 
-                # 其他状态，短暂等待（优化：从0.3秒改为0.2秒，更快响应）
+                # 其他状态，短暂等待
                 await asyncio.sleep(0.2)
             
             # 超时，检查最终状态
-            log("⚠️ 启动流程超时，检查最终状态...")
+            if file_logger:
+                file_logger.warning("启动流程超时，检查最终状态")
+            
             final_result = await detector.detect_page(device_id, use_cache=False, detect_elements=False)
-            log(f"最终状态: {final_result.state.value}")
+            
+            if file_logger:
+                file_logger.info(f"最终状态: {final_result.state.value}")
             
             if final_result.state == PageState.HOME:
-                log(f"✓ 启动流程完成（超时后检测）")
+                concise.success("到达首页")
+                if file_logger:
+                    file_logger.info("启动流程完成（超时后检测）")
                 return True
             
             # 如果不是最后一次重试，继续
             if retry < max_retries - 1:
-                log(f"⚠️ 启动流程失败，准备重试...")
+                if file_logger:
+                    file_logger.warning("启动流程失败，准备重试")
                 continue
         
         # 所有重试都失败
-        log("✗ 启动流程失败，已达到最大重试次数")
+        if file_logger:
+            file_logger.error("启动流程失败，已达到最大重试次数")
         return False
     async def _navigate_to_profile_with_ad_handling(self, device_id: str, log_callback=None) -> bool:
         """导航到个人页并处理广告（统一方法）
@@ -687,6 +742,8 @@ class XimengAutomation:
             账号处理结果（包含完整数据）
         """
         import time
+        from .concise_logger import ConciseLogger
+        import logging
         
         # 记录工作流开始时间
         workflow_start = time.time()
@@ -698,10 +755,32 @@ class XimengAutomation:
             else:
                 print(msg)
         
-        log(f"\n{'='*60}")
-        log(f"[时间记录] 工作流开始 - {time.strftime('%H:%M:%S')}")
-        log(f"[时间记录] 账号: {account.phone}")
-        log(f"{'='*60}\n")
+        # 获取文件日志记录器
+        file_logger = logging.getLogger(__name__)
+        
+        # 创建简洁日志记录器（GUI日志 + 文件日志）
+        # 使用一个简单的包装类来避免参数传递问题
+        if self._log_callback:
+            class GuiLogger:
+                def __init__(self, callback):
+                    self.callback = callback
+                def info(self, msg):
+                    self.callback(msg)
+                def error(self, msg):
+                    self.callback(msg)
+            gui_logger_obj = GuiLogger(self._log_callback)
+        else:
+            gui_logger_obj = None
+        
+        concise = ConciseLogger(
+            module_name="workflow",
+            gui_logger=gui_logger_obj,
+            file_logger=file_logger  # ← 添加文件日志记录器
+        )
+        
+        # 输出工作流开始信息（仅文件日志）
+        file_logger.info(f"工作流开始 - {time.strftime('%H:%M:%S')}")
+        file_logger.info(f"账号: {account.phone}")
         
         # 定义可中断的 sleep 函数
         async def interruptible_sleep(seconds: float, check_interval: float = 0.1):
@@ -721,26 +800,32 @@ class XimengAutomation:
         
         try:
             # ==================== 步骤1: 登录账号 ====================
+            step_number = 1
             step1_start = time.time()
-            log(f"{'='*60}")
-            log(f"[时间记录] 步骤1: 登录账号 - {account.phone}")
-            log(f"{'='*60}")
+            
+            # 添加简洁日志：步骤1 - 登录账号
+            concise.step(step_number, "登录账号")
+            
+            # 文件日志记录详细信息
+            file_logger.info(f"步骤{step_number}: 登录账号 - {account.phone}")
             
             # 如果 skip_login=True，说明缓存登录已验证，当前已在个人页
             if skip_login:
-                log(f"✓ 缓存登录已验证，当前已在个人页，直接获取个人信息")
+                concise.action("使用缓存登录")
+                file_logger.info("缓存登录已验证，当前已在个人页，直接获取个人信息")
                 step1_time = time.time() - step1_start
-                log(f"[时间记录] 步骤1完成 - 耗时: {int(step1_time)}秒（跳过登录）")
-                log("")
+                file_logger.info(f"步骤1完成 - 耗时: {int(step1_time)}秒（跳过登录）")
+                concise.success("登录成功（缓存）")
                 # 缓存登录不需要处理登录和积分页，直接跳到获取个人资料
             else:
                 # 执行正常登录流程
+                concise.action("输入账号密码")
                 login_start = time.time()
                 login_result = await self.auto_login.login(
                     device_id, account.phone, account.password
                 )
                 login_time = time.time() - login_start
-                log(f"[时间记录] 登录操作耗时: {int(login_time)}秒")
+                file_logger.info(f"登录操作耗时: {int(login_time)}秒")
                 
                 if not login_result.success:
                     # 根据登录失败类型设置error_type
@@ -754,12 +839,14 @@ class XimengAutomation:
                         result.error_type = ErrorType.LOGIN_PASSWORD_ERROR
                     
                     result.error_message = f"登录失败: {login_result.error_message}"
-                    log(f"✗ 登录失败: {login_result.error_message}")
+                    concise.error(f"登录失败: {login_result.error_message}")
+                    file_logger.error(f"登录失败: {login_result.error_message}")
                     return result
                 
-                log(f"✓ 登录成功")
+                concise.success("登录成功")
+                file_logger.info("登录成功")
                 # 登录后会跳转到积分页，需要返回到个人页
-                log(f"登录后处理积分页跳转...")
+                file_logger.info("登录后处理积分页跳转...")
                 await asyncio.sleep(2)
                 
                 # 检测当前页面 - 使用整合检测器（GPU加速深度学习）
@@ -849,9 +936,13 @@ class XimengAutomation:
                     await asyncio.sleep(2)
             
             # ==================== 步骤2: 获取初始个人资料 ====================
-            log(f"{'='*60}")
-            log(f"步骤2: 获取初始个人资料")
-            log(f"{'='*60}")
+            step_number += 1
+            
+            # 添加简洁日志：步骤2 - 获取资料
+            concise.step(step_number, "获取资料")
+            
+            # 文件日志记录详细信息
+            file_logger.info(f"步骤{step_number}: 获取初始个人资料")
             
             profile_success = False
             profile_data = None
@@ -860,12 +951,13 @@ class XimengAutomation:
             for attempt in range(3):
                 try:
                     if attempt > 0:
-                        log(f"\n[尝试 {attempt + 1}/3] 重新获取个人资料...")
+                        file_logger.info(f"尝试 {attempt + 1}/3 重新获取个人资料...")
                     
                     # 如果是缓存登录，跳过导航（已经在个人页）
                     if skip_login:
                         cache_check_start = time.time()
-                        log(f"[缓存登录] 验证当前页面状态...")
+                        concise.action("验证当前页面")
+                        file_logger.info("缓存登录 - 验证当前页面状态...")
                         nav_success = True
                         
                         # 立即检测页面状态（不等待）- 使用整合检测器（GPU加速）
@@ -875,10 +967,10 @@ class XimengAutomation:
                             device_id, use_cache=True, detect_elements=False
                         )
                         detect_time = time.time() - detect_start
-                        log(f"[时间记录] 页面检测耗时: {int(detect_time)}秒")
+                        file_logger.info(f"页面检测耗时: {int(detect_time)}秒")
                         
                         if not page_result or not page_result.state:
-                            log(f"  ⚠️ 无法检测当前页面状态")
+                            file_logger.warning("无法检测当前页面状态")
                             if attempt < 2:
                                 await asyncio.sleep(2)
                                 continue
@@ -886,16 +978,16 @@ class XimengAutomation:
                                 result.error_message = "无法确认当前页面状态"
                                 return result
                         
-                        log(f"  当前页面: {page_result.state.value}（置信度{page_result.confidence:.2%}）")
+                        file_logger.info(f"当前页面: {page_result.state.value}（置信度{page_result.confidence:.2%}）")
                         
                         # 确认在个人页（已登录）
                         if page_result.state != PageState.PROFILE_LOGGED:
-                            log(f"  ⚠️ 当前不在个人页（已登录），尝试导航...")
+                            file_logger.warning(f"当前不在个人页（已登录），尝试导航...")
                             nav_start = time.time()
                             # 使用统一的广告处理方法
                             nav_success = await self._navigate_to_profile_with_ad_handling(device_id, log)
                             nav_time = time.time() - nav_start
-                            log(f"[时间记录] 导航耗时: {int(nav_time)}秒")
+                            file_logger.info(f"导航耗时: {int(nav_time)}秒")
                             if not nav_success:
                                 if attempt < 2:
                                     await asyncio.sleep(2)
@@ -904,17 +996,18 @@ class XimengAutomation:
                                     result.error_message = "无法导航到个人页"
                                     return result
                         else:
-                            log(f"  ✓ 确认在个人页（已登录）")
-                            log(f"  ✓ 页面已就绪，直接获取个人资料")
+                            file_logger.info("确认在个人页（已登录）")
+                            file_logger.info("页面已就绪，直接获取个人资料")
                         
                         cache_check_time = time.time() - cache_check_start
-                        log(f"[时间记录] 缓存登录验证总耗时: {int(cache_check_time)}秒")
+                        file_logger.info(f"缓存登录验证总耗时: {int(cache_check_time)}秒")
                     else:
                         # 导航到个人资料页面（使用统一的广告处理方法）
+                        concise.action("进入个人页")
                         nav_start = time.time()
                         nav_success = await self._navigate_to_profile_with_ad_handling(device_id, log)
                         nav_time = time.time() - nav_start
-                        log(f"[时间记录] 导航耗时: {int(nav_time)}秒")
+                        file_logger.info(f"导航耗时: {int(nav_time)}秒")
                         
                         if not nav_success:
                             log(f"⚠️ 导航到个人资料页面失败")
@@ -962,12 +1055,18 @@ class XimengAutomation:
                     # ===== 关键优化：直接尝试获取资料，通过获取结果判断是否成功 =====
                     # 使用 ProfileReader 获取完整个人资料（带重试）
                     # 传递账号字符串（格式：手机号----密码），用于提取手机号
+                    concise.action("获取详细资料")
                     profile_read_start = time.time()
-                    log(f"[时间记录] 开始获取个人资料...")
+                    file_logger.info("开始获取个人资料...")
                     account_str = f"{account.phone}----{account.password}"
-                    profile_data = await self.profile_reader.get_full_profile_with_retry(device_id, account=account_str)
+                    profile_data = await self.profile_reader.get_full_profile_with_retry(
+                        device_id, 
+                        account=account_str,
+                        gui_logger=gui_logger_obj,
+                        step_number=step_number
+                    )
                     profile_read_time = time.time() - profile_read_start
-                    log(f"[时间记录] 获取个人资料耗时: {int(profile_read_time)}秒")
+                    file_logger.info(f"获取个人资料耗时: {int(profile_read_time)}秒")
                     
                     # 检查是否成功获取数据（必须获取到余额、昵称和用户ID）
                     has_balance = profile_data and profile_data.get('balance') is not None
@@ -976,8 +1075,12 @@ class XimengAutomation:
                     
                     # ===== 核心逻辑：基于获取资料的结果判断是否成功 =====
                     if has_balance and has_nickname and has_user_id:
-                        log(f"✓ 成功获取个人资料数据")
+                        file_logger.info("成功获取个人资料数据")
                         profile_success = True
+                        
+                        # 简洁日志已在 profile_reader.read_profile 中输出
+                        # 这里不需要重复输出
+                        
                         break  # 获取成功，退出循环
                     else:
                         missing = []
@@ -1026,22 +1129,33 @@ class XimengAutomation:
             result.vouchers = profile_data.get('vouchers')
             result.coupons = profile_data.get('coupons')
             
-            # 显示收集到的账户信息
-            self._log_profile_data(result)
+            # 显示收集到的账户信息（仅文件日志）
+            file_logger.info("="*60)
+            file_logger.info("账户信息")
+            file_logger.info(f"昵称: {result.nickname or 'N/A'}")
+            file_logger.info(f"ID: {result.user_id or 'N/A'}")
+            file_logger.info(f"手机号: {result.phone}")
+            if result.balance_before is not None:
+                file_logger.info(f"余额: {result.balance_before:.2f} 元")
+            if result.points is not None:
+                file_logger.info(f"积分: {result.points} 积分")
+            if result.vouchers is not None:
+                file_logger.info(f"抵扣券: {result.vouchers} 张")
+            file_logger.info("="*60)
             
-            # 调试信息：显示缓存状态
-            log(f"\n[调试] 缓存状态检查:")
-            log(f"  - enable_cache: {self.auto_login.enable_cache}")
-            log(f"  - cache_manager 存在: {self.auto_login.cache_manager is not None}")
-            log(f"  - user_id: {result.user_id}")
+            # 调试信息：显示缓存状态（仅文件日志）
+            file_logger.debug("缓存状态检查:")
+            file_logger.debug(f"enable_cache: {self.auto_login.enable_cache}")
+            file_logger.debug(f"cache_manager 存在: {self.auto_login.cache_manager is not None}")
+            file_logger.debug(f"user_id: {result.user_id}")
             
             # ==================== 步骤3.5: 保存登录缓存（包含用户ID）====================
             # 优化：异步保存缓存，不阻塞主流程
             if self.auto_login.enable_cache and self.auto_login.cache_manager:
                 if result.user_id:
-                    log(f"\n异步保存登录缓存（包含用户ID: {result.user_id}）...")
+                    file_logger.info(f"异步保存登录缓存（包含用户ID: {result.user_id}）...")
                 else:
-                    log(f"\n异步保存登录缓存（未获取到用户ID）...")
+                    file_logger.info("异步保存登录缓存（未获取到用户ID）...")
                 
                 # 创建异步任务，不等待完成
                 async def save_cache_async():
@@ -1052,20 +1166,20 @@ class XimengAutomation:
                             user_id=result.user_id
                         )
                         if cache_saved:
-                            log(f"[后台] ✓ 登录缓存已保存")
+                            file_logger.info("登录缓存已保存")
                         else:
-                            log(f"[后台] ⚠️ 登录缓存保存失败")
+                            file_logger.warning("登录缓存保存失败")
                     except Exception as e:
-                        log(f"[后台] ⚠️ 保存登录缓存时出错: {str(e)}")
+                        file_logger.error(f"保存登录缓存时出错: {str(e)}")
                 
                 # 启动后台任务，不等待完成
                 asyncio.create_task(save_cache_async())
-                log(f"✓ 缓存保存任务已启动（后台执行）")
+                file_logger.info("缓存保存任务已启动（后台执行）")
             else:
                 if not self.auto_login.enable_cache:
-                    log(f"\n⚠️ 缓存功能未启用，跳过缓存保存")
+                    file_logger.info("缓存功能未启用，跳过缓存保存")
                 elif not self.auto_login.cache_manager:
-                    log(f"\n⚠️ 缓存管理器未初始化，跳过缓存保存")
+                    file_logger.warning("缓存管理器未初始化，跳过缓存保存")
             
             # 优化：移除不必要的1秒等待
             # await asyncio.sleep(1)  # 已移除
@@ -1073,30 +1187,36 @@ class XimengAutomation:
             # ==================== 优化：跳过重复获取个人资料 ====================
             # 步骤2已经获取了完整的个人资料，不需要在步骤4重复获取
             # 直接使用步骤2的数据，节省时间
-            log(f"\n{'='*60}")
-            log(f"[优化] 使用步骤2已获取的个人资料数据")
-            log(f"{'='*60}")
-            log(f"  用户ID: {result.user_id}")
-            log(f"  昵称: {result.nickname}")
-            log(f"  余额: {result.balance_before:.2f} 元" if result.balance_before else "  余额: 未获取")
-            log(f"  积分: {result.points}")
-            log(f"  抵扣券: {result.vouchers}")
-            log(f"  优惠券: {result.coupons}")
-            log("")
+            file_logger.info("="*60)
+            file_logger.info("使用步骤2已获取的个人资料数据")
+            file_logger.info(f"用户ID: {result.user_id}")
+            file_logger.info(f"昵称: {result.nickname}")
+            if result.balance_before:
+                file_logger.info(f"余额: {result.balance_before:.2f} 元")
+            file_logger.info(f"积分: {result.points}")
+            file_logger.info(f"抵扣券: {result.vouchers}")
+            file_logger.info(f"优惠券: {result.coupons}")
+            file_logger.info("="*60)
             
             # ==================== 步骤3: 执行签到（仅在成功获取资料后执行）====================
             if not profile_success:
-                log(f"{'='*60}")
-                log(f"跳过签到流程")
-                log(f"{'='*60}")
-                log(f"  原因: 未能获取个人资料数据\n")
+                file_logger.info("="*60)
+                file_logger.info("跳过签到流程")
+                file_logger.info("原因: 未能获取个人资料数据")
+                file_logger.info("="*60)
                 # 标记为成功但跳过签到
                 result.success = True
                 return result
             
-            log(f"{'='*60}")
-            log(f"步骤3: 执行签到")
-            log(f"{'='*60}")
+            step_number += 1
+            
+            # 添加简洁日志：步骤3 - 签到
+            concise.step(step_number, "签到")
+            
+            # 文件日志记录详细信息
+            file_logger.info("="*60)
+            file_logger.info(f"步骤{step_number}: 执行签到")
+            file_logger.info("="*60)
             
             try:
                 # 使用步骤2已获取的个人资料数据
@@ -1126,36 +1246,47 @@ class XimengAutomation:
                     # 使用签到流程返回的余额（如果有）
                     if checkin_result.get('balance_after') is not None:
                         result.balance_after = checkin_result.get('balance_after')
-                        log(f"✓ 签到成功（已获取最终余额）")
+                        file_logger.info("签到成功（已获取最终余额）")
                     else:
-                        log(f"✓ 签到成功")
-                    log(f"  签到次数: {checkin_result.get('checkin_count', 0)}")
-                    log(f"  总奖励: {result.checkin_reward:.2f} 元\n")
+                        file_logger.info("签到成功")
+                    file_logger.info(f"签到次数: {checkin_result.get('checkin_count', 0)}")
+                    file_logger.info(f"总奖励: {result.checkin_reward:.2f} 元")
+                    
+                    # 添加简洁日志：签到完成
+                    concise.success("签到完成")
+                    
                 elif checkin_result.get('already_checked'):
                     # 即使已签到，也要获取总次数
                     result.checkin_total_times = checkin_result.get('total_times')
                     # 尝试使用返回的余额
                     if checkin_result.get('balance_after') is not None:
                         result.balance_after = checkin_result.get('balance_after')
-                    log(f"✓ 今日已签到")
+                    file_logger.info("今日已签到")
                     if result.checkin_total_times:
-                        log(f"  总签到次数: {result.checkin_total_times}\n")
+                        file_logger.info(f"总签到次数: {result.checkin_total_times}")
                     else:
-                        log(f"  (未获取到总签到次数)\n")
+                        file_logger.info("(未获取到总签到次数)")
+                    
+                    # 添加简洁日志：今日已签到
+                    concise.success("今日已签到")
+                    
                 else:
                     # 签到失败，设置错误类型
                     from .models.error_types import ErrorType
                     result.error_type = ErrorType.CHECKIN_FAILED
                     result.error_message = checkin_result.get('message', '未知错误')
-                    log(f"⚠️ 签到失败: {result.error_message}\n")
+                    file_logger.error(f"签到失败: {result.error_message}")
+                    
+                    # 添加简洁日志：签到失败
+                    concise.error(f"签到失败: {result.error_message}")
                 
             except Exception as e:
                 # 签到异常，设置错误类型
                 from .models.error_types import ErrorType
                 result.error_type = ErrorType.CHECKIN_EXCEPTION
                 result.error_message = str(e)
-                log(f"⚠️ 签到流程出错: {str(e)}")
-                log(f"⚠️ 跳过签到，继续执行后续流程\n")
+                file_logger.error(f"签到流程出错: {str(e)}")
+                file_logger.info("跳过签到，继续执行后续流程")
             
             # 优化：移除签到后的1秒等待，直接进入下一步
             # await asyncio.sleep(1)  # 已移除
@@ -1163,29 +1294,43 @@ class XimengAutomation:
             # ==================== 步骤7: 获取最终余额（仅在签到未返回时）====================
             # 优化：如果签到流程已经返回了余额，跳过重复获取
             if result.balance_after is not None:
-                log(f"{'='*60}")
-                log(f"步骤7: 使用签到流程返回的最终余额")
-                log(f"{'='*60}")
-                log(f"  ✓ 最终余额: {result.balance_after:.2f} 元")
-                log(f"  (跳过重复获取，节省时间)\n")
+                step_number += 1
+                
+                # 添加简洁日志：使用签到返回的余额
+                concise.step(step_number, "获取最终余额")
+                concise.success(f"最终余额: {result.balance_after:.2f}元（使用签到数据）")
+                
+                file_logger.info("="*60)
+                file_logger.info(f"步骤{step_number}: 使用签到流程返回的最终余额")
+                file_logger.info(f"最终余额: {result.balance_after:.2f} 元")
+                file_logger.info("(跳过重复获取，节省时间)")
+                file_logger.info("="*60)
             else:
-                log(f"{'='*60}")
-                log(f"步骤7: 获取最终个人资料")
-                log(f"{'='*60}")
-                log(f"  (签到流程未返回余额，需要重新获取)\n")
+                step_number += 1
+                
+                # 添加简洁日志：获取最终余额
+                concise.step(step_number, "获取最终余额")
+                
+                file_logger.info("="*60)
+                file_logger.info(f"步骤{step_number}: 获取最终个人资料")
+                file_logger.info("(签到流程未返回余额，需要重新获取)")
+                file_logger.info("="*60)
             
                 try:
                     # 使用统一的导航方法（高频扫描，自动处理广告）
-                    log(f"  导航到个人页...")
+                    concise.action("导航到个人页")
+                    file_logger.info("导航到个人页...")
                     nav_success = await self._navigate_to_profile_with_ad_handling(device_id, log)
                     
                     if not nav_success:
-                        log(f"  ⚠️ 导航到个人资料页面失败，跳过最终数据获取\n")
+                        file_logger.warning("导航到个人资料页面失败，跳过最终数据获取")
+                        concise.error("导航失败")
                     else:
                         # 直接获取个人资料（不再需要检测和处理广告）
                         try:
                             # 获取完整个人资料（带超时）
                             # 使用并行处理方法提升性能
+                            concise.action("获取最终资料")
                             account_str = f"{account.phone}----{account.password}"
                             profile_task = self.profile_reader.get_full_profile_parallel(device_id, account=account_str)
                             try:
@@ -1214,34 +1359,48 @@ class XimengAutomation:
                                     result.coupons = final_profile.get('coupons')
                                 
                                 if result.balance_after is not None:
-                                    log(f"  ✓ 最终余额: {result.balance_after:.2f} 元")
+                                    file_logger.info(f"最终余额: {result.balance_after:.2f} 元")
+                                    # 添加简洁日志：最终余额
+                                    concise.success(f"最终余额: {result.balance_after:.2f}元")
                                 else:
-                                    log(f"  ⚠️ 未能获取最终余额")
+                                    file_logger.warning("未能获取最终余额")
+                                    concise.error("未能获取最终余额")
                                 
                                 if result.points is not None:
-                                    log(f"  ✓ 最终积分: {result.points} 积分")
+                                    file_logger.info(f"最终积分: {result.points} 积分")
                                 
                                 if result.vouchers is not None:
-                                    log(f"  ✓ 最终抵扣券: {result.vouchers} 张")
+                                    file_logger.info(f"最终抵扣券: {result.vouchers} 张")
                                 
                                 if result.coupons is not None:
-                                    log(f"  ✓ 最终优惠券: {result.coupons} 张")
+                                    file_logger.info(f"最终优惠券: {result.coupons} 张")
                                 
-                                log("")  # 空行
                             except asyncio.TimeoutError:
-                                log(f"  ⚠️ 获取最终数据超时\n")
+                                file_logger.error("获取最终数据超时")
+                                concise.error("获取超时")
                         except Exception as e:
-                            log(f"  ⚠️ 获取最终数据出错: {str(e)}\n")
+                            file_logger.error(f"获取最终数据出错: {str(e)}")
+                            concise.error(f"获取出错: {str(e)}")
                 except Exception as e:
-                    log(f"⚠️ 获取最终数据流程出错: {str(e)}\n")
+                    file_logger.error(f"获取最终数据流程出错: {str(e)}")
+                    concise.error(f"流程出错: {str(e)}")
             
-            # 显示执行总结
-            self._log_summary(result)
+            # 显示执行总结（仅文件日志）
+            file_logger.info("="*60)
+            file_logger.info("执行总结")
+            if result.balance_before is not None:
+                file_logger.info(f"余额前: {result.balance_before:.2f} 元")
+            file_logger.info(f"签到奖励: {result.checkin_reward:.2f} 元")
+            if result.balance_after is not None:
+                file_logger.info(f"余额后: {result.balance_after:.2f} 元")
+            if result.balance_change is not None:
+                file_logger.info(f"余额变化: {result.balance_change:+.2f} 元")
+            file_logger.info("="*60)
             
             # ==================== 步骤7.5: 自动转账（每次处理账号时重新读取配置）====================
-            log(f"{'='*60}")
-            log(f"步骤7.5: 检查自动转账")
-            log(f"{'='*60}")
+            file_logger.info("="*60)
+            file_logger.info("步骤7.5: 检查自动转账")
+            file_logger.info("="*60)
             
             try:
                 # 每次处理账号时重新读取转账配置
@@ -1317,6 +1476,40 @@ class XimengAutomation:
                                                         result.transfer_amount = transfer_result.get('amount', 0.0)
                                                         result.transfer_recipient = recipient_id
                                                         log(f"    - 已保存转账信息: {result.transfer_amount:.2f} 元 → {result.transfer_recipient}")
+                                                        
+                                                        # 保存转账记录到数据库
+                                                        try:
+                                                            # 获取收款人信息
+                                                            recipient_name = transfer_result.get('recipient_name', '')
+                                                            # 收款人手机号暂时使用用户ID（因为配置中没有存储手机号）
+                                                            recipient_phone = recipient_id
+                                                            
+                                                            # 获取转账策略描述
+                                                            if transfer_config.multi_level_enabled:
+                                                                strategy = f"多级转账(最多{transfer_config.max_transfer_level}级)"
+                                                            else:
+                                                                strategy = "单级转账"
+                                                            
+                                                            # 保存转账记录
+                                                            save_success = transfer_history.save_transfer_record(
+                                                                sender_phone=account.phone,
+                                                                sender_user_id=result.user_id,
+                                                                sender_name=result.nickname or account.phone,
+                                                                recipient_phone=recipient_phone,
+                                                                recipient_name=recipient_name or recipient_id,
+                                                                amount=transfer_result['amount'],
+                                                                strategy=strategy,
+                                                                success=True,
+                                                                error_message="",
+                                                                owner=""  # Account 类没有 owner 属性，使用空字符串
+                                                            )
+                                                            
+                                                            if save_success:
+                                                                log(f"    - ✓ 转账记录已保存到数据库")
+                                                            else:
+                                                                log(f"    - ⚠️ 转账记录保存失败")
+                                                        except Exception as e:
+                                                            log(f"    - ⚠️ 保存转账记录异常: {e}")
                                                 else:
                                                     # 转账失败，设置错误类型
                                                     from .models.error_types import ErrorType
@@ -1326,6 +1519,33 @@ class XimengAutomation:
                                                     # 转账失败时，设置收款人为"失败"
                                                     result.transfer_amount = 0.0
                                                     result.transfer_recipient = "失败"
+                                                    
+                                                    # 保存失败记录到数据库
+                                                    try:
+                                                        recipient_name = transfer_result.get('recipient_name', '')
+                                                        recipient_phone = recipient_id
+                                                        
+                                                        # 获取转账策略描述
+                                                        if transfer_config.multi_level_enabled:
+                                                            strategy = f"多级转账(最多{transfer_config.max_transfer_level}级)"
+                                                        else:
+                                                            strategy = "单级转账"
+                                                        
+                                                        transfer_history.save_transfer_record(
+                                                            sender_phone=account.phone,
+                                                            sender_user_id=result.user_id,
+                                                            sender_name=result.nickname or account.phone,
+                                                            recipient_phone=recipient_phone,
+                                                            recipient_name=recipient_name or recipient_id,
+                                                            amount=0.0,
+                                                            strategy=strategy,
+                                                            success=False,
+                                                            error_message=result.error_message,
+                                                            owner=""  # Account 类没有 owner 属性，使用空字符串
+                                                        )
+                                                        log(f"    - ✓ 失败记录已保存到数据库")
+                                                    except Exception as e:
+                                                        log(f"    - ⚠️ 保存失败记录异常: {e}")
                                             except Exception as e:
                                                 # 转账异常，设置错误类型
                                                 from .models.error_types import ErrorType
@@ -1337,6 +1557,26 @@ class XimengAutomation:
                                                 # 转账异常时，设置收款人为"失败"
                                                 result.transfer_amount = 0.0
                                                 result.transfer_recipient = "失败"
+                                                
+                                                # 保存异常记录到数据库
+                                                try:
+                                                    strategy = transfer_config.strategy
+                                                    
+                                                    transfer_history.save_transfer_record(
+                                                        sender_phone=account.phone,
+                                                        sender_user_id=result.user_id,
+                                                        sender_name=result.nickname or account.phone,
+                                                        recipient_phone=recipient_id,
+                                                        recipient_name=recipient_id,
+                                                        amount=0.0,
+                                                        strategy=strategy,
+                                                        success=False,
+                                                        error_message=result.error_message,
+                                                        owner=""  # Account 类没有 owner 属性，使用空字符串
+                                                    )
+                                                    log(f"    - ✓ 异常记录已保存到数据库")
+                                                except Exception as save_error:
+                                                    log(f"    - ⚠️ 保存异常记录失败: {save_error}")
                                             finally:
                                                 # 【安全机制】释放转账锁
                                                 transfer_lock.release_lock(account.phone)
@@ -1360,11 +1600,7 @@ class XimengAutomation:
                                         log(f"  ⚠️ 未配置收款账号")
                                     else:
                                         # 余额不足
-                                        log(f"  ℹ️ 余额未达到转账条件")
-                                        log(f"    - 当前余额: {result.balance_after:.2f} 元")
-                                        log(f"    - 起步金额: {transfer_config.min_transfer_amount:.2f} 元")
-                                        log(f"    - 保留余额: {transfer_config.min_balance:.2f} 元")
-                                        log(f"    - 需要余额 >= {transfer_config.min_transfer_amount + transfer_config.min_balance:.2f} 元")
+                                        log(f"  ℹ️ 余额未达标")
                 else:
                     log(f"  ℹ️ 自动转账功能未启用，跳过转账")
                 
@@ -1373,22 +1609,25 @@ class XimengAutomation:
                 log(f"  ❌ 转账检查出错: {str(e)}\n")
             
             # ==================== 步骤8: 退出登录 ====================
-            log(f"{'='*60}")
-            log(f"步骤8: 退出登录")
-            log(f"{'='*60}")
+            step_number += 1
+            
+            file_logger.info("="*60)
+            file_logger.info(f"步骤{step_number}: 退出登录")
+            file_logger.info("="*60)
             
             try:
                 await self.auto_login.logout(device_id)
-                log(f"✓ 已退出登录\n")
+                file_logger.info("已退出登录")
             except Exception as e:
-                log(f"⚠️ 退出登录失败: {str(e)}\n")
+                file_logger.error(f"退出登录失败: {str(e)}")
             
             result.success = True
+            
             return result
             
         except Exception as e:
             result.error_message = str(e)
-            log(f"\n✗ 工作流程出错: {str(e)}\n")
+            file_logger.error(f"工作流程出错: {str(e)}")
             return result
     
     def _log_profile_data(self, result: AccountResult):

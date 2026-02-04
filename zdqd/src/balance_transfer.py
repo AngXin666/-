@@ -725,7 +725,8 @@ class BalanceTransfer:
     
     async def transfer_balance(self, device_id: str, recipient_id: str, 
                                initial_balance: Optional[float] = None,
-                               log_callback=None, transfer_chain: list = None) -> Dict[str, any]:
+                               log_callback=None, transfer_chain: list = None,
+                               step_number: int = 1, gui_logger=None) -> Dict[str, any]:
         """执行余额转账（使用整合检测器进行综合检测）
         
         Args:
@@ -734,6 +735,8 @@ class BalanceTransfer:
             initial_balance: 转账前的余额（用于验证转账是否成功）
             log_callback: 日志回调函数（可选）
             transfer_chain: 转账链条（用于防止循环转账）
+            step_number: 步骤编号（用于简洁日志）
+            gui_logger: GUI日志记录器（用于简洁日志）
             
         Returns:
             dict: 转账结果
@@ -742,6 +745,14 @@ class BalanceTransfer:
                 - amount: float, 转账金额（如果成功）
                 - chain: list, 转账链条
         """
+        # 创建简洁日志记录器
+        from .concise_logger import ConciseLogger
+        import logging
+        
+        # 获取文件日志记录器
+        file_logger = logging.getLogger(__name__)
+        concise = ConciseLogger("balance_transfer", gui_logger, file_logger)
+        
         def log(msg):
             if log_callback:
                 log_callback(msg)
@@ -757,21 +768,29 @@ class BalanceTransfer:
             'message': '',
             'amount': 0.0,
             'chain': transfer_chain,
-            'error_type': None  # 错误类型（ErrorType枚举）
+            'error_type': None,  # 错误类型（ErrorType枚举）
+            'recipient_id': recipient_id,  # 收款人ID
+            'recipient_name': None  # 收款人姓名（从确认弹窗解析）
         }
         
         try:
+            # 添加步骤日志
+            concise.step(step_number, "转账")
+            
             # 检查循环转账
             if recipient_id in transfer_chain:
-                log(f"  [转账] ⚠️ 检测到循环转账，停止转账链条")
+                file_logger.warning(f"[转账] 检测到循环转账，停止转账链条")
+                concise.error("检测到循环转账")
                 result['message'] = "检测到循环转账"
                 result['error_type'] = ErrorType.TRANSFER_FAILED  # 转账失败
                 return result
             
-            log("  [转账] 开始执行转账流程（使用整合检测器）...")
+            # 记录详细日志到文件
+            file_logger.info(f"[转账] 开始执行转账流程（使用整合检测器）")
             
-            # 1. 使用整合检测器检测当前页面并查找余额按钮
-            log("  [转账] 步骤1: 使用整合检测器检测个人页面...")
+            # 1. 进入钱包页面
+            concise.action("检查转账条件")
+            file_logger.info(f"[转账] 步骤1: 使用整合检测器检测个人页面")
             from .page_detector import PageState
             
             # 使用整合检测器进行页面检测和元素检测
@@ -782,12 +801,14 @@ class BalanceTransfer:
             )
             
             if not page_result or page_result.state != PageState.PROFILE_LOGGED:
-                log(f"  [转账] ⚠️ 当前不在个人页面（已登录），当前页面: {page_result.state.value if page_result else 'unknown'}")
+                file_logger.warning(f"[转账] 当前不在个人页面（已登录），当前页面: {page_result.state.value if page_result else 'unknown'}")
+                concise.error("不在个人页面")
                 result['message'] = "不在个人页面"
-                result['error_type'] = ErrorType.TRANSFER_FAILED  # 转账失败
+                result['error_type'] = ErrorType.TRANSFER_FAILED
                 return result
             
-            log(f"  [转账] ✓ 当前在个人页面（已登录）")
+            file_logger.info(f"[转账] 当前在个人页面（已登录）")
+            concise.action("满足条件，开始转账")
             
             # 查找余额按钮
             balance_pos = None
@@ -795,23 +816,24 @@ class BalanceTransfer:
                 for element in page_result.elements:
                     if element.class_name == '余额数字':
                         balance_pos = element.center
-                        log(f"  [整合检测] ✓ 检测到余额按钮，位置: {balance_pos}, 置信度: {element.confidence:.2f}")
+                        file_logger.info(f"[转账] 检测到余额按钮，位置: {balance_pos}, 置信度: {element.confidence:.2f}")
                         break
             
             if not balance_pos:
-                log("  [转账] ⚠️ 整合检测未找到余额按钮，使用OCR备用方案...")
+                file_logger.info("[转账] 整合检测未找到余额按钮，使用OCR备用方案")
                 balance_pos = await self._find_balance_button_by_ocr(device_id, log_callback)
             
             if not balance_pos:
-                log("  [转账] ⚠️ OCR也未找到余额按钮，使用固定坐标...")
+                file_logger.info("[转账] OCR也未找到余额按钮，使用固定坐标")
                 balance_pos = self.BALANCE_BUTTON_FALLBACK
             
-            log(f"  [转账] 点击余额按钮 ({balance_pos[0]}, {balance_pos[1]})...")
+            concise.action("进入钱包页面")
+            file_logger.info(f"[转账] 点击余额按钮 ({balance_pos[0]}, {balance_pos[1]})")
             await self.adb.tap(device_id, balance_pos[0], balance_pos[1])
             await asyncio.sleep(TimeoutsConfig.TRANSFER_PAGE_LOAD)
             
-            # 2. 验证是否进入钱包页面（使用整合检测器）
-            log("  [转账] 步骤2: 验证是否进入钱包页面...")
+            # 2. 验证是否进入钱包页面
+            file_logger.info("[转账] 步骤2: 验证是否进入钱包页面")
             page_result = await self.detector.detect_page(
                 device_id, 
                 use_cache=False, 
@@ -819,34 +841,35 @@ class BalanceTransfer:
             )
             
             if not page_result or page_result.state != PageState.WALLET:
-                log(f"  [转账] ❌ 未能进入钱包页面，当前页面: {page_result.state.value if page_result else 'unknown'}")
+                file_logger.error(f"[转账] 未能进入钱包页面，当前页面: {page_result.state.value if page_result else 'unknown'}")
+                concise.error("未能进入钱包页面")
                 result['message'] = "未能进入钱包页面"
-                result['error_type'] = ErrorType.TRANSFER_FAILED  # 转账失败
+                result['error_type'] = ErrorType.TRANSFER_FAILED
                 return result
             
-            log(f"  [转账] ✓ 成功进入钱包页面")
+            file_logger.info(f"[转账] 成功进入钱包页面")
             
-            # 3. 点击"转赠"按钮（使用整合检测器检测的元素）
-            log("  [转账] 步骤3: 点击转赠按钮...")
+            # 3. 点击"转赠"按钮
+            concise.action("进入转账页面")
+            file_logger.info("[转账] 步骤3: 点击转赠按钮")
             
-            # 优先使用整合检测器检测到的转赠按钮
             transfer_button_pos = None
             if page_result.elements:
                 for element in page_result.elements:
                     if element.class_name == '转赠按钮':
                         transfer_button_pos = element.center
-                        log(f"  [整合检测] ✓ 检测到转赠按钮，位置: {transfer_button_pos}, 置信度: {element.confidence:.2f}")
+                        file_logger.info(f"[转账] 检测到转赠按钮，位置: {transfer_button_pos}, 置信度: {element.confidence:.2f}")
                         break
             
             if not transfer_button_pos:
-                log("  [转账] 使用固定坐标点击转赠按钮...")
+                file_logger.info("[转账] 使用固定坐标点击转赠按钮")
                 transfer_button_pos = self.TRANSFER_BUTTON
             
             await self.adb.tap(device_id, transfer_button_pos[0], transfer_button_pos[1])
             await asyncio.sleep(TimeoutsConfig.TRANSFER_PAGE_LOAD)
             
-            # 4. 验证是否进入转账页面（使用整合检测器）
-            log("  [转账] 步骤4: 验证是否进入转账页面...")
+            # 4. 验证是否进入转账页面
+            file_logger.info("[转账] 步骤4: 验证是否进入转账页面")
             page_result = await self.detector.detect_page(
                 device_id, 
                 use_cache=False, 
@@ -854,44 +877,46 @@ class BalanceTransfer:
             )
             
             if not page_result or page_result.state != PageState.TRANSFER:
-                log(f"  [转账] ❌ 未能进入转账页面，当前页面: {page_result.state.value if page_result else 'unknown'}")
+                file_logger.error(f"[转账] 未能进入转账页面，当前页面: {page_result.state.value if page_result else 'unknown'}")
+                concise.error("未能进入转账页面")
                 result['message'] = "未能进入转账页面"
-                result['error_type'] = ErrorType.TRANSFER_FAILED  # 转账失败
+                result['error_type'] = ErrorType.TRANSFER_FAILED
                 return result
             
-            log(f"  [转账] ✓ 成功进入转账页面")
+            file_logger.info(f"[转账] 成功进入转账页面")
             
-            # 5. 点击"全部转账"按钮（使用整合检测器检测的元素）
-            log("  [转账] 步骤5: 点击全部转账...")
+            # 5. 点击"全部转账"按钮
+            file_logger.info("[转账] 步骤5: 点击全部转账")
             
             all_transfer_pos = None
             if page_result.elements:
                 for element in page_result.elements:
                     if element.class_name == '全部转账按钮':
                         all_transfer_pos = element.center
-                        log(f"  [整合检测] ✓ 检测到全部转账按钮，位置: {all_transfer_pos}, 置信度: {element.confidence:.2f}")
+                        file_logger.info(f"[转账] 检测到全部转账按钮，位置: {all_transfer_pos}, 置信度: {element.confidence:.2f}")
                         break
             
             if not all_transfer_pos:
-                log("  [转账] 使用固定坐标点击全部转账按钮...")
+                file_logger.info("[转账] 使用固定坐标点击全部转账按钮")
                 all_transfer_pos = self.ALL_TRANSFER_BUTTON
             
             await self.adb.tap(device_id, all_transfer_pos[0], all_transfer_pos[1])
             await asyncio.sleep(TimeoutsConfig.WAIT_MEDIUM)
             
-            # 6. 输入收款用户ID（使用整合检测器检测的输入框位置）
-            log(f"  [转账] 步骤6: 输入收款用户ID: {recipient_id}...")
+            # 6. 输入收款用户ID
+            concise.action(f"输入收款人ID: {recipient_id}")
+            file_logger.info(f"[转账] 步骤6: 输入收款用户ID: {recipient_id}")
             
             recipient_input_pos = None
             if page_result.elements:
                 for element in page_result.elements:
                     if element.class_name == 'ID输入框':
                         recipient_input_pos = element.center
-                        log(f"  [整合检测] ✓ 检测到ID输入框，位置: {recipient_input_pos}, 置信度: {element.confidence:.2f}")
+                        file_logger.info(f"[转账] 检测到ID输入框，位置: {recipient_input_pos}, 置信度: {element.confidence:.2f}")
                         break
             
             if not recipient_input_pos:
-                log("  [转账] 使用固定坐标点击ID输入框...")
+                file_logger.info("[转账] 使用固定坐标点击ID输入框")
                 recipient_input_pos = self.RECIPIENT_INPUT
             
             await self.adb.tap(device_id, recipient_input_pos[0], recipient_input_pos[1])
@@ -899,57 +924,135 @@ class BalanceTransfer:
             await self.adb.input_text(device_id, recipient_id)
             await asyncio.sleep(TimeoutsConfig.TRANSFER_INPUT_WAIT)
             
-            # 7. 点击"提交转账"按钮（使用整合检测器检测的元素）
-            log("  [转账] 步骤7: 点击提交转账...")
+            # 7. 点击"提交转账"按钮
+            file_logger.info("[转账] 步骤7: 点击提交转账")
             
             submit_button_pos = None
             if page_result.elements:
                 for element in page_result.elements:
                     if element.class_name == '提交按钮':
                         submit_button_pos = element.center
-                        log(f"  [整合检测] ✓ 检测到提交按钮，位置: {submit_button_pos}, 置信度: {element.confidence:.2f}")
+                        file_logger.info(f"[转账] 检测到提交按钮，位置: {submit_button_pos}, 置信度: {element.confidence:.2f}")
                         break
             
             if not submit_button_pos:
-                log("  [转账] 使用固定坐标点击提交按钮...")
+                file_logger.info("[转账] 使用固定坐标点击提交按钮")
                 submit_button_pos = self.SUBMIT_BUTTON
             
             await self.adb.tap(device_id, submit_button_pos[0], submit_button_pos[1])
             await asyncio.sleep(TimeoutsConfig.TRANSFER_CONFIRM_WAIT)
             
-            # 8. 验证确认弹窗并点击确认（使用OCR解析弹窗信息）
-            log("  [转账] 步骤8: 验证确认弹窗...")
+            # 8. 验证确认弹窗并点击确认
+            concise.action("确认转账信息")
+            file_logger.info("[转账] 步骤8: 验证确认弹窗")
             
             # 解析弹窗信息
             dialog_info = await self.parse_confirm_dialog(device_id, log_callback)
             transfer_amount = None
+            recipient_name = None
             if dialog_info and dialog_info.get('amount'):
                 transfer_amount = dialog_info['amount']
-                log(f"  [转账] 记录转账金额: {transfer_amount} 元")
+                file_logger.info(f"[转账] 记录转账金额: {transfer_amount} 元")
+                # 保存收款人姓名到返回值
+                if dialog_info.get('recipient_name'):
+                    result['recipient_name'] = dialog_info['recipient_name']
+                    recipient_name = dialog_info['recipient_name']
+                    file_logger.info(f"[转账] 记录收款人姓名: {result['recipient_name']}")
+                
+                # 显示确认信息
+                if recipient_name:
+                    concise.action(f"收款人: {recipient_name}")
+                concise.action(f"金额: {transfer_amount:.2f}元")
             
-            # 点击确认按钮
-            log("  [转账] 点击确认按钮...")
-            await self.adb.tap(device_id, self.CONFIRM_BUTTON[0], self.CONFIRM_BUTTON[1])
+            # 提交转账
+            concise.action("提交转账")
+            file_logger.info("[转账] 使用OCR检测确认按钮")
+            
+            confirm_button_pos = None
+            
+            try:
+                from .screen_capture import ScreenCapture
+                from .ocr_thread_pool import OCRThreadPool
+                from PIL import Image
+                import cv2
+                
+                screen_capture = ScreenCapture(self.adb)
+                
+                # 截图
+                screenshot = await screen_capture.capture(device_id)
+                screenshot_pil = Image.fromarray(cv2.cvtColor(screenshot, cv2.COLOR_BGR2RGB))
+                
+                # 图像预处理
+                gray_screenshot = screenshot_pil.convert('L')
+                enhanced_screenshot = enhance_for_ocr(gray_screenshot)
+                
+                # OCR识别
+                ocr_pool = OCRThreadPool()
+                ocr_result = await ocr_pool.recognize(enhanced_screenshot)
+                
+                if ocr_result and ocr_result.texts:
+                    file_logger.debug(f"[转账] OCR识别到 {len(ocr_result.texts)} 个文本")
+                    
+                    # 查找"确认提交"或"确认"文字
+                    for i, text in enumerate(ocr_result.texts):
+                        file_logger.debug(f"[转账] OCR文本[{i}]: {text}")
+                        if "确认提交" in text or "确认" in text or "提交" in text:
+                            if ocr_result.boxes is not None and i < len(ocr_result.boxes):
+                                box = ocr_result.boxes[i]
+                                x_coords = [p[0] for p in box]
+                                y_coords = [p[1] for p in box]
+                                center_x = int(sum(x_coords) / 4)
+                                center_y = int(sum(y_coords) / 4)
+                                confirm_button_pos = (center_x, center_y)
+                                file_logger.info(f"[转账] OCR检测到'{text}'按钮，位置: {confirm_button_pos}")
+                                break
+                else:
+                    file_logger.warning("[转账] OCR未识别到任何文本")
+            except Exception as e:
+                file_logger.error(f"[转账] OCR检测失败: {e}", exc_info=True)
+            
+            # 如果OCR失败，返回错误
+            if not confirm_button_pos:
+                file_logger.error("[转账] 未检测到确认按钮，转账失败")
+                concise.error("未检测到确认按钮")
+                result['success'] = False
+                result['message'] = "未检测到确认按钮"
+                result['error_type'] = ErrorType.TRANSFER_FAILED
+                return result
+            
+            file_logger.info(f"[转账] 点击确认按钮: {confirm_button_pos}")
+            await self.adb.tap(device_id, confirm_button_pos[0], confirm_button_pos[1])
+            file_logger.info(f"[转账] 等待 {TimeoutsConfig.WAIT_EXTRA_LONG} 秒")
             await asyncio.sleep(TimeoutsConfig.WAIT_EXTRA_LONG)
             
-            # 9. 验证转账结果（使用整合检测器）
-            log("  [转账] 步骤9: 验证转账结果...")
+            # 9. 验证转账结果
+            file_logger.info("[转账] 步骤9: 验证转账结果")
             
             page_result = await self.detector.detect_page(device_id, use_cache=False)
             
+            # 处理异常页面（如分类页）- 按返回键返回
+            max_back_attempts = 3
+            back_attempt = 0
+            while page_result and page_result.state in [PageState.CATEGORY, PageState.UNKNOWN] and back_attempt < max_back_attempts:
+                file_logger.warning(f"[转账] 检测到异常页面（{page_result.state.value}），按返回键")
+                await self.adb.press_back(device_id)
+                await asyncio.sleep(TimeoutsConfig.WAIT_MEDIUM)
+                page_result = await self.detector.detect_page(device_id, use_cache=False)
+                back_attempt += 1
+            
             if page_result and page_result.state == PageState.WALLET:
-                log(f"  [转账] ✓ 检测到钱包页面，转账成功")
+                file_logger.info(f"[转账] 检测到钱包页面，转账成功")
                 
                 # 如果有初始余额，验证余额变化
                 if initial_balance is not None:
-                    log(f"  [转账] 返回个人页面验证余额变化...")
+                    file_logger.info(f"[转账] 返回个人页面验证余额变化")
                     
                     # 按返回键回到个人页面
                     await self.adb.press_back(device_id)
                     await asyncio.sleep(TimeoutsConfig.TRANSFER_PAGE_LOAD)
                     
                     # 使用整合检测器获取转账后的余额
-                    log(f"  [转账] 使用整合检测器获取转账后余额...")
+                    file_logger.info(f"[转账] 使用整合检测器获取转账后余额")
                     page_result = await self.detector.detect_page(
                         device_id, 
                         use_cache=False, 
@@ -960,8 +1063,7 @@ class BalanceTransfer:
                     if page_result and page_result.elements:
                         for element in page_result.elements:
                             if element.class_name == '余额数字':
-                                # 找到余额元素，使用OCR识别该区域的文本
-                                log(f"  [整合检测] ✓ 检测到余额元素，位置: {element.center}, 置信度: {element.confidence:.2f}")
+                                file_logger.info(f"[转账] 检测到余额元素，位置: {element.center}, 置信度: {element.confidence:.2f}")
                                 
                                 # 截图并OCR识别余额区域
                                 try:
@@ -975,7 +1077,7 @@ class BalanceTransfer:
                                     screen_capture = ScreenCapture(self.adb)
                                     screenshot = await screen_capture.capture(device_id)
                                     
-                                    # 裁剪余额区域（扩大一点范围以确保完整）
+                                    # 裁剪余额区域
                                     x1, y1, x2, y2 = element.bbox
                                     padding = 10
                                     x1 = max(0, x1 - padding)
@@ -996,23 +1098,36 @@ class BalanceTransfer:
                                             balance_match = re.search(r'[\d.]+', text)
                                             if balance_match:
                                                 final_balance = float(balance_match.group(0))
-                                                log(f"  [整合检测] ✓ OCR识别到余额: {final_balance:.2f} 元")
+                                                file_logger.info(f"[转账] OCR识别到余额: {final_balance:.2f} 元")
                                                 break
                                 except Exception as e:
-                                    log(f"  [整合检测] ⚠️ OCR识别余额失败: {e}")
+                                    file_logger.error(f"[转账] OCR识别余额失败: {e}", exc_info=True)
                                 
                                 break
                     
                     if final_balance is not None:
-                        log(f"  [转账] 转账前余额: {initial_balance:.2f} 元")
-                        log(f"  [转账] 转账后余额: {final_balance:.2f} 元")
+                        file_logger.info(f"[转账] 转账前余额: {initial_balance:.2f} 元")
+                        file_logger.info(f"[转账] 转账后余额: {final_balance:.2f} 元")
                         
                         # 计算余额变化
                         balance_change = final_balance - initial_balance
                         
                         if balance_change < 0:
                             # 余额减少，转账成功
-                            log(f"  [转账] ✓✓ 余额减少 {abs(balance_change):.2f} 元，转账成功 → {recipient_id}")
+                            file_logger.info(f"[转账] 余额减少 {abs(balance_change):.2f} 元，转账成功 → {recipient_id}")
+                            
+                            # 添加简洁日志：转账成功
+                            concise.success("转账成功")
+                            
+                            # 显示转账详细信息（分隔线后）
+                            if gui_logger:
+                                gui_logger.info("=" * 60)
+                                gui_logger.info(f"  → 转账金额: {abs(balance_change):.2f}元")
+                                gui_logger.info(f"  → 转账后余额: {final_balance:.2f}元")
+                                if recipient_name:
+                                    gui_logger.info(f"  → 收款人: {recipient_name}")
+                                else:
+                                    gui_logger.info(f"  → 收款人ID: {recipient_id}")
                             
                             # 添加到转账链条
                             transfer_chain.append(recipient_id)
@@ -1024,16 +1139,30 @@ class BalanceTransfer:
                             return result
                         else:
                             # 余额没变化或增加，转账失败
-                            log(f"  [转账] ❌ 余额无变化（{final_balance:.2f} 元），转账失败")
+                            file_logger.error(f"[转账] 余额无变化（{final_balance:.2f} 元），转账失败")
+                            concise.error("余额无变化")
                             result['success'] = False
                             result['message'] = "转账失败：余额无变化"
-                            result['error_type'] = ErrorType.TRANSFER_FAILED  # 转账失败
+                            result['error_type'] = ErrorType.TRANSFER_FAILED
                             return result
                     else:
-                        log(f"  [转账] ⚠️ 无法获取转账后余额，但已检测到钱包页面，判断为成功")
+                        file_logger.warning(f"[转账] 无法获取转账后余额，但已检测到钱包页面，判断为成功")
                 
                 # 没有初始余额或无法获取转账后余额，但已在钱包页面，判断为成功
-                log(f"  [转账] ✓ 检测到钱包页面，判断为转账成功")
+                file_logger.info(f"[转账] 检测到钱包页面，判断为转账成功")
+                
+                # 添加简洁日志：转账成功
+                concise.success("转账成功")
+                
+                # 显示转账详细信息（分隔线后）
+                if gui_logger:
+                    gui_logger.info("=" * 60)
+                    if transfer_amount:
+                        gui_logger.info(f"  → 转账金额: {transfer_amount:.2f}元")
+                    if recipient_name:
+                        gui_logger.info(f"  → 收款人: {recipient_name}")
+                    else:
+                        gui_logger.info(f"  → 收款人ID: {recipient_id}")
                 
                 # 添加到转账链条
                 transfer_chain.append(recipient_id)
@@ -1046,16 +1175,16 @@ class BalanceTransfer:
                 
                 return result
             else:
-                log(f"  [转账] ⚠️ 未检测到钱包页面，当前页面: {page_result.state.value if page_result else 'unknown'}")
+                file_logger.warning(f"[转账] 未检测到钱包页面，当前页面: {page_result.state.value if page_result else 'unknown'}")
+                concise.error("无法确认转账结果")
                 result['message'] = "无法确认转账结果"
-                result['error_type'] = ErrorType.TRANSFER_FAILED  # 转账失败
+                result['error_type'] = ErrorType.TRANSFER_FAILED
                 return result
             
         except Exception as e:
-            log(f"  [转账] ❌ 转账失败: {e}")
-            import traceback
-            log(f"  [转账] 详细错误: {traceback.format_exc()}")
+            file_logger.error(f"[转账] 转账失败: {e}", exc_info=True)
+            concise.error("转账失败", e)
             result['message'] = f"转账失败: {e}"
-            result['error_type'] = ErrorType.TRANSFER_FAILED  # 转账失败
+            result['error_type'] = ErrorType.TRANSFER_FAILED
             return result
 

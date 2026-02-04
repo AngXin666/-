@@ -1,0 +1,1067 @@
+﻿"""
+余额转账模块 - 处理余额转账功能
+Balance Transfer Module - Handle balance transfer functionality
+"""
+
+import asyncio
+from typing import Optional, Dict, Union
+from datetime import datetime
+
+from .adb_bridge import ADBBridge
+from .page_detector_hybrid import PageDetectorHybrid, PageState
+from .ocr_image_processor import enhance_for_ocr
+from .models.error_types import ErrorType
+from .timeouts_config import TimeoutsConfig
+
+
+class BalanceTransfer:
+    """余额转账处理器"""
+    
+    # 坐标定义 (540x960 分辨率)
+    BALANCE_BUTTON_FALLBACK = (91, 228)  # 余额按钮备用坐标（OCR失败时使用，基于实际测试）
+    TRANSFER_BUTTON = (456, 89)  # 转赠按钮 - 钱包页面左上角
+    AMOUNT_INPUT = (270, 205)  # 转账金额输入框 - 实测可输入
+    ALL_TRANSFER_BUTTON = (250, 275)  # 全部转账按钮 - 实测有效(右侧位置)
+    RECIPIENT_INPUT = (270, 381)  # 收款用户ID输入框 - 实测可输入
+    SUBMIT_BUTTON = (271, 521)  # 提交申请按钮 - 实测有效
+    CONFIRM_BUTTON = (271, 615)  # 确认提交按钮 - OCR识别'确认提交'
+    
+    def __init__(self, adb: ADBBridge, detector: Union['PageDetectorHybrid', 'PageDetectorIntegrated']):
+        """初始化转账处理器
+        
+        Args:
+            adb: ADB桥接对象
+            detector: 页面检测器（整合检测器或混合检测器）
+        """
+        self.adb = adb
+        self.detector = detector
+        
+        # 初始化模板匹配器（使用单例，避免重复加载）
+        import os
+        from .template_matcher import get_template_matcher
+        template_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'dist', 'JT')
+        self.template_matcher = get_template_matcher(template_dir) if os.path.exists(template_dir) else None
+        
+        # 初始化YOLO检测器（用于按钮检测）
+        from .model_manager import ModelManager
+        model_manager = ModelManager.get_instance()
+        self.hybrid_detector = model_manager.get_page_detector_hybrid()
+        
+        # 检查是否有转账相关的YOLO模型
+        self.has_wallet_yolo = self._check_yolo_model('钱包页')
+        self.has_transfer_yolo = self._check_yolo_model('transfer')
+        self.has_transfer_confirm_yolo = self._check_yolo_model('transfer_confirm')
+        
+        if self.has_wallet_yolo:
+            print("  [转账] ✓ 钱包页YOLO模型已加载")
+        if self.has_transfer_yolo:
+            print("  [转账] ✓ 转账页YOLO模型已加载")
+        if self.has_transfer_confirm_yolo:
+            print("  [转账] ✓ 转账确认弹窗YOLO模型已加载")
+    
+    def _check_yolo_model(self, page_type: str) -> bool:
+        """检查指定页面类型的YOLO模型是否存在
+        
+        Args:
+            page_type: 页面类型
+            
+        Returns:
+            bool: 模型是否存在
+        """
+        try:
+            import json
+            from pathlib import Path
+            
+            registry_path = Path("yolo_model_registry.json")
+            if not registry_path.exists():
+                return False
+            
+            with open(registry_path, 'r', encoding='utf-8') as f:
+                registry = json.load(f)
+            
+            if page_type in registry:
+                model_path = registry[page_type].get('model_path')
+                if model_path and Path(model_path).exists():
+                    return True
+            
+            return False
+        except Exception:
+            return False
+    
+    async def _find_balance_button_by_ocr(self, device_id: str, log_callback=None) -> Optional[tuple]:
+        """使用OCR或YOLO查找余额按钮位置
+        
+        优先使用YOLO检测（更准确），如果失败则降级到OCR
+        
+        Args:
+            device_id: 设备ID
+            log_callback: 日志回调函数
+            
+        Returns:
+            tuple: (x, y) 坐标，如果未找到返回None
+        """
+        def log(msg):
+            if log_callback:
+                log_callback(msg)
+        
+        # 优先使用YOLO检测余额数字
+        if self.has_wallet_yolo:
+            try:
+                log("  [转账] 使用YOLO检测余额按钮...")
+                buttons = await self.hybrid_detector.detect_buttons_yolo(device_id, "钱包页")
+                
+                if buttons:
+                    # 查找"余额数字"按钮
+                    for btn in buttons:
+                        if btn.class_name == '余额数字':
+                            center_x, center_y = btn.center
+                            log(f"  [YOLO] ✓ 检测到余额数字，位置: ({center_x}, {center_y}), 置信度: {btn.confidence:.2f}")
+                            return (center_x, center_y)
+                
+                log("  [YOLO] 未检测到余额数字，降级到OCR...")
+            except Exception as e:
+                log(f"  [YOLO] YOLO检测失败: {e}，降级到OCR...")
+        
+        # 降级到OCR检测
+        try:
+            from .screen_capture import ScreenCapture
+            from .ocr_thread_pool import OCRThreadPool
+            from PIL import Image
+            import cv2
+            import re
+            
+            # 截图
+            screen_capture = ScreenCapture(self.adb)
+            screenshot = await screen_capture.capture(device_id)
+            screenshot_pil = Image.fromarray(cv2.cvtColor(screenshot, cv2.COLOR_BGR2RGB))
+            
+            # 图像预处理以提高OCR识别准确率
+            # 1. 转换为灰度图 - 减少颜色干扰，让OCR更专注于文字形状
+            gray_screenshot = screenshot_pil.convert('L')
+            
+            # 2. 增强对比度2倍 - 提高文字边缘清晰度，特别是灰色背景上的文字
+            enhanced_screenshot = enhance_for_ocr(gray_screenshot)
+            
+            # OCR识别（使用全局单例）
+            ocr_pool = OCRThreadPool()
+            ocr_result = await ocr_pool.recognize(enhanced_screenshot)
+            
+            if not ocr_result or not ocr_result.texts:
+                return None
+            
+            # 策略1（最稳健）: 通过"余额"文字定位，然后找最近的数字
+            # 这个方法最可靠，因为"余额"文字的位置相对固定
+            balance_label_index = None
+            for i, text in enumerate(ocr_result.texts):
+                if "余额" in text:
+                    balance_label_index = i
+                    if log:
+                        log(f"  [OCR策略1] 找到'余额'标签在索引 {i}")
+                    break
+            
+            if balance_label_index is not None:
+                # 在"余额"前后查找数字（优先前面，因为通常数字在上方）
+                search_range = list(range(max(0, balance_label_index - 5), balance_label_index))
+                search_range.extend(range(balance_label_index + 1, min(len(ocr_result.texts), balance_label_index + 3)))
+                
+                for j in search_range:
+                    match = re.search(r'^(\d+\.?\d*)$', ocr_result.texts[j].strip())
+                    if match:
+                        try:
+                            balance = float(match.group(1))
+                            if 0 <= balance <= 10000:
+                                if ocr_result.boxes is not None and j < len(ocr_result.boxes):
+                                    box = ocr_result.boxes[j]
+                                    x_coords = [p[0] for p in box]
+                                    y_coords = [p[1] for p in box]
+                                    center_x = int(sum(x_coords) / 4)
+                                    center_y = int(sum(y_coords) / 4)
+                                    
+                                    if log:
+                                        log(f"  [OCR策略1] ✓ 通过'余额'标签找到数字 {balance} 在索引 {j} ({center_x}, {center_y})")
+                                    
+                                    return (center_x, center_y)
+                        except ValueError:
+                            pass
+            
+            # 策略2（次稳健）: 通过ID位置计算余额位置
+            # ID和余额的相对位置关系固定，即使OCR顺序变化也能找到
+            for i, text in enumerate(ocr_result.texts):
+                id_text = text.strip()
+                # 检查是否是ID（6-7位纯数字）
+                if re.match(r'^\d{6,7}$', id_text):
+                    if ocr_result.boxes is not None and i < len(ocr_result.boxes):
+                        id_box = ocr_result.boxes[i]
+                        id_x_coords = [p[0] for p in id_box]
+                        id_y_coords = [p[1] for p in id_box]
+                        id_center_x = int(sum(id_x_coords) / 4)
+                        id_center_y = int(sum(id_y_coords) / 4)
+                        
+                        # 余额通常在ID下方约60-80像素
+                        balance_x = id_center_x
+                        balance_y = id_center_y + 70
+                        
+                        if log:
+                            log(f"  [OCR策略2] ✓ 通过ID位置 ({id_center_x}, {id_center_y}) 计算余额位置 ({balance_x}, {balance_y})")
+                        
+                        return (balance_x, balance_y)
+            
+            # 策略3（备选）: 直接使用索引3的位置
+            if len(ocr_result.texts) > 3:
+                text = ocr_result.texts[3].strip()
+                match = re.search(r'^(\d+\.?\d*)$', text)
+                if match:
+                    try:
+                        balance = float(match.group(1))
+                        if 0 <= balance <= 10000:
+                            if ocr_result.boxes is not None and 3 < len(ocr_result.boxes):
+                                box = ocr_result.boxes[3]
+                                x_coords = [p[0] for p in box]
+                                y_coords = [p[1] for p in box]
+                                center_x = int(sum(x_coords) / 4)
+                                center_y = int(sum(y_coords) / 4)
+                                
+                                if log:
+                                    log(f"  [OCR策略3] 在索引3找到余额数字 {balance} 在 ({center_x}, {center_y})")
+                                
+                                return (center_x, center_y)
+                    except ValueError:
+                        pass
+            
+            # 策略4（兜底）: 遍历所有文本查找第一个合理的数值
+            for i, text in enumerate(ocr_result.texts):
+                match = re.search(r'^(\d+\.?\d*)$', text.strip())
+                if match:
+                    try:
+                        balance = float(match.group(1))
+                        if 0 <= balance <= 10000:
+                            if ocr_result.boxes is not None and i < len(ocr_result.boxes):
+                                box = ocr_result.boxes[i]
+                                x_coords = [p[0] for p in box]
+                                y_coords = [p[1] for p in box]
+                                center_x = int(sum(x_coords) / 4)
+                                center_y = int(sum(y_coords) / 4)
+                                
+                                if log:
+                                    log(f"  [OCR策略4] 找到数字 {balance} 在索引 {i} ({center_x}, {center_y})（遍历查找）")
+                                
+                                return (center_x, center_y)
+                    except ValueError:
+                        pass
+            
+            return None
+            
+        except Exception as e:
+            if log:
+                log(f"  [OCR] 查找余额按钮失败: {e}")
+            return None
+    
+    async def _find_amount_input_by_ocr(self, device_id: str, log_callback=None) -> Optional[tuple]:
+        """使用OCR查找金额输入框位置（备选方案）
+        
+        通过识别"?"或"¥"符号，计算输入框位置
+        
+        Args:
+            device_id: 设备ID
+            log_callback: 日志回调函数
+            
+        Returns:
+            tuple: (x, y) 坐标，如果未找到返回None
+        """
+        def log(msg):
+            if log_callback:
+                log_callback(msg)
+        
+        try:
+            from .screen_capture import ScreenCapture
+            from .ocr_thread_pool import OCRThreadPool
+            from PIL import Image
+            import cv2
+            
+            # 截图
+            screen_capture = ScreenCapture(self.adb)
+            screenshot = await screen_capture.capture(device_id)
+            screenshot_pil = Image.fromarray(cv2.cvtColor(screenshot, cv2.COLOR_BGR2RGB))
+            
+            # 图像预处理以提高OCR识别准确率
+            # 1. 转换为灰度图 - 减少颜色干扰，让OCR更专注于文字形状
+            gray_screenshot = screenshot_pil.convert('L')
+            
+            # 2. 增强对比度2倍 - 提高文字边缘清晰度，特别是灰色背景上的文字
+            enhanced_screenshot = enhance_for_ocr(gray_screenshot)
+            
+            # OCR识别（使用全局单例）
+            ocr_pool = OCRThreadPool()
+            ocr_result = await ocr_pool.recognize(enhanced_screenshot)
+            
+            if not ocr_result or not ocr_result.texts:
+                return None
+            
+            # 查找"?"或"¥"符号
+            for i, text in enumerate(ocr_result.texts):
+                if "?" in text or "¥" in text or "元" in text:
+                    if ocr_result.boxes is not None and i < len(ocr_result.boxes):
+                        box = ocr_result.boxes[i]
+                        x_coords = [p[0] for p in box]
+                        y_coords = [p[1] for p in box]
+                        symbol_x = int(sum(x_coords) / 4)
+                        symbol_y = int(sum(y_coords) / 4)
+                        
+                        # 输入框在符号右侧,使用屏幕中间位置
+                        input_x = 270
+                        input_y = symbol_y
+                        
+                        if log:
+                            log(f"  [OCR] 找到金额符号 '{text}' 在 ({symbol_x}, {symbol_y})")
+                            log(f"  [OCR] 计算输入框位置: ({input_x}, {input_y})")
+                        
+                        return (input_x, input_y)
+            
+            return None
+            
+        except Exception as e:
+            if log:
+                log(f"  [OCR] 查找金额输入框失败: {e}")
+            return None
+    
+    async def input_amount(self, device_id: str, amount: str, 
+                          use_ocr: bool = False, verify: bool = True, 
+                          log_callback=None) -> bool:
+        """输入转账金额
+        
+        Args:
+            device_id: 设备ID
+            amount: 转账金额（字符串格式，如"10.50"）
+            use_ocr: 是否使用OCR动态查找输入框（备选方案）
+            verify: 是否验证输入是否成功
+            log_callback: 日志回调函数
+            
+        Returns:
+            bool: 是否成功
+        """
+        def log(msg):
+            if log_callback:
+                log_callback(msg)
+            else:
+                print(msg)
+        
+        try:
+            # 确定输入框坐标
+            if use_ocr:
+                log("  [转账] 使用OCR查找金额输入框...")
+                coords = await self._find_amount_input_by_ocr(device_id, log_callback)
+                if not coords:
+                    log("  [转账] OCR查找失败，使用默认坐标")
+                    coords = self.AMOUNT_INPUT
+            else:
+                coords = self.AMOUNT_INPUT
+            
+            # 点击输入框
+            log(f"  [转账] 点击金额输入框 ({coords[0]}, {coords[1]})...")
+            await self.adb.tap(device_id, coords[0], coords[1])
+            await asyncio.sleep(TimeoutsConfig.WAIT_SHORT)
+            
+            # 双击清空（如果有内容）
+            await self.adb.tap(device_id, coords[0], coords[1])
+            await asyncio.sleep(0.3)
+            await self.adb.shell(device_id, "input keyevent KEYCODE_DEL")
+            await asyncio.sleep(0.3)
+            
+            # 输入金额
+            log(f"  [转账] 输入金额: {amount}...")
+            await self.adb.input_text(device_id, amount)
+            await asyncio.sleep(TimeoutsConfig.TRANSFER_INPUT_WAIT)
+            
+            # 验证输入是否成功
+            if verify:
+                log("  [转账] 验证输入...")
+                success = await self._verify_amount_input(device_id, amount, log_callback)
+                if success:
+                    log("  [转账] ✓ 金额输入成功")
+                else:
+                    log("  [转账] ⚠️ 金额输入验证失败")
+                return success
+            
+            return True
+            
+        except Exception as e:
+            log(f"  [转账] 输入金额失败: {e}")
+            return False
+    
+    async def _verify_amount_input(self, device_id: str, expected_amount: str, 
+                                   log_callback=None) -> bool:
+        """验证金额是否输入成功
+        
+        Args:
+            device_id: 设备ID
+            expected_amount: 期望的金额
+            log_callback: 日志回调函数
+            
+        Returns:
+            bool: 是否验证成功
+        """
+        def log(msg):
+            if log_callback:
+                log_callback(msg)
+        
+        try:
+            from .screen_capture import ScreenCapture
+            from .ocr_thread_pool import OCRThreadPool
+            from PIL import Image
+            import cv2
+            
+            # 截图
+            screen_capture = ScreenCapture(self.adb)
+            screenshot = await screen_capture.capture(device_id)
+            screenshot_pil = Image.fromarray(cv2.cvtColor(screenshot, cv2.COLOR_BGR2RGB))
+            
+            # 图像预处理以提高OCR识别准确率
+            # 1. 转换为灰度图 - 减少颜色干扰，让OCR更专注于文字形状
+            gray_screenshot = screenshot_pil.convert('L')
+            
+            # 2. 增强对比度2倍 - 提高文字边缘清晰度，特别是灰色背景上的文字
+            enhanced_screenshot = enhance_for_ocr(gray_screenshot)
+            
+            # OCR识别（使用全局单例）
+            ocr_pool = OCRThreadPool()
+            ocr_result = await ocr_pool.recognize(enhanced_screenshot)
+            
+            if not ocr_result or not ocr_result.texts:
+                return False
+            
+            # 提取期望金额中的数字部分
+            # 例如: "10.50" -> ["10", "50"]
+            expected_parts = expected_amount.replace(".", "").replace(",", "")
+            
+            # 在识别到的文字中查找金额
+            for text in ocr_result.texts:
+                # 检查是否包含期望的金额
+                # 可能的格式: "¥10.50", "10.50", "￥10.50"
+                if expected_amount in text:
+                    if log:
+                        log(f"  [验证] 找到完整金额: '{text}'")
+                    return True
+                
+                # 检查是否包含主要数字部分
+                # 例如: expected_amount="10.50", 检查是否包含"10"和"50"
+                if len(expected_parts) >= 2:
+                    # 至少包含主要数字
+                    main_part = expected_amount.split(".")[0] if "." in expected_amount else expected_amount
+                    if main_part in text and any(c.isdigit() for c in text):
+                        if log:
+                            log(f"  [验证] 找到金额数字: '{text}'")
+                        return True
+            
+            if log:
+                log(f"  [验证] 未找到金额 '{expected_amount}'")
+                log(f"  [验证] 识别到的文字: {ocr_result.texts[:5]}")
+            
+            return False
+            
+        except Exception as e:
+            if log:
+                log(f"  [验证] 验证失败: {e}")
+            return False
+    
+    async def parse_confirm_dialog(self, device_id: str, log_callback=None) -> Optional[Dict]:
+        """解析确认弹窗信息
+        
+        提取弹窗中的收款人ID、姓名和转账金额
+        
+        Args:
+            device_id: 设备ID
+            log_callback: 日志回调函数
+            
+        Returns:
+            dict: 弹窗信息
+                - recipient_id: str, 收款人ID
+                - recipient_name: str, 收款人姓名
+                - amount: str, 转账金额
+            如果解析失败返回None
+        """
+        def log(msg):
+            if log_callback:
+                log_callback(msg)
+        
+        try:
+            from .screen_capture import ScreenCapture
+            from .ocr_thread_pool import OCRThreadPool
+            from PIL import Image
+            import cv2
+            import re
+            
+            # 截图
+            screen_capture = ScreenCapture(self.adb)
+            screenshot = await screen_capture.capture(device_id)
+            screenshot_pil = Image.fromarray(cv2.cvtColor(screenshot, cv2.COLOR_BGR2RGB))
+            
+            # 图像预处理以提高OCR识别准确率
+            # 1. 转换为灰度图 - 减少颜色干扰，让OCR更专注于文字形状
+            gray_screenshot = screenshot_pil.convert('L')
+            
+            # 2. 增强对比度2倍 - 提高文字边缘清晰度，特别是灰色背景上的文字
+            enhanced_screenshot = enhance_for_ocr(gray_screenshot)
+            
+            # OCR识别（使用全局单例）
+            ocr_pool = OCRThreadPool()
+            ocr_result = await ocr_pool.recognize(enhanced_screenshot)
+            
+            if not ocr_result or not ocr_result.texts:
+                return None
+            
+            result = {
+                'recipient_id': None,
+                'recipient_name': None,
+                'amount': None
+            }
+            
+            # 查找收款人信息
+            # 格式: "转账至ID：1803229-丁正清"
+            for text in ocr_result.texts:
+                if "转账至ID" in text or "转账至" in text:
+                    # 提取ID和姓名
+                    # 匹配模式: ID：数字-姓名
+                    match = re.search(r'(\d+)[-—](.+)', text)
+                    if match:
+                        result['recipient_id'] = match.group(1)
+                        result['recipient_name'] = match.group(2).strip()
+                        if log:
+                            log(f"  [弹窗] 收款人ID: {result['recipient_id']}")
+                            log(f"  [弹窗] 收款人姓名: {result['recipient_name']}")
+                    break
+            
+            # 查找转账金额
+            # 格式: "￥127.66" 或 "¥127.66"
+            for text in ocr_result.texts:
+                if ("￥" in text or "¥" in text) and any(c.isdigit() for c in text):
+                    # 提取数字部分
+                    amount_match = re.search(r'[\d.]+', text)
+                    if amount_match:
+                        try:
+                            # 转换为float类型
+                            result['amount'] = float(amount_match.group(0))
+                            if log:
+                                log(f"  [弹窗] 转账金额: {result['amount']:.2f}")
+                        except ValueError:
+                            result['amount'] = None
+                        break
+            
+            return result if result['recipient_id'] else None
+            
+        except Exception as e:
+            if log:
+                log(f"  [弹窗] 解析失败: {e}")
+            return None
+    
+    async def verify_confirm_dialog(self, device_id: str, expected_recipient_id: str,
+                                    log_callback=None) -> bool:
+        """验证确认弹窗中的收款人ID是否正确
+        
+        Args:
+            device_id: 设备ID
+            expected_recipient_id: 期望的收款人ID
+            log_callback: 日志回调函数
+            
+        Returns:
+            bool: 是否匹配
+        """
+        def log(msg):
+            if log_callback:
+                log_callback(msg)
+        
+        try:
+            log("  [验证] 解析确认弹窗...")
+            dialog_info = await self.parse_confirm_dialog(device_id, log_callback)
+            
+            if not dialog_info:
+                log("  [验证] ❌ 无法解析弹窗信息")
+                return False
+            
+            if not dialog_info['recipient_id']:
+                log("  [验证] ❌ 未找到收款人ID")
+                return False
+            
+            # 对比ID
+            if dialog_info['recipient_id'] == expected_recipient_id:
+                log(f"  [验证] ✓ 收款人ID匹配: {dialog_info['recipient_id']}")
+                if dialog_info['recipient_name']:
+                    log(f"  [验证]   收款人姓名: {dialog_info['recipient_name']}")
+                return True
+            else:
+                log(f"  [验证] ❌ 收款人ID不匹配!")
+                log(f"  [验证]   期望: {expected_recipient_id}")
+                log(f"  [验证]   实际: {dialog_info['recipient_id']}")
+                return False
+            
+        except Exception as e:
+            log(f"  [验证] 验证失败: {e}")
+            return False
+    
+    async def _verify_page_by_template(self, device_id: str, template_name: str, 
+                                       log_callback=None, timeout: int = 5) -> bool:
+        """使用模板匹配验证当前页面
+        
+        Args:
+            device_id: 设备ID
+            template_name: 模板名称（如"我的钱包.png"）
+            log_callback: 日志回调函数
+            timeout: 超时时间（秒）
+            
+        Returns:
+            bool: 是否匹配成功
+        """
+        def log(msg):
+            if log_callback:
+                log_callback(msg)
+        
+        try:
+            # 检查模板匹配器是否可用
+            if not self.template_matcher or not self.template_matcher.templates:
+                return False
+            
+            from .screen_capture import ScreenCapture
+            import cv2
+            
+            # 截图
+            screen_capture = ScreenCapture(self.adb)
+            screenshot = await screen_capture.capture(device_id)
+            
+            # 转换为字节流
+            _, screenshot_bytes = cv2.imencode(".png", screenshot)
+            screenshot_bytes = screenshot_bytes.tobytes()
+            
+            # 使用match_with_priority方法（会自动调整尺寸）
+            # 提高阈值到0.85，避免误识别（两个页面相似度都在0.7-0.8之间）
+            match_result = self.template_matcher.match_with_priority(
+                screenshot_bytes, 
+                [template_name], 
+                threshold=0.85
+            )
+            
+            if match_result:
+                log(f"  [验证] ✓ 成功匹配模板 '{template_name}' (相似度: {match_result['similarity']:.2f})")
+                return True
+            else:
+                return False
+                
+        except Exception as e:
+            log(f"  [验证] 模板匹配异常: {e}")
+            return False
+    
+    async def _verify_page_by_ocr(self, device_id: str, keywords: list, 
+                                  min_matches: int = 1, log_callback=None) -> bool:
+        """使用OCR验证当前页面是否包含关键字
+        
+        Args:
+            device_id: 设备ID
+            keywords: 关键字列表
+            min_matches: 最少匹配数量（默认1，即找到任意一个关键字即可）
+            log_callback: 日志回调函数
+            
+        Returns:
+            bool: 是否找到足够的关键字
+        """
+        def log(msg):
+            if log_callback:
+                log_callback(msg)
+        
+        try:
+            from .screen_capture import ScreenCapture
+            from .ocr_thread_pool import OCRThreadPool
+            from PIL import Image
+            import cv2
+            
+            # 截图
+            screen_capture = ScreenCapture(self.adb)
+            screenshot = await screen_capture.capture(device_id)
+            screenshot_pil = Image.fromarray(cv2.cvtColor(screenshot, cv2.COLOR_BGR2RGB))
+            
+            # 图像预处理以提高OCR识别准确率
+            # 1. 转换为灰度图 - 减少颜色干扰，让OCR更专注于文字形状
+            gray_screenshot = screenshot_pil.convert('L')
+            
+            # 2. 增强对比度2倍 - 提高文字边缘清晰度，特别是灰色背景上的文字
+            enhanced_screenshot = enhance_for_ocr(gray_screenshot)
+            
+            # OCR识别（使用全局单例，不要关闭）
+            ocr_pool = OCRThreadPool()
+            ocr_result = await ocr_pool.recognize(enhanced_screenshot)
+            
+            if not ocr_result or not ocr_result.texts:
+                log(f"  [验证] ⚠️ OCR未识别到任何文字")
+                return False
+            
+            # 输出识别到的所有文字（用于调试）
+            log(f"  [验证] OCR识别到 {len(ocr_result.texts)} 个文本")
+            if len(ocr_result.texts) <= 10:
+                # 如果文本不多，全部输出
+                for i, text in enumerate(ocr_result.texts):
+                    log(f"  [验证]   [{i}] {text}")
+            else:
+                # 如果文本很多，只输出前10个
+                for i, text in enumerate(ocr_result.texts[:10]):
+                    log(f"  [验证]   [{i}] {text}")
+                log(f"  [验证]   ... 还有 {len(ocr_result.texts) - 10} 个文本")
+            
+            # 查找关键字（去重）
+            found_keywords = []
+            for text in ocr_result.texts:
+                for keyword in keywords:
+                    if keyword in text and keyword not in found_keywords:
+                        found_keywords.append(keyword)
+            
+            # 检查是否达到最少匹配数量
+            if len(found_keywords) >= min_matches:
+                log(f"  [验证] ✓ 找到 {len(found_keywords)}/{len(keywords)} 个关键字: {', '.join(found_keywords)}")
+                return True
+            else:
+                log(f"  [验证] ❌ 只找到 {len(found_keywords)}/{len(keywords)} 个关键字: {', '.join(found_keywords) if found_keywords else '无'}")
+                log(f"  [验证] 需要至少 {min_matches} 个关键字")
+                return False
+                
+        except Exception as e:
+            log(f"  [验证] OCR验证异常: {e}")
+            return False
+    
+    async def transfer_balance(self, device_id: str, recipient_id: str, 
+                               initial_balance: Optional[float] = None,
+                               log_callback=None, transfer_chain: list = None) -> Dict[str, any]:
+        """执行余额转账（使用整合检测器进行综合检测）
+        
+        Args:
+            device_id: 设备ID
+            recipient_id: 收款用户ID
+            initial_balance: 转账前的余额（用于验证转账是否成功）
+            log_callback: 日志回调函数（可选）
+            transfer_chain: 转账链条（用于防止循环转账）
+            
+        Returns:
+            dict: 转账结果
+                - success: bool, 是否成功
+                - message: str, 结果消息
+                - amount: float, 转账金额（如果成功）
+                - chain: list, 转账链条
+        """
+        def log(msg):
+            if log_callback:
+                log_callback(msg)
+            else:
+                print(msg)
+        
+        # 初始化转账链条
+        if transfer_chain is None:
+            transfer_chain = []
+        
+        result = {
+            'success': False,
+            'message': '',
+            'amount': 0.0,
+            'chain': transfer_chain,
+            'error_type': None,  # 错误类型（ErrorType枚举）
+            'recipient_id': recipient_id,  # 收款人ID
+            'recipient_name': None  # 收款人姓名（从确认弹窗解析）
+        }
+        
+        try:
+            # 检查循环转账
+            if recipient_id in transfer_chain:
+                log(f"  [转账] ⚠️ 检测到循环转账，停止转账链条")
+                result['message'] = "检测到循环转账"
+                result['error_type'] = ErrorType.TRANSFER_FAILED  # 转账失败
+                return result
+            
+            log("  [转账] 开始执行转账流程（使用整合检测器）...")
+            
+            # 1. 使用整合检测器检测当前页面并查找余额按钮
+            log("  [转账] 步骤1: 使用整合检测器检测个人页面...")
+            from .page_detector import PageState
+            
+            # 使用整合检测器进行页面检测和元素检测
+            page_result = await self.detector.detect_page(
+                device_id, 
+                use_cache=False, 
+                detect_elements=True  # 启用元素检测
+            )
+            
+            if not page_result or page_result.state != PageState.PROFILE_LOGGED:
+                log(f"  [转账] ⚠️ 当前不在个人页面（已登录），当前页面: {page_result.state.value if page_result else 'unknown'}")
+                result['message'] = "不在个人页面"
+                result['error_type'] = ErrorType.TRANSFER_FAILED  # 转账失败
+                return result
+            
+            log(f"  [转账] ✓ 当前在个人页面（已登录）")
+            
+            # 查找余额按钮
+            balance_pos = None
+            if page_result.elements:
+                for element in page_result.elements:
+                    if element.class_name == '余额数字':
+                        balance_pos = element.center
+                        log(f"  [整合检测] ✓ 检测到余额按钮，位置: {balance_pos}, 置信度: {element.confidence:.2f}")
+                        break
+            
+            if not balance_pos:
+                log("  [转账] ⚠️ 整合检测未找到余额按钮，使用OCR备用方案...")
+                balance_pos = await self._find_balance_button_by_ocr(device_id, log_callback)
+            
+            if not balance_pos:
+                log("  [转账] ⚠️ OCR也未找到余额按钮，使用固定坐标...")
+                balance_pos = self.BALANCE_BUTTON_FALLBACK
+            
+            log(f"  [转账] 点击余额按钮 ({balance_pos[0]}, {balance_pos[1]})...")
+            await self.adb.tap(device_id, balance_pos[0], balance_pos[1])
+            await asyncio.sleep(TimeoutsConfig.TRANSFER_PAGE_LOAD)
+            
+            # 2. 验证是否进入钱包页面（使用整合检测器）
+            log("  [转账] 步骤2: 验证是否进入钱包页面...")
+            page_result = await self.detector.detect_page(
+                device_id, 
+                use_cache=False, 
+                detect_elements=True
+            )
+            
+            if not page_result or page_result.state != PageState.WALLET:
+                log(f"  [转账] ❌ 未能进入钱包页面，当前页面: {page_result.state.value if page_result else 'unknown'}")
+                result['message'] = "未能进入钱包页面"
+                result['error_type'] = ErrorType.TRANSFER_FAILED  # 转账失败
+                return result
+            
+            log(f"  [转账] ✓ 成功进入钱包页面")
+            
+            # 3. 点击"转赠"按钮（使用整合检测器检测的元素）
+            log("  [转账] 步骤3: 点击转赠按钮...")
+            
+            # 优先使用整合检测器检测到的转赠按钮
+            transfer_button_pos = None
+            if page_result.elements:
+                for element in page_result.elements:
+                    if element.class_name == '转赠按钮':
+                        transfer_button_pos = element.center
+                        log(f"  [整合检测] ✓ 检测到转赠按钮，位置: {transfer_button_pos}, 置信度: {element.confidence:.2f}")
+                        break
+            
+            if not transfer_button_pos:
+                log("  [转账] 使用固定坐标点击转赠按钮...")
+                transfer_button_pos = self.TRANSFER_BUTTON
+            
+            await self.adb.tap(device_id, transfer_button_pos[0], transfer_button_pos[1])
+            await asyncio.sleep(TimeoutsConfig.TRANSFER_PAGE_LOAD)
+            
+            # 4. 验证是否进入转账页面（使用整合检测器）
+            log("  [转账] 步骤4: 验证是否进入转账页面...")
+            page_result = await self.detector.detect_page(
+                device_id, 
+                use_cache=False, 
+                detect_elements=True
+            )
+            
+            if not page_result or page_result.state != PageState.TRANSFER:
+                log(f"  [转账] ❌ 未能进入转账页面，当前页面: {page_result.state.value if page_result else 'unknown'}")
+                result['message'] = "未能进入转账页面"
+                result['error_type'] = ErrorType.TRANSFER_FAILED  # 转账失败
+                return result
+            
+            log(f"  [转账] ✓ 成功进入转账页面")
+            
+            # 5. 点击"全部转账"按钮（使用整合检测器检测的元素）
+            log("  [转账] 步骤5: 点击全部转账...")
+            
+            all_transfer_pos = None
+            if page_result.elements:
+                for element in page_result.elements:
+                    if element.class_name == '全部转账按钮':
+                        all_transfer_pos = element.center
+                        log(f"  [整合检测] ✓ 检测到全部转账按钮，位置: {all_transfer_pos}, 置信度: {element.confidence:.2f}")
+                        break
+            
+            if not all_transfer_pos:
+                log("  [转账] 使用固定坐标点击全部转账按钮...")
+                all_transfer_pos = self.ALL_TRANSFER_BUTTON
+            
+            await self.adb.tap(device_id, all_transfer_pos[0], all_transfer_pos[1])
+            await asyncio.sleep(TimeoutsConfig.WAIT_MEDIUM)
+            
+            # 6. 输入收款用户ID（使用整合检测器检测的输入框位置）
+            log(f"  [转账] 步骤6: 输入收款用户ID: {recipient_id}...")
+            
+            recipient_input_pos = None
+            if page_result.elements:
+                for element in page_result.elements:
+                    if element.class_name == 'ID输入框':
+                        recipient_input_pos = element.center
+                        log(f"  [整合检测] ✓ 检测到ID输入框，位置: {recipient_input_pos}, 置信度: {element.confidence:.2f}")
+                        break
+            
+            if not recipient_input_pos:
+                log("  [转账] 使用固定坐标点击ID输入框...")
+                recipient_input_pos = self.RECIPIENT_INPUT
+            
+            await self.adb.tap(device_id, recipient_input_pos[0], recipient_input_pos[1])
+            await asyncio.sleep(TimeoutsConfig.WAIT_SHORT)
+            await self.adb.input_text(device_id, recipient_id)
+            await asyncio.sleep(TimeoutsConfig.TRANSFER_INPUT_WAIT)
+            
+            # 7. 点击"提交转账"按钮（使用整合检测器检测的元素）
+            log("  [转账] 步骤7: 点击提交转账...")
+            
+            submit_button_pos = None
+            if page_result.elements:
+                for element in page_result.elements:
+                    if element.class_name == '提交按钮':
+                        submit_button_pos = element.center
+                        log(f"  [整合检测] ✓ 检测到提交按钮，位置: {submit_button_pos}, 置信度: {element.confidence:.2f}")
+                        break
+            
+            if not submit_button_pos:
+                log("  [转账] 使用固定坐标点击提交按钮...")
+                submit_button_pos = self.SUBMIT_BUTTON
+            
+            await self.adb.tap(device_id, submit_button_pos[0], submit_button_pos[1])
+            await asyncio.sleep(TimeoutsConfig.TRANSFER_CONFIRM_WAIT)
+            
+            # 8. 验证确认弹窗并点击确认（使用OCR解析弹窗信息）
+            log("  [转账] 步骤8: 验证确认弹窗...")
+            
+            # 解析弹窗信息
+            dialog_info = await self.parse_confirm_dialog(device_id, log_callback)
+            transfer_amount = None
+            if dialog_info and dialog_info.get('amount'):
+                transfer_amount = dialog_info['amount']
+                log(f"  [转账] 记录转账金额: {transfer_amount} 元")
+                # 保存收款人姓名到返回值
+                if dialog_info.get('recipient_name'):
+                    result['recipient_name'] = dialog_info['recipient_name']
+                    log(f"  [转账] 记录收款人姓名: {result['recipient_name']}")
+            
+            # 点击确认按钮
+            log("  [转账] 点击确认按钮...")
+            await self.adb.tap(device_id, self.CONFIRM_BUTTON[0], self.CONFIRM_BUTTON[1])
+            await asyncio.sleep(TimeoutsConfig.WAIT_EXTRA_LONG)
+            
+            # 9. 验证转账结果（使用整合检测器）
+            log("  [转账] 步骤9: 验证转账结果...")
+            
+            page_result = await self.detector.detect_page(device_id, use_cache=False)
+            
+            if page_result and page_result.state == PageState.WALLET:
+                log(f"  [转账] ✓ 检测到钱包页面，转账成功")
+                
+                # 如果有初始余额，验证余额变化
+                if initial_balance is not None:
+                    log(f"  [转账] 返回个人页面验证余额变化...")
+                    
+                    # 按返回键回到个人页面
+                    await self.adb.press_back(device_id)
+                    await asyncio.sleep(TimeoutsConfig.TRANSFER_PAGE_LOAD)
+                    
+                    # 使用整合检测器获取转账后的余额
+                    log(f"  [转账] 使用整合检测器获取转账后余额...")
+                    page_result = await self.detector.detect_page(
+                        device_id, 
+                        use_cache=False, 
+                        detect_elements=True
+                    )
+                    
+                    final_balance = None
+                    if page_result and page_result.elements:
+                        for element in page_result.elements:
+                            if element.class_name == '余额数字':
+                                # 找到余额元素，使用OCR识别该区域的文本
+                                log(f"  [整合检测] ✓ 检测到余额元素，位置: {element.center}, 置信度: {element.confidence:.2f}")
+                                
+                                # 截图并OCR识别余额区域
+                                try:
+                                    from .screen_capture import ScreenCapture
+                                    from .ocr_thread_pool import OCRThreadPool
+                                    from PIL import Image
+                                    import cv2
+                                    import re
+                                    
+                                    # 截图
+                                    screen_capture = ScreenCapture(self.adb)
+                                    screenshot = await screen_capture.capture(device_id)
+                                    
+                                    # 裁剪余额区域（扩大一点范围以确保完整）
+                                    x1, y1, x2, y2 = element.bbox
+                                    padding = 10
+                                    x1 = max(0, x1 - padding)
+                                    y1 = max(0, y1 - padding)
+                                    x2 = min(screenshot.shape[1], x2 + padding)
+                                    y2 = min(screenshot.shape[0], y2 + padding)
+                                    
+                                    balance_region = screenshot[y1:y2, x1:x2]
+                                    balance_pil = Image.fromarray(cv2.cvtColor(balance_region, cv2.COLOR_BGR2RGB))
+                                    
+                                    # OCR识别
+                                    ocr_pool = OCRThreadPool()
+                                    ocr_result = await ocr_pool.recognize(balance_pil)
+                                    
+                                    if ocr_result and ocr_result.texts:
+                                        # 从OCR结果中提取数字
+                                        for text in ocr_result.texts:
+                                            balance_match = re.search(r'[\d.]+', text)
+                                            if balance_match:
+                                                final_balance = float(balance_match.group(0))
+                                                log(f"  [整合检测] ✓ OCR识别到余额: {final_balance:.2f} 元")
+                                                break
+                                except Exception as e:
+                                    log(f"  [整合检测] ⚠️ OCR识别余额失败: {e}")
+                                
+                                break
+                    
+                    if final_balance is not None:
+                        log(f"  [转账] 转账前余额: {initial_balance:.2f} 元")
+                        log(f"  [转账] 转账后余额: {final_balance:.2f} 元")
+                        
+                        # 计算余额变化
+                        balance_change = final_balance - initial_balance
+                        
+                        if balance_change < 0:
+                            # 余额减少，转账成功
+                            log(f"  [转账] ✓✓ 余额减少 {abs(balance_change):.2f} 元，转账成功 → {recipient_id}")
+                            
+                            # 添加到转账链条
+                            transfer_chain.append(recipient_id)
+                            
+                            result['success'] = True
+                            result['message'] = "转账成功"
+                            result['chain'] = transfer_chain
+                            result['amount'] = abs(balance_change)
+                            return result
+                        else:
+                            # 余额没变化或增加，转账失败
+                            log(f"  [转账] ❌ 余额无变化（{final_balance:.2f} 元），转账失败")
+                            result['success'] = False
+                            result['message'] = "转账失败：余额无变化"
+                            result['error_type'] = ErrorType.TRANSFER_FAILED  # 转账失败
+                            return result
+                    else:
+                        log(f"  [转账] ⚠️ 无法获取转账后余额，但已检测到钱包页面，判断为成功")
+                
+                # 没有初始余额或无法获取转账后余额，但已在钱包页面，判断为成功
+                log(f"  [转账] ✓ 检测到钱包页面，判断为转账成功")
+                
+                # 添加到转账链条
+                transfer_chain.append(recipient_id)
+                
+                result['success'] = True
+                result['message'] = "转账成功"
+                result['chain'] = transfer_chain
+                if transfer_amount:
+                    result['amount'] = float(transfer_amount)
+                
+                return result
+            else:
+                log(f"  [转账] ⚠️ 未检测到钱包页面，当前页面: {page_result.state.value if page_result else 'unknown'}")
+                result['message'] = "无法确认转账结果"
+                result['error_type'] = ErrorType.TRANSFER_FAILED  # 转账失败
+                return result
+            
+        except Exception as e:
+            log(f"  [转账] ❌ 转账失败: {e}")
+            import traceback
+            log(f"  [转账] 详细错误: {traceback.format_exc()}")
+            result['message'] = f"转账失败: {e}"
+            result['error_type'] = ErrorType.TRANSFER_FAILED  # 转账失败
+            return result
+

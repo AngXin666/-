@@ -4,6 +4,7 @@ GUI Interface Module
 """
 
 import asyncio
+import logging
 import os
 import threading
 import time
@@ -83,6 +84,14 @@ class AutomationGUI:
         self.max_wait_time_var = tk.IntVar(value=60)
         self.launch_timeout_var = tk.IntVar(value=120)
         self.switch_delay_var = tk.IntVar(value=3)
+        
+        # 定时运行配置
+        self.scheduled_run_enabled = tk.BooleanVar(value=False)
+        self.scheduled_run_time = tk.StringVar(value="08:00")
+        self.scheduled_hour_var = tk.StringVar(value="08")
+        self.scheduled_minute_var = tk.StringVar(value="00")
+        self.last_scheduled_run_date = None  # 记录上次定时运行的日期
+        self.schedule_check_thread = None  # 定时检查线程
         
         # 线程控制事件(改进：使用Event对象，线程可以更快响应)
         self.stop_event = threading.Event()  # 停止事件
@@ -168,20 +177,11 @@ class AutomationGUI:
                 # 标记模型已加载
                 self.models_loaded = True
                 
-                # 在主线程中显示加载完成信息
-                self.root.after(0, lambda: self._log(f""))
-                self.root.after(0, lambda: self._log(f"{'='*60}"))
+                # 在主线程中显示简洁的加载完成信息
                 self.root.after(0, lambda: self._log(f"✅ 程序已准备就绪"))
-                self.root.after(0, lambda: self._log(f"{'='*60}"))
-                self.root.after(0, lambda: self._log(f"  - 模型加载时间: {stats['total_time']:.2f}秒"))
-                self.root.after(0, lambda: self._log(f"  - 内存占用: {stats['memory_after'] / 1024 / 1024:.1f}MB"))
-                self.root.after(0, lambda: self._log(f"  - 已加载模型: {', '.join(stats['models_loaded'])}"))
-                self.root.after(0, lambda: self._log(f""))
-                self.root.after(0, lambda: self._log(f"💡 提示：现在可以点击'开始运行'按钮开始自动化任务"))
-                self.root.after(0, lambda: self._log(f""))
                 
                 if stats['errors']:
-                    self.root.after(0, lambda: self._log(f"  ⚠️ 警告: {len(stats['errors'])} 个模型加载失败"))
+                    self.root.after(0, lambda: self._log(f"⚠️ 警告: {len(stats['errors'])} 个模型加载失败"))
                 
             except Exception as e:
                 self.root.after(0, lambda err=str(e): self._log(f"❌ 模型加载失败: {err}"))
@@ -316,14 +316,71 @@ class AutomationGUI:
         )
         self.auto_transfer_switch.pack(side=tk.LEFT)
         
+        # 定时运行配置（新增一行）
+        row5 = ttk.Frame(config_frame)
+        row5.pack(fill=tk.X, pady=2)
+        
+        # 定时运行开关
+        scheduled_switch_frame = ttk.Frame(row5)
+        scheduled_switch_frame.pack(side=tk.LEFT, padx=(0, 10))
+        
+        ttk.Label(scheduled_switch_frame, text="定时运行:").pack(side=tk.LEFT, padx=(0, 5))
+        
+        self.scheduled_run_switch = ToggleSwitch(
+            scheduled_switch_frame,
+            width=60,
+            height=28,
+            command=self._on_scheduled_run_changed
+        )
+        self.scheduled_run_switch.pack(side=tk.LEFT)
+        
+        # 定时运行时间设置（使用Spinbox滚轮选择）
+        ttk.Label(row5, text="运行时间:").pack(side=tk.LEFT, padx=(10, 5))
+        
+        # 小时选择（00-23）
+        self.scheduled_hour_var = tk.StringVar(value="08")
+        hour_spinbox = ttk.Spinbox(
+            row5, 
+            from_=0, 
+            to=23, 
+            textvariable=self.scheduled_hour_var, 
+            width=4,
+            format="%02.0f",
+            command=self._on_scheduled_time_changed
+        )
+        hour_spinbox.pack(side=tk.LEFT)
+        hour_spinbox.bind('<FocusOut>', lambda e: self._on_scheduled_time_changed())
+        hour_spinbox.bind('<Return>', lambda e: self._on_scheduled_time_changed())
+        
+        ttk.Label(row5, text=":").pack(side=tk.LEFT)
+        
+        # 分钟选择（00-59）
+        self.scheduled_minute_var = tk.StringVar(value="00")
+        minute_spinbox = ttk.Spinbox(
+            row5, 
+            from_=0, 
+            to=59, 
+            textvariable=self.scheduled_minute_var, 
+            width=4,
+            format="%02.0f",
+            command=self._on_scheduled_time_changed
+        )
+        minute_spinbox.pack(side=tk.LEFT)
+        minute_spinbox.bind('<FocusOut>', lambda e: self._on_scheduled_time_changed())
+        minute_spinbox.bind('<Return>', lambda e: self._on_scheduled_time_changed())
+        
+        # 定时运行状态显示
+        self.scheduled_status_var = tk.StringVar(value="")
+        ttk.Label(row5, textvariable=self.scheduled_status_var, foreground="blue").pack(side=tk.LEFT, padx=(20, 0))
+        
         # 添加账号统计信息(在自动转账开关右侧)
         self.account_total_var = tk.StringVar(value="账号总计: 0")
         self.account_pending_var = tk.StringVar(value="待处理: 0")
         self.status_var = tk.StringVar(value="就绪")
         
-        ttk.Label(row4, textvariable=self.account_total_var, foreground="blue").pack(side=tk.LEFT, padx=(10, 0))
-        ttk.Label(row4, textvariable=self.account_pending_var, foreground="orange").pack(side=tk.LEFT, padx=(10, 0))
-        ttk.Label(row4, textvariable=self.status_var, foreground="green").pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Label(row5, textvariable=self.account_total_var, foreground="blue").pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Label(row5, textvariable=self.account_pending_var, foreground="orange").pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Label(row5, textvariable=self.status_var, foreground="green").pack(side=tk.LEFT, padx=(10, 0))
 
         # === 控制按钮区域 ===
         control_frame = ttk.Frame(main_frame)
@@ -603,6 +660,27 @@ class AutomationGUI:
         transfer_config = get_transfer_config()
         self.auto_transfer_switch.set_state(transfer_config.enabled)
         
+        # 加载定时运行配置
+        scheduled_enabled = getattr(self.config, 'scheduled_run_enabled', False)
+        scheduled_time = getattr(self.config, 'scheduled_run_time', '08:00')
+        self.scheduled_run_enabled.set(scheduled_enabled)
+        self.scheduled_run_time.set(scheduled_time)
+        
+        # 解析时间并设置到小时和分钟变量
+        try:
+            hour, minute = scheduled_time.split(':')
+            self.scheduled_hour_var.set(f"{int(hour):02d}")
+            self.scheduled_minute_var.set(f"{int(minute):02d}")
+        except:
+            self.scheduled_hour_var.set("08")
+            self.scheduled_minute_var.set("00")
+        
+        self.scheduled_run_switch.set_state(scheduled_enabled)
+        
+        # 如果启用了定时运行，启动定时检查线程
+        if scheduled_enabled:
+            self._start_schedule_check_thread()
+        
         # 自动加载账号列表(如果配置了账号文件)
         self._auto_load_accounts()
     
@@ -706,24 +784,14 @@ class AutomationGUI:
         4. 即使账号从文件中删除，历史记录仍然保留
         """
         try:
-            # 调试：记录调用栈
-            import traceback
-            
-            stack = traceback.extract_stack()
-            caller = stack[-2]  # 获取调用者信息
-            self._log(f"🔍 _auto_load_accounts 被调用 (来自: {caller.filename}:{caller.lineno} {caller.name})")
-            
             accounts_file = self.accounts_file_var.get()
             
             # ===== 步骤1: 加载历史记录（永久数据源）=====
             history_data = self._load_from_history()
             history_dict = {}
             if history_data:
-                self._log(f"📊 从历史记录加载了 {len(history_data)} 条数据")
                 # 转换为字典格式,以手机号为key
                 history_dict = {record['手机号']: record for record in history_data}
-            else:
-                self._log(f"📊 没有找到历史记录")
             
             # ===== 步骤2: 加载账号文件（当前活跃账号）=====
             current_accounts = []
@@ -738,30 +806,16 @@ class AutomationGUI:
                         account_manager = AccountManager(accounts_file)
                         current_accounts = account_manager.load_accounts()
                         current_phones = {acc.phone for acc in current_accounts}
-                        
-                        if current_accounts:
-                            self._log(f"📄 从文件读取到 {len(current_accounts)} 个账号")
-                        else:
-                            self._log("📄 账号文件为空")
                     except Exception as e:
                         self._log(f"❌ 加载账号文件失败: {e}")
                         import traceback
                         traceback.print_exc()
-                else:
-                    self._log(f"📄 未配置账号文件或文件不存在")
-            else:
-                self._log(f"📄 未配置账号文件")
             
             # ===== 步骤3: 只显示账号文件中的账号（不显示历史记录中的其他账号）=====
             if not current_accounts:
-                self._log("⚠️ 没有账号数据可显示")
                 return
             
             # ===== 步骤4: 清空表格并重新填充 =====
-            # 调试：记录当前表格行数
-            current_count = len(self.results_tree.get_children())
-            if current_count > 0:
-                self._log(f"🔄 表格中已有 {current_count} 行数据，将被更新")
             
             # 清空现有表格
             all_items = self.results_tree.get_children()
@@ -893,10 +947,9 @@ class AutomationGUI:
             self.account_pending_var.set(f"待处理: {pending_count}")
             
             # ===== 步骤7: 显示加载总结 =====
-            if restored_count > 0:
-                self._log(f"✅ 已加载 {total} 个账号（其中 {restored_count} 个从历史恢复，{pending_count} 个待处理）")
-            else:
-                self._log(f"✅ 已加载 {total} 个账号（全部待处理）")
+            # 只在有账号时显示简洁的加载信息
+            if total > 0:
+                self._log(f"✅ 已加载 {total} 个账号")
             
             # ===== 步骤8: 恢复勾选状态 =====
             saved_selections = self.selection_manager.load_selections()
@@ -1063,6 +1116,7 @@ class AutomationGUI:
                 # 创建控制器
                 controller = EmulatorController(emulator_path)
                 
+                # 简洁日志：正在检测
                 self.root.after(0, lambda: self._log("正在检测运行中的实例..."))
                 self.root.after(0, lambda: self.running_instances_var.set("检测中..."))
                 
@@ -1074,7 +1128,6 @@ class AutomationGUI:
                 
                 if not running_instances:
                     self.root.after(0, lambda: self._log("❌ 未检测到运行中的实例"))
-                    self.root.after(0, lambda: self._log("请确保已启动模拟器实例"))
                     self.root.after(0, lambda: self.running_instances_var.set("未检测到"))
                 else:
                     count = len(running_instances)
@@ -1083,35 +1136,18 @@ class AutomationGUI:
                     # 获取当前设置的并发实例数
                     concurrent_count = self.instance_count_var.get()
                     
-                    self.root.after(0, lambda: self._log(f"✅ 检测到 {count} 个运行中的实例: {instances_str}"))
+                    # 简洁日志：检测结果
+                    self.root.after(0, lambda: self._log(f"✅ 检测到 {count} 个运行中的实例"))
                     
                     # 自动调整并行数
                     if auto_adjust:
                         self.root.after(0, lambda c=count: self.instance_count_var.set(c))
-                        self.root.after(0, lambda c=count: self._log(f"✅ 已自动调整并行数为: {c}"))
-                    else:
-                        self.root.after(0, lambda: self._log(f"   当前并发实例数设置: {concurrent_count}"))
-                    
-                    # 显示详细信息
-                    for instance_id in running_instances:
-                        port = 16384 + instance_id * 32 if controller.emulator_type == EmulatorType.MUMU else 5555 + instance_id * 2
-                        window_name = f"MuMu安卓设备" if instance_id == 0 else f"MuMu安卓设备-{instance_id}"
-                        self.root.after(0, lambda i=instance_id, p=port, w=window_name: 
-                                      self._log(f"  - 实例 #{i} (端口 {p}, 窗口: {w})"))
+                        self.root.after(0, lambda c=count: self._log(f"   已自动调整并行数为: {c}"))
                     
                     # 更新显示：显示并发实例数/总实例数
                     final_concurrent = count if auto_adjust else concurrent_count
                     self.root.after(0, lambda c=final_concurrent, t=count: 
                                   self.running_instances_var.set(f"✅ 并发{c}/{t}个实例"))
-                    
-                    # 建议设置并发数（如果没有自动调整）
-                    if not auto_adjust:
-                        if count > concurrent_count:
-                            self.root.after(0, lambda c=count: 
-                                          self._log(f"💡 提示: 检测到{c}个实例，可以增加并发数以提高效率"))
-                        elif count < concurrent_count:
-                            self.root.after(0, lambda c=count: 
-                                          self._log(f"⚠️ 警告: 并发数({concurrent_count})大于运行实例数({c})，建议调整"))
                 
             except Exception as e:
                 self.root.after(0, lambda: self._log(f"❌ 检测失败: {e}"))
@@ -1235,6 +1271,10 @@ class AutomationGUI:
         # 保存模拟器类型选择(新增)
         self.config.emulator_type_selection = self.emulator_type_var.get()
         
+        # 保存定时运行配置
+        self.config.scheduled_run_enabled = self.scheduled_run_enabled.get()
+        self.config.scheduled_run_time = self.scheduled_run_time.get()
+        
         self.config_loader.save(self.config)
         self._log("配置已保存")
     
@@ -1245,6 +1285,11 @@ class AutomationGUI:
             self.config.accounts_file = self.accounts_file_var.get()
             self.config.max_concurrent_instances = self.instance_count_var.get()
             self.config.emulator_type_selection = self.emulator_type_var.get()
+            
+            # 保存定时运行配置
+            self.config.scheduled_run_enabled = self.scheduled_run_enabled.get()
+            self.config.scheduled_run_time = self.scheduled_run_time.get()
+            
             self.config_loader.save(self.config)
         except Exception as e:
             # 静默失败，避免干扰用户
@@ -2258,7 +2303,7 @@ class AutomationGUI:
     
     async def _run_automation_async(self):
         """异步运行自动化"""
-        self.root.after(0, lambda: self._log("开始运行自动化脚本..."))
+        self.root.after(0, lambda: self._log("开始运行..."))
         
         # 检查停止标志(使用Event)
         if self.stop_event.is_set():
@@ -2271,8 +2316,6 @@ class AutomationGUI:
         if not controller.is_available():
             self.root.after(0, lambda: self._log("模拟器控制台程序未找到"))
             return
-        
-        self.root.after(0, lambda: self._log(f"使用: {controller.get_emulator_info()}"))
         
         # 检查停止标志(使用Event)
         if self.stop_event.is_set():
@@ -2287,103 +2330,92 @@ class AutomationGUI:
             return
         
         total = len(accounts)
-        self.root.after(0, lambda: self._log(f"已加载 {total} 个账号"))
         
         # 检查停止标志（使用Event）
         if self.stop_event.is_set():
             return
         
-        # ===== 先统计未勾选账号数（需要处理的账号数）=====
-        # 在主线程中一次性读取所有勾选状态
+        # 统计未勾选账号数（需要处理的账号数）
         checked_phones = set()
         with self.stats_lock:
             for item_id in self.results_tree.get_children():
                 if self.checked_items.get(item_id, False):
                     values = self.results_tree.item(item_id, 'values')
                     if values and len(values) > 0:
-                        checked_phones.add(values[0])  # 第一列是手机号
+                        checked_phones.add(values[0])
         
         checked_count = len(checked_phones)
         unchecked_count = len(accounts) - checked_count
-        self.root.after(0, lambda c=checked_count, u=unchecked_count: 
-                       self._log(f"📋 当前勾选状态: 已勾选 {c} 个账号（将跳过），未勾选 {u} 个账号（将处理）"))
+        
+        # 简化日志：只显示需要处理的账号数
+        self.root.after(0, lambda u=unchecked_count: 
+                       self._log(f"需要处理 {u} 个账号"))
         
         # 如果没有未勾选的账号，直接返回
         if unchecked_count == 0:
-            self.root.after(0, lambda: self._log("❌ 没有需要处理的账号（所有账号都已勾选）"))
+            self.root.after(0, lambda: self._log("没有需要处理的账号"))
             return
         
-        # ===== 批量启动模拟器实例（支持多开） =====
-        # 检查是否启用自动启动模拟器
+        # 批量启动模拟器实例（支持多开）
         auto_launch = self.auto_launch_var.get()
-        # 根据未勾选账号数决定启动多少个实例（不超过配置的最大值）
         max_workers_config = self.instance_count_var.get()
         max_workers = min(unchecked_count, max_workers_config)
         
-        self.root.after(0, lambda u=unchecked_count, m=max_workers, c=max_workers_config: 
-                       self._log(f"💡 需要处理 {u} 个账号，将启动 {m} 个实例（配置最大值: {c}）"))
-        
         if auto_launch:
-            self.root.after(0, lambda w=max_workers: self._log(f"准备启动 {w} 个模拟器实例..."))
+            self.root.after(0, lambda w=max_workers: self._log(f"准备启动 {w} 个实例"))
         self.root.after(0, lambda: self._update_progress(0, total, f"正在检测模拟器实例..."))
         
-        # 先检测正在运行的模拟器实例
-        self.root.after(0, lambda: self._log("检测正在运行的模拟器实例..."))
+        # 检测正在运行的模拟器实例
         running_instances = await controller.get_running_instances()
         
         if running_instances:
-            self.root.after(0, lambda: self._log(f"检测到 {len(running_instances)} 个正在运行的实例"))
-            for inst in running_instances:
-                self.root.after(0, lambda i=inst: self._log(f"  - 实例 {i}"))
-            
             # 使用检测到的实例ID初始化实例池
-            self.instance_pool = running_instances[:max_workers]  # 最多使用max_workers个实例
+            self.instance_pool = running_instances[:max_workers]
             self.root.after(0, lambda: self._log(f"使用 {len(self.instance_pool)} 个已运行的实例"))
         else:
             if not auto_launch:
                 # 未启用自动启动，且没有运行中的实例
-                self.root.after(0, lambda: self._log("❌ 未检测到运行中的实例"))
+                self.root.after(0, lambda: self._log("未检测到运行中的实例"))
                 self.root.after(0, lambda: self._log("请手动启动模拟器，或在设置中启用'自动启动模拟器'"))
                 return
             
-            self.root.after(0, lambda: self._log("未检测到运行中的实例，将启动新实例"))
             # 初始化实例池
-            self.instance_pool = list(range(max_workers))  # [0, 1, 2, ..., max_workers-1]
+            self.instance_pool = list(range(max_workers))
             
             # 批量启动所有需要的模拟器实例
             for instance_id in range(max_workers):
                 if self.stop_event.is_set():
                     return
                 
-                self.root.after(0, lambda i=instance_id: self._log(f"启动模拟器实例 {i}..."))
+                self.root.after(0, lambda i=instance_id: self._log(f"启动实例 {i}..."))
                 
                 # 检查实例是否已运行
                 is_running = await controller._is_running(instance_id)
                 
                 if is_running:
-                    self.root.after(0, lambda i=instance_id: self._log(f"✅ 实例 {i} 已在运行"))
+                    self.root.after(0, lambda i=instance_id: self._log(f"✓ 实例 {i} 已运行"))
                 else:
                     # 启动实例
                     success = await controller.launch_instance(instance_id, timeout=120)
                     
                     if not success:
-                        self.root.after(0, lambda i=instance_id: self._log(f"❌ 实例 {i} 启动失败"))
+                        self.root.after(0, lambda i=instance_id: self._log(f"✗ 实例 {i} 启动失败"))
                         # 从实例池中移除失败的实例
                         with self.instance_lock:
                             if instance_id in self.instance_pool:
                                 self.instance_pool.remove(instance_id)
                     else:
-                        self.root.after(0, lambda i=instance_id: self._log(f"✅ 实例 {i} 启动成功"))
+                        self.root.after(0, lambda i=instance_id: self._log(f"✓ 实例 {i} 启动成功"))
                 
                 # 短暂延迟，避免同时启动太多实例
                 await asyncio.sleep(2)
         
         # 检查是否有可用实例
         if not self.instance_pool:
-            self.root.after(0, lambda: self._log("❌ 没有可用的模拟器实例"))
+            self.root.after(0, lambda: self._log("没有可用的模拟器实例"))
             return
         
-        self.root.after(0, lambda: self._log(f"✅ 成功启动 {len(self.instance_pool)} 个模拟器实例"))
+        self.root.after(0, lambda: self._log(f"✓ 成功启动 {len(self.instance_pool)} 个实例"))
         
         # 检查停止标志（使用Event）
         if self.stop_event.is_set():
@@ -2394,23 +2426,22 @@ class AutomationGUI:
         success_count = 0
         failed_count = 0
         total_draw = 0.0
-        total_checkin_reward = 0.0  # 累积总签到奖励
-        total_balance = 0.0  # 累积总余额（所有账号的余额）
-        total_points = 0  # 累积总积分
-        total_vouchers = 0.0  # 累积总抵扣券
-        total_coupons = 0  # 累积总优惠券
+        total_checkin_reward = 0.0
+        total_balance = 0.0
+        total_points = 0
+        total_vouchers = 0.0
+        total_coupons = 0
         
         # 直接使用已知的溪盟商城包名
         target_app = "com.ry.xmsc"
-        self.root.after(0, lambda: self._log(f"使用溪盟商城包名: {target_app}"))
         
         # 获取Activity名称
         target_activity = self.config.target_app_activity
         if target_activity:
             self.root.after(0, lambda: self._log(f"使用Activity: {target_activity}"))
         
-        # ===== 使用动态任务队列（所有实例共享一个账号队列）=====
-        self.root.after(0, lambda w=max_workers: self._log(f"使用 {w} 个工作线程（动态分配账号）"))
+        # 使用动态任务队列（所有实例共享一个账号队列）
+        # 删除"使用 X 个工作线程"消息
         
         # 创建共享的账号队列（线程安全）
         import queue
@@ -2446,18 +2477,12 @@ class AutomationGUI:
             account_queue.put((i, account))
             queued_count += 1
         
-        self.root.after(0, lambda c=queued_count: self._log(f"✅ 已将 {c} 个账号加入处理队列"))
+        self.root.after(0, lambda c=queued_count: self._log(f"✓ 已将 {c} 个账号加入处理队列"))
         
         # 为每个实例创建一个工作线程
         instance_threads = []
         
-        # 提示用户日志文件位置
-        log_dir = Path("runtime_data") / "instance_logs"
-        self.root.after(0, lambda: self._log(f"\n💡 提示：每个实例的详细日志保存在: {log_dir.absolute()}"))
-        self.root.after(0, lambda: self._log(f"   - 实例0: instance_0.log"))
-        self.root.after(0, lambda: self._log(f"   - 实例1: instance_1.log"))
-        self.root.after(0, lambda: self._log(f"   - 实例2: instance_2.log"))
-        self.root.after(0, lambda: self._log(f"   可以用文本编辑器打开这些文件实时监控\n"))
+        # 删除详细日志提示，减少噪音
         
         # 为每个实例创建专属处理线程（从共享队列获取账号）
         def process_instance_accounts(instance_id):
@@ -2533,6 +2558,8 @@ class AutomationGUI:
                 if self.stop_event.is_set():
                     break
                 
+                # 添加分隔线，清晰分隔不同账号
+                instance_log_callback("=" * 60)
                 instance_log_callback(f"开始处理账号 {account_index+1}/{total}: {account.phone}")
                 
                 try:
@@ -2583,7 +2610,7 @@ class AutomationGUI:
                                            tp=current_tp, tv=current_tv, tc=current_tc:
                                            self._update_stats(total, s, f, tcr, tb, tp, tv, tc))
                             self.root.after(0, lambda ar=result: self._add_result_to_table(ar))
-                            instance_log_callback(f"✓ 账号 {account.phone} 处理成功")
+                            # 删除重复的成功消息，因为 _process_account 已经输出了 "✓ 账号处理完成"
                         else:
                             failed_count += 1
                             failed_accounts.append((account, result.error_message if result else "处理失败"))
@@ -2850,7 +2877,7 @@ class AutomationGUI:
         adb_path = controller.get_adb_path()
         device_id = f"127.0.0.1:{adb_port}"
         
-        log_callback(f"使用设备: {device_id}")
+        # 删除"使用设备"消息，减少日志噪音
         
         # P1修复: 创建该实例的独立 ADB 连接，使用try...finally确保资源释放
         adb = ADBBridge(adb_path)
@@ -2884,24 +2911,20 @@ class AutomationGUI:
             # XimengAutomation会从ModelManager获取所有模型
             ximeng = XimengAutomation(ui_automation, screen_capture, auto_login, adb, log_callback=log_callback)
             
-            # 处理账号（使用优化的 run_full_workflow 方法，但需要先处理缓存）
-            log_callback("准备处理账号...")
-            
             # 记录开始时间
             import time
+            import logging
             start_time = time.time()
             
             # 更新表格状态为"执行中"
             self.root.after(0, lambda: self._update_account_status_in_table(account.phone, "执行中"))
             self.root.after(0, lambda: self._update_pending_count())
             
-            # 步骤1: 停止应用（如果正在运行）
-            log_callback("停止应用...")
+            # 准备阶段：停止应用、检查缓存、启动应用
             await adb.stop_app(device_id, target_app)
             await asyncio.sleep(1)
             
-            # 步骤2: 处理缓存验证（关键！避免使用错误的缓存）
-            log_callback("检查登录缓存...")
+            # 处理缓存验证
             has_valid_cache = False
             
             if auto_login.enable_cache and auto_login.cache_manager:
@@ -2910,43 +2933,38 @@ class AutomationGUI:
                 
                 # 检查是否有该账号的缓存
                 if auto_login.cache_manager.has_cache(account.phone, expected_user_id):
-                    log_callback(f"检测到账号 {account.phone} 的登录缓存")
-                    if expected_user_id:
-                        log_callback(f"预期用户ID: {expected_user_id}")
+                    log_callback(f"检测到登录缓存")
                     
                     # 恢复缓存
-                    log_callback("恢复登录缓存...")
                     if await auto_login.cache_manager.restore_login_cache(device_id, account.phone, user_id=expected_user_id):
-                        log_callback("OK 缓存恢复成功，将验证用户ID")
+                        log_callback("缓存恢复成功")
                         has_valid_cache = True
                     else:
-                        log_callback("! 缓存恢复失败，清理后使用正常登录")
                         await auto_login.cache_manager.clear_app_login_data(device_id, target_app)
                 else:
-                    log_callback("未找到登录缓存，清理旧数据")
                     await auto_login.cache_manager.clear_app_login_data(device_id, target_app)
             else:
-                log_callback("缓存功能未启用，清理旧数据")
                 if auto_login.cache_manager:
                     await auto_login.cache_manager.clear_app_login_data(device_id, target_app)
             
-            # 步骤3: 启动应用
-            log_callback("启动应用...")
+            # 启动应用
             success = await adb.start_app(device_id, target_app, target_activity)
             if not success:
                 raise Exception("应用启动失败")
-            log_callback(f"启动成功")
             await asyncio.sleep(3)
             
-            # 步骤4: 处理启动流程（跳过广告、弹窗等）- 使用GPU加速版本
-            log_callback("处理启动流程（GPU加速）...")
+            # 处理启动流程（跳过广告、弹窗等）
+            # 获取文件日志记录器
+            file_logger = logging.getLogger(__name__)
+            
             startup_ok = await ximeng.handle_startup_flow_integrated(
                 device_id, 
                 log_callback=log_callback,
-                stop_check=self._check_stop_or_pause,  # 使用新的检查函数，同时检查停止和暂停
+                stop_check=self._check_stop_or_pause,
                 package_name=target_app,
                 activity_name=target_activity,
-                max_retries=3
+                max_retries=3,
+                file_logger=file_logger
             )
             
             if not startup_ok:
@@ -2954,12 +2972,8 @@ class AutomationGUI:
                     raise Exception("用户中断操作")
                 raise Exception("启动流程失败")
             
-            log_callback("✓ 启动流程完成")
-            
-            # 步骤5: 如果有缓存，验证用户ID
+            # 如果有缓存，验证用户ID
             if has_valid_cache:
-                log_callback("验证缓存登录状态...")
-                
                 from .navigator import Navigator
                 from .model_manager import ModelManager
                 from .page_detector import PageState
@@ -2981,22 +2995,15 @@ class AutomationGUI:
                     )
                     
                     if page_result and page_result.state == PageState.PROFILE_LOGGED:
-                        log_callback("OK 检测到已登录状态")
-                        
                         # 获取当前用户ID验证
-                        log_callback("正在验证用户ID...")
                         profile_info = await ximeng.profile_reader.get_full_profile_parallel(device_id)
                         
                         if profile_info and profile_info.get('user_id'):
                             current_user_id = profile_info['user_id']
                             expected_user_id = auto_login.cache_manager._get_expected_user_id(account.phone)
                             
-                            log_callback(f"当前登录用户ID: {current_user_id}")
-                            log_callback(f"预期用户ID（账号 {account.phone}）: {expected_user_id}")
-                            
                             if expected_user_id and current_user_id != expected_user_id:
-                                log_callback(f"❌ 用户ID不匹配！缓存被错误使用")
-                                log_callback("清理错误缓存，重新登录...")
+                                log_callback(f"用户ID不匹配，重新登录")
                                 
                                 # 停止应用并清理
                                 await adb.stop_app(device_id, target_app)
@@ -3010,12 +3017,14 @@ class AutomationGUI:
                                 # 清理页面检测缓存
                                 ximeng.hybrid_detector.clear_cache()
                                 
-                                # 重新处理启动流程（GPU加速）
+                                # 重新处理启动流程
+                                file_logger = logging.getLogger(__name__)
                                 startup_ok = await ximeng.handle_startup_flow_integrated(
                                     device_id, log_callback=log_callback,
-                                    stop_check=self._check_stop_or_pause,  # 使用新的检查函数
+                                    stop_check=self._check_stop_or_pause,
                                     package_name=target_app, activity_name=target_activity,
-                                    max_retries=3
+                                    max_retries=3,
+                                    file_logger=file_logger
                                 )
                                 if not startup_ok:
                                     raise Exception("重新启动失败")
@@ -3026,48 +3035,39 @@ class AutomationGUI:
                                 # 清理页面检测缓存，因为当前已在个人页
                                 ximeng.hybrid_detector.clear_cache()
                         else:
-                            log_callback("! 无法获取用户ID，清理后重新登录")
+                            # 无法获取用户ID，清理后重新登录
                             await adb.stop_app(device_id, target_app)
                             await asyncio.sleep(1)
                             await auto_login.cache_manager.clear_app_login_data(device_id, target_app)
                             await adb.start_app(device_id, target_app, target_activity)
                             await asyncio.sleep(3)
-                            # 清理页面检测缓存
                             ximeng.hybrid_detector.clear_cache()
+                            file_logger = logging.getLogger(__name__)
                             startup_ok = await ximeng.handle_startup_flow_integrated(
                                 device_id, log_callback=log_callback,
-                                stop_check=self._check_stop_or_pause,  # 使用新的检查函数
+                                stop_check=self._check_stop_or_pause,
                                 package_name=target_app, activity_name=target_activity,
-                                max_retries=3
+                                max_retries=3,
+                                file_logger=file_logger
                             )
                             if not startup_ok:
                                 raise Exception("重新启动失败")
                             has_valid_cache = False
                     else:
-                        log_callback("! 未检测到登录状态，缓存无效")
                         has_valid_cache = False
-                        # 清理页面检测缓存
                         ximeng.hybrid_detector.clear_cache()
                 else:
-                    log_callback("! 无法导航到个人页面，缓存可能无效")
                     has_valid_cache = False
-                    # 清理页面检测缓存
                     ximeng.hybrid_detector.clear_cache()
             
-            # 步骤6: 调用优化的完整工作流
-            log_callback("开始执行完整工作流...")
+            # 调用完整工作流
+            ximeng._stop_check = self._check_stop_or_pause
             
-            # 设置停止检查函数（重要！run_full_workflow 需要这个）
-            ximeng._stop_check = self._check_stop_or_pause  # 使用新的检查函数，同时检查停止和暂停
-            
-            # 注意：不要禁用 enable_cache，否则登录成功后无法保存缓存
-            # 缓存验证已经在前面完成，run_full_workflow 会根据登录状态决定是否需要登录
             if has_valid_cache:
-                log_callback("使用已验证的缓存登录，跳过登录步骤，直接获取个人信息")
-                # 缓存登录已验证，当前已在个人页，跳过登录步骤
+                # 使用缓存登录
                 result = await ximeng.run_full_workflow(device_id, account, skip_login=True)
             else:
-                log_callback("使用正常登录流程（登录成功后会保存缓存）")
+                # 正常登录
                 result = await ximeng.run_full_workflow(device_id, account, skip_login=False)
             
             # 设置登录方式
@@ -3080,7 +3080,7 @@ class AutomationGUI:
             duration = time.time() - start_time
             result.duration = duration
             
-            # 保存到数据库（重要！）
+            # 保存到数据库
             log_callback("保存处理结果到数据库...")
             try:
                 account_manager.update_account_result(account.phone, result)
@@ -3095,6 +3095,7 @@ class AutomationGUI:
                 self.root.after(0, lambda: self._add_result_to_table(result))
                 self.root.after(0, lambda: self._update_pending_count())
                 log_callback(f"✓ 账号处理完成 (耗时: {round(duration, 3)}秒)")
+                log_callback("")  # 空行分隔
                 
                 # 清除该账号的警告日志（重试成功后）
                 self.root.after(0, lambda p=account.phone: self._clear_account_warnings(p))
@@ -3102,6 +3103,7 @@ class AutomationGUI:
                 self.root.after(0, lambda: self._update_account_status_in_table(account.phone, "失败"))
                 self.root.after(0, lambda: self._update_pending_count())
                 log_callback(f"✗ 账号处理失败: {result.error_message}")
+                log_callback("")  # 空行分隔
                 
                 # 记录错误日志
                 self.root.after(0, lambda p=account.phone, u=result.user_id or "未知", n=result.nickname or "未知", e=result.error_message: 
@@ -3138,14 +3140,18 @@ class AutomationGUI:
             self.root.after(0, lambda p=account.phone, e=str(e): 
                           self._log_error(p, "未知", "未知", e))
             
+            log_callback("")  # 空行分隔
             return result
         
         finally:
             # P1修复: 确保ADB连接被关闭，避免资源泄漏
             try:
                 await adb.disconnect(device_id)
-                log_callback(f"✓ ADB连接已关闭")
+                # 只记录到文件日志，不显示在GUI
+                file_logger = logging.getLogger(__name__)
+                file_logger.info("ADB连接已关闭")
             except Exception as e:
+                # 错误仍然显示在GUI
                 log_callback(f"⚠️ 关闭ADB连接时出错: {e}")
     
     # ==================== 已废弃的方法 ====================
@@ -3247,6 +3253,125 @@ class AutomationGUI:
         
         # 同步更新转账配置窗口（如果打开的话）
         self._sync_transfer_config_window(state)
+    
+    def _on_scheduled_run_changed(self, state: bool):
+        """定时运行开关状态改变回调
+        
+        Args:
+            state: True=开启, False=关闭
+        """
+        self.scheduled_run_enabled.set(state)
+        
+        # 更新scheduled_run_time
+        self._update_scheduled_time()
+        
+        # 保存配置
+        self._auto_save_config()
+        
+        # 记录日志
+        status_text = "开启" if state else "关闭"
+        scheduled_time = self.scheduled_run_time.get()
+        self._log(f"定时运行已{status_text}（运行时间: {scheduled_time}）")
+        
+        if state:
+            # 启动定时检查线程
+            self._start_schedule_check_thread()
+        else:
+            # 停止定时检查线程
+            self._stop_schedule_check_thread()
+    
+    def _on_scheduled_time_changed(self):
+        """定时运行时间改变回调"""
+        self._update_scheduled_time()
+        self._auto_save_config()
+    
+    def _update_scheduled_time(self):
+        """更新scheduled_run_time变量（从小时和分钟变量合成）"""
+        try:
+            hour = int(self.scheduled_hour_var.get())
+            minute = int(self.scheduled_minute_var.get())
+            
+            # 验证范围
+            if 0 <= hour <= 23 and 0 <= minute <= 59:
+                self.scheduled_run_time.set(f"{hour:02d}:{minute:02d}")
+            else:
+                # 超出范围，重置为默认值
+                self.scheduled_hour_var.set("08")
+                self.scheduled_minute_var.set("00")
+                self.scheduled_run_time.set("08:00")
+        except:
+            # 解析失败，重置为默认值
+            self.scheduled_hour_var.set("08")
+            self.scheduled_minute_var.set("00")
+            self.scheduled_run_time.set("08:00")
+    
+    def _start_schedule_check_thread(self):
+        """启动定时检查线程"""
+        if self.schedule_check_thread and self.schedule_check_thread.is_alive():
+            return  # 线程已在运行
+        
+        self.schedule_check_thread = threading.Thread(target=self._schedule_check_loop, daemon=True)
+        self.schedule_check_thread.start()
+        self._log("定时检查线程已启动")
+    
+    def _stop_schedule_check_thread(self):
+        """停止定时检查线程"""
+        # 线程会在下次检查时自动退出（检查scheduled_run_enabled状态）
+        self._log("定时检查线程将在下次检查时停止")
+    
+    def _schedule_check_loop(self):
+        """定时检查循环（在后台线程中运行）"""
+        import time
+        from datetime import datetime, date
+        
+        while True:
+            try:
+                # 检查是否已禁用定时运行
+                if not self.scheduled_run_enabled.get():
+                    break
+                
+                # 获取当前时间
+                now = datetime.now()
+                current_time = now.strftime("%H:%M")
+                current_date = now.date()
+                
+                # 获取设定的运行时间
+                scheduled_time = self.scheduled_run_time.get()
+                
+                # 更新状态显示
+                self.root.after(0, lambda: self.scheduled_status_var.set(f"下次运行: 今天 {scheduled_time}"))
+                
+                # 检查是否到达运行时间
+                if current_time == scheduled_time:
+                    # 检查今天是否已经运行过
+                    if self.last_scheduled_run_date != current_date:
+                        # 触发自动运行
+                        self.root.after(0, self._trigger_scheduled_run)
+                        # 记录运行日期
+                        self.last_scheduled_run_date = current_date
+                        # 等待60秒，避免重复触发
+                        time.sleep(60)
+                
+                # 每30秒检查一次
+                time.sleep(30)
+                
+            except Exception as e:
+                print(f"定时检查线程异常: {e}")
+                time.sleep(60)  # 出错后等待1分钟再继续
+    
+    def _trigger_scheduled_run(self):
+        """触发定时运行"""
+        self._log("=" * 50)
+        self._log(f"⏰ 定时运行触发 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        self._log("=" * 50)
+        
+        # 检查是否正在运行
+        if hasattr(self, 'automation_thread') and self.automation_thread and self.automation_thread.is_alive():
+            self._log("⚠️ 任务正在运行中，跳过本次定时运行")
+            return
+        
+        # 触发开始运行
+        self._start_automation()
     
     def _toggle_auto_transfer(self):
         """切换自动转账开关（保留用于兼容）"""

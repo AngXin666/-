@@ -11,7 +11,7 @@
     "2": [],
     "3": []
   },
-  "enabled": false,
+  "enabled": true,
   "multi_level_enabled": false,
   "max_transfer_level": 2,
   "use_user_manager_recipients": true,

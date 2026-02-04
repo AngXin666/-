@@ -72,12 +72,12 @@ def test_page_classifier():
     
     print(f"✓ 共有 {len(classes)} 个类别")
     
-    # 检查是否包含"个人页_已登录"
-    if '个人页_已登录' in classes:
-        target_idx = classes.index('个人页_已登录')
-        print(f"✓ 包含目标类别: '个人页_已登录' (索引: {target_idx})")
+    # 检查是否包含"转账确认弹窗"
+    if '转账确认弹窗' in classes:
+        target_idx = classes.index('转账确认弹窗')
+        print(f"✓ 包含目标类别: '转账确认弹窗' (索引: {target_idx})")
     else:
-        print(f"❌ 不包含目标类别: '个人页_已登录'")
+        print(f"❌ 不包含目标类别: '转账确认弹窗'")
         return
     
     # 加载模型
@@ -123,11 +123,11 @@ def test_page_classifier():
         traceback.print_exc()
         return
     
-    # 查找个人页已登录的测试图片
-    print("\n[4] 查找个人页已登录的测试图片...")
+    # 查找转账确认弹窗的测试图片
+    print("\n[4] 查找转账确认弹窗的测试图片...")
     test_image_dirs = [
-        '原始标注图/个人页_已登录_余额积分/images',
-        '原始标注图/个人页_已登录_头像首页/images',
+        'training_data/转账确认弹窗',
+        'page_classifier_dataset_updated/转账确认弹窗',
     ]
     
     test_images = []
