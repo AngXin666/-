@@ -1221,6 +1221,7 @@ class XimengAutomation:
                 file_logger.info("="*60)
                 # 标记为成功但跳过签到
                 result.success = True
+                # 跳过签到，不增加step_number
             elif not profile_success:
                 file_logger.info("="*60)
                 file_logger.info("跳过签到流程")
@@ -1229,86 +1230,87 @@ class XimengAutomation:
                 # 标记为成功但跳过签到
                 result.success = True
                 return result
-            
-            step_number += 1
-            
-            # 添加简洁日志：步骤3 - 签到
-            concise.step(step_number, "签到")
-            
-            # 文件日志记录详细信息
-            file_logger.info("="*60)
-            file_logger.info(f"步骤{step_number}: 执行签到")
-            file_logger.info("="*60)
-            
-            try:
-                # 使用步骤2已获取的个人资料数据
-                updated_profile_data = {
-                    'balance': result.balance_before,  # 使用步骤2获取的余额
-                    'points': result.points,
-                    'vouchers': result.vouchers,
-                    'coupons': result.coupons,
-                    'nickname': result.nickname,
-                    'user_id': result.user_id
-                }
+            else:
+                # 执行签到流程
+                step_number += 1
                 
-                # 直接调用 do_checkin，它会自动处理导航和返回首页
-                checkin_result = await self.daily_checkin.do_checkin(
-                    device_id, 
-                    phone=account.phone,
-                    password=account.password,
-                    login_callback=None,  # 已经登录，不需要回调
-                    log_callback=None,
-                    profile_data=updated_profile_data  # 传递最新获取的个人信息（步骤4的数据）
-                )
+                # 添加简洁日志：步骤3 - 签到
+                concise.step(step_number, "签到")
                 
-                # 记录签到结果
-                if checkin_result['success']:
-                    result.checkin_reward = checkin_result.get('reward_amount', 0.0)
-                    result.checkin_total_times = checkin_result.get('total_times')
-                    # 使用签到流程返回的余额（如果有）
-                    if checkin_result.get('balance_after') is not None:
-                        result.balance_after = checkin_result.get('balance_after')
-                        file_logger.info("签到成功（已获取最终余额）")
+                # 文件日志记录详细信息
+                file_logger.info("="*60)
+                file_logger.info(f"步骤{step_number}: 执行签到")
+                file_logger.info("="*60)
+                
+                try:
+                    # 使用步骤2已获取的个人资料数据
+                    updated_profile_data = {
+                        'balance': result.balance_before,  # 使用步骤2获取的余额
+                        'points': result.points,
+                        'vouchers': result.vouchers,
+                        'coupons': result.coupons,
+                        'nickname': result.nickname,
+                        'user_id': result.user_id
+                    }
+                    
+                    # 直接调用 do_checkin，它会自动处理导航和返回首页
+                    checkin_result = await self.daily_checkin.do_checkin(
+                        device_id, 
+                        phone=account.phone,
+                        password=account.password,
+                        login_callback=None,  # 已经登录，不需要回调
+                        log_callback=None,
+                        profile_data=updated_profile_data  # 传递最新获取的个人信息（步骤4的数据）
+                    )
+                    
+                    # 记录签到结果
+                    if checkin_result['success']:
+                        result.checkin_reward = checkin_result.get('reward_amount', 0.0)
+                        result.checkin_total_times = checkin_result.get('total_times')
+                        # 使用签到流程返回的余额（如果有）
+                        if checkin_result.get('balance_after') is not None:
+                            result.balance_after = checkin_result.get('balance_after')
+                            file_logger.info("签到成功（已获取最终余额）")
+                        else:
+                            file_logger.info("签到成功")
+                        file_logger.info(f"签到次数: {checkin_result.get('checkin_count', 0)}")
+                        file_logger.info(f"总奖励: {result.checkin_reward:.2f} 元")
+                        
+                        # 添加简洁日志：签到完成
+                        concise.success("签到完成")
+                        
+                    elif checkin_result.get('already_checked'):
+                        # 即使已签到，也要获取总次数
+                        result.checkin_total_times = checkin_result.get('total_times')
+                        # 尝试使用返回的余额
+                        if checkin_result.get('balance_after') is not None:
+                            result.balance_after = checkin_result.get('balance_after')
+                        file_logger.info("今日已签到")
+                        if result.checkin_total_times:
+                            file_logger.info(f"总签到次数: {result.checkin_total_times}")
+                        else:
+                            file_logger.info("(未获取到总签到次数)")
+                        
+                        # 添加简洁日志：今日已签到
+                        concise.success("今日已签到")
+                        
                     else:
-                        file_logger.info("签到成功")
-                    file_logger.info(f"签到次数: {checkin_result.get('checkin_count', 0)}")
-                    file_logger.info(f"总奖励: {result.checkin_reward:.2f} 元")
+                        # 签到失败，设置错误类型
+                        from .models.error_types import ErrorType
+                        result.error_type = ErrorType.CHECKIN_FAILED
+                        result.error_message = checkin_result.get('message', '未知错误')
+                        file_logger.error(f"签到失败: {result.error_message}")
+                        
+                        # 添加简洁日志：签到失败
+                        concise.error(f"签到失败: {result.error_message}")
                     
-                    # 添加简洁日志：签到完成
-                    concise.success("签到完成")
-                    
-                elif checkin_result.get('already_checked'):
-                    # 即使已签到，也要获取总次数
-                    result.checkin_total_times = checkin_result.get('total_times')
-                    # 尝试使用返回的余额
-                    if checkin_result.get('balance_after') is not None:
-                        result.balance_after = checkin_result.get('balance_after')
-                    file_logger.info("今日已签到")
-                    if result.checkin_total_times:
-                        file_logger.info(f"总签到次数: {result.checkin_total_times}")
-                    else:
-                        file_logger.info("(未获取到总签到次数)")
-                    
-                    # 添加简洁日志：今日已签到
-                    concise.success("今日已签到")
-                    
-                else:
-                    # 签到失败，设置错误类型
+                except Exception as e:
+                    # 签到异常，设置错误类型
                     from .models.error_types import ErrorType
-                    result.error_type = ErrorType.CHECKIN_FAILED
-                    result.error_message = checkin_result.get('message', '未知错误')
-                    file_logger.error(f"签到失败: {result.error_message}")
-                    
-                    # 添加简洁日志：签到失败
-                    concise.error(f"签到失败: {result.error_message}")
-                
-            except Exception as e:
-                # 签到异常，设置错误类型
-                from .models.error_types import ErrorType
-                result.error_type = ErrorType.CHECKIN_EXCEPTION
-                result.error_message = str(e)
-                file_logger.error(f"签到流程出错: {str(e)}")
-                file_logger.info("跳过签到，继续执行后续流程")
+                    result.error_type = ErrorType.CHECKIN_EXCEPTION
+                    result.error_message = str(e)
+                    file_logger.error(f"签到流程出错: {str(e)}")
+                    file_logger.info("跳过签到，继续执行后续流程")
             
             # 优化：移除签到后的1秒等待，直接进入下一步
             # await asyncio.sleep(1)  # 已移除
