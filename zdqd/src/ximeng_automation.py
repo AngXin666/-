@@ -1360,99 +1360,106 @@ class XimengAutomation:
             # 优化：移除签到后的1秒等待，直接进入下一步
             # await asyncio.sleep(1)  # 已移除
             
-            # ==================== 步骤7: 获取最终余额（仅在签到未返回时）====================
-            # 优化：如果签到流程已经返回了余额，跳过重复获取
-            if result.balance_after is not None:
-                step_number += 1
-                
-                # 添加简洁日志：使用签到返回的余额
-                concise.step(step_number, "获取最终余额")
-                concise.success(f"最终余额: {result.balance_after:.2f}元（使用签到数据）")
-                
-                file_logger.info("="*60)
-                file_logger.info(f"步骤{step_number}: 使用签到流程返回的最终余额")
-                file_logger.info(f"最终余额: {result.balance_after:.2f} 元")
-                file_logger.info("(跳过重复获取，节省时间)")
-                file_logger.info("="*60)
-            else:
-                step_number += 1
-                
-                # 添加简洁日志：获取最终余额
-                concise.step(step_number, "获取最终余额")
-                
-                file_logger.info("="*60)
-                file_logger.info(f"步骤{step_number}: 获取最终个人资料")
-                file_logger.info("(签到流程未返回余额，需要重新获取)")
-                file_logger.info("="*60)
-            
-                try:
-                    # 使用统一的导航方法（高频扫描，自动处理广告）
-                    concise.action("导航到个人页")
-                    file_logger.info("导航到个人页...")
-                    nav_success = await self._navigate_to_profile_with_ad_handling(device_id, log)
+            # ==================== 步骤7: 获取最终余额（仅在签到启用且未返回余额时）====================
+            # 只有在启用签到流程时才获取最终余额
+            if workflow_config.get('enable_checkin', True):
+                # 优化：如果签到流程已经返回了余额，跳过重复获取
+                if result.balance_after is not None:
+                    step_number += 1
                     
-                    if not nav_success:
-                        file_logger.warning("导航到个人资料页面失败，跳过最终数据获取")
-                        concise.error("导航失败")
-                    else:
-                        # 直接获取个人资料（不再需要检测和处理广告）
-                        try:
-                            # 获取完整个人资料（带超时）
-                            # 使用并行处理方法提升性能
-                            concise.action("获取最终资料")
-                            account_str = f"{account.phone}----{account.password}"
-                            profile_task = self.profile_reader.get_full_profile_parallel(device_id, account=account_str)
+                    # 添加简洁日志：使用签到返回的余额
+                    concise.step(step_number, "获取最终余额")
+                    concise.success(f"最终余额: {result.balance_after:.2f}元（使用签到数据）")
+                    
+                    file_logger.info("="*60)
+                    file_logger.info(f"步骤{step_number}: 使用签到流程返回的最终余额")
+                    file_logger.info(f"最终余额: {result.balance_after:.2f} 元")
+                    file_logger.info("(跳过重复获取，节省时间)")
+                    file_logger.info("="*60)
+                else:
+                    step_number += 1
+                    
+                    # 添加简洁日志：获取最终余额
+                    concise.step(step_number, "获取最终余额")
+                    
+                    file_logger.info("="*60)
+                    file_logger.info(f"步骤{step_number}: 获取最终个人资料")
+                    file_logger.info("(签到流程未返回余额，需要重新获取)")
+                    file_logger.info("="*60)
+                
+                    try:
+                        # 使用统一的导航方法（高频扫描，自动处理广告）
+                        concise.action("导航到个人页")
+                        file_logger.info("导航到个人页...")
+                        nav_success = await self._navigate_to_profile_with_ad_handling(device_id, log)
+                        
+                        if not nav_success:
+                            file_logger.warning("导航到个人资料页面失败，跳过最终数据获取")
+                            concise.error("导航失败")
+                        else:
+                            # 直接获取个人资料（不再需要检测和处理广告）
                             try:
-                                final_profile = await asyncio.wait_for(profile_task, timeout=10.0)
-                                
-                                # 更新最终数据（确保类型正确）
-                                balance = final_profile.get('balance')
-                                if balance is not None:
-                                    # 确保余额是float类型
-                                    if isinstance(balance, str):
-                                        try:
-                                            result.balance_after = float(balance)
-                                        except ValueError:
-                                            result.balance_after = None
+                                # 获取完整个人资料（带超时）
+                                # 使用并行处理方法提升性能
+                                concise.action("获取最终资料")
+                                account_str = f"{account.phone}----{account.password}"
+                                profile_task = self.profile_reader.get_full_profile_parallel(device_id, account=account_str)
+                                try:
+                                    final_profile = await asyncio.wait_for(profile_task, timeout=10.0)
+                                    
+                                    # 更新最终数据（确保类型正确）
+                                    balance = final_profile.get('balance')
+                                    if balance is not None:
+                                        # 确保余额是float类型
+                                        if isinstance(balance, str):
+                                            try:
+                                                result.balance_after = float(balance)
+                                            except ValueError:
+                                                result.balance_after = None
+                                        else:
+                                            result.balance_after = balance
                                     else:
-                                        result.balance_after = balance
-                                else:
-                                    result.balance_after = None
-                                
-                                # 更新其他可能变化的字段
-                                if final_profile.get('points') is not None:
-                                    result.points = final_profile.get('points')
-                                if final_profile.get('vouchers') is not None:
-                                    result.vouchers = final_profile.get('vouchers')
-                                if final_profile.get('coupons') is not None:
-                                    result.coupons = final_profile.get('coupons')
-                                
-                                if result.balance_after is not None:
-                                    file_logger.info(f"最终余额: {result.balance_after:.2f} 元")
-                                    # 添加简洁日志：最终余额
-                                    concise.success(f"最终余额: {result.balance_after:.2f}元")
-                                else:
-                                    file_logger.warning("未能获取最终余额")
-                                    concise.error("未能获取最终余额")
-                                
-                                if result.points is not None:
-                                    file_logger.info(f"最终积分: {result.points} 积分")
-                                
-                                if result.vouchers is not None:
-                                    file_logger.info(f"最终抵扣券: {result.vouchers} 张")
-                                
-                                if result.coupons is not None:
-                                    file_logger.info(f"最终优惠券: {result.coupons} 张")
-                                
-                            except asyncio.TimeoutError:
-                                file_logger.error("获取最终数据超时")
-                                concise.error("获取超时")
-                        except Exception as e:
-                            file_logger.error(f"获取最终数据出错: {str(e)}")
-                            concise.error(f"获取出错: {str(e)}")
-                except Exception as e:
-                    file_logger.error(f"获取最终数据流程出错: {str(e)}")
-                    concise.error(f"流程出错: {str(e)}")
+                                        result.balance_after = None
+                                    
+                                    # 更新其他可能变化的字段
+                                    if final_profile.get('points') is not None:
+                                        result.points = final_profile.get('points')
+                                    if final_profile.get('vouchers') is not None:
+                                        result.vouchers = final_profile.get('vouchers')
+                                    if final_profile.get('coupons') is not None:
+                                        result.coupons = final_profile.get('coupons')
+                                    
+                                    if result.balance_after is not None:
+                                        file_logger.info(f"最终余额: {result.balance_after:.2f} 元")
+                                        # 添加简洁日志：最终余额
+                                        concise.success(f"最终余额: {result.balance_after:.2f}元")
+                                    else:
+                                        file_logger.warning("未能获取最终余额")
+                                        concise.error("未能获取最终余额")
+                                    
+                                    if result.points is not None:
+                                        file_logger.info(f"最终积分: {result.points} 积分")
+                                    
+                                    if result.vouchers is not None:
+                                        file_logger.info(f"最终抵扣券: {result.vouchers} 张")
+                                    
+                                    if result.coupons is not None:
+                                        file_logger.info(f"最终优惠券: {result.coupons} 张")
+                                    
+                                except asyncio.TimeoutError:
+                                    file_logger.error("获取最终数据超时")
+                                    concise.error("获取超时")
+                            except Exception as e:
+                                file_logger.error(f"获取最终数据出错: {str(e)}")
+                                concise.error(f"获取出错: {str(e)}")
+                    except Exception as e:
+                        file_logger.error(f"获取最终数据流程出错: {str(e)}")
+                        concise.error(f"流程出错: {str(e)}")
+            else:
+                file_logger.info("="*60)
+                file_logger.info("跳过获取最终余额")
+                file_logger.info("原因: 流程控制已禁用签到，无需获取最终余额")
+                file_logger.info("="*60)
             
             # 显示执行总结（仅文件日志）
             file_logger.info("="*60)
