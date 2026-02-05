@@ -316,9 +316,6 @@ class AutomationGUI:
         )
         self.auto_transfer_switch.pack(side=tk.LEFT)
         
-        # 流程控制按钮
-        ttk.Button(row4, text="⚙️ 流程控制", command=self._open_workflow_control, width=12).pack(side=tk.LEFT, padx=(10, 0))
-        
         # 定时运行配置（新增一行）
         row5 = ttk.Frame(config_frame)
         row5.pack(fill=tk.X, pady=2)
@@ -405,6 +402,8 @@ class AutomationGUI:
         ttk.Button(control_frame, text="📊 历史结果", command=self._open_history_results, width=10).pack(side=tk.LEFT, padx=(0, 5))
         
         ttk.Button(control_frame, text="👥 用户管理", command=self._open_user_management, width=10).pack(side=tk.LEFT, padx=(0, 5))
+        
+        ttk.Button(control_frame, text="⚙️ 流程控制", command=self._open_workflow_control, width=10).pack(side=tk.LEFT, padx=(0, 5))
         
         # 注册新模型按钮
         ttk.Button(control_frame, text="🔄 注册新模型", command=self._register_new_models, width=11).pack(side=tk.LEFT, padx=(0, 5))
