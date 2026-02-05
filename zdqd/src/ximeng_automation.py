@@ -1161,71 +1161,71 @@ class XimengAutomation:
                 file_logger.info("账户信息")
                 file_logger.info(f"昵称: {result.nickname or 'N/A'}")
                 file_logger.info(f"ID: {result.user_id or 'N/A'}")
-            file_logger.info(f"手机号: {result.phone}")
-            if result.balance_before is not None:
-                file_logger.info(f"余额: {result.balance_before:.2f} 元")
-            if result.points is not None:
-                file_logger.info(f"积分: {result.points} 积分")
-            if result.vouchers is not None:
-                file_logger.info(f"抵扣券: {result.vouchers} 张")
-            file_logger.info("="*60)
-            
-            # 调试信息：显示缓存状态（仅文件日志）
-            file_logger.debug("缓存状态检查:")
-            file_logger.debug(f"enable_cache: {self.auto_login.enable_cache}")
-            file_logger.debug(f"cache_manager 存在: {self.auto_login.cache_manager is not None}")
-            file_logger.debug(f"user_id: {result.user_id}")
-            
-            # ==================== 步骤3.5: 保存登录缓存（包含用户ID）====================
-            # 优化：异步保存缓存，不阻塞主流程
-            if self.auto_login.enable_cache and self.auto_login.cache_manager:
-                if result.user_id:
-                    file_logger.info(f"异步保存登录缓存（包含用户ID: {result.user_id}）...")
+                file_logger.info(f"手机号: {result.phone}")
+                if result.balance_before is not None:
+                    file_logger.info(f"余额: {result.balance_before:.2f} 元")
+                if result.points is not None:
+                    file_logger.info(f"积分: {result.points} 积分")
+                if result.vouchers is not None:
+                    file_logger.info(f"抵扣券: {result.vouchers} 张")
+                file_logger.info("="*60)
+                
+                # 调试信息：显示缓存状态（仅文件日志）
+                file_logger.debug("缓存状态检查:")
+                file_logger.debug(f"enable_cache: {self.auto_login.enable_cache}")
+                file_logger.debug(f"cache_manager 存在: {self.auto_login.cache_manager is not None}")
+                file_logger.debug(f"user_id: {result.user_id}")
+                
+                # ==================== 步骤3.5: 保存登录缓存（包含用户ID）====================
+                # 优化：异步保存缓存，不阻塞主流程
+                if self.auto_login.enable_cache and self.auto_login.cache_manager:
+                    if result.user_id:
+                        file_logger.info(f"异步保存登录缓存（包含用户ID: {result.user_id}）...")
+                    else:
+                        file_logger.info("异步保存登录缓存（未获取到用户ID）...")
+                    
+                    # 创建异步任务，不等待完成
+                    async def save_cache_async():
+                        try:
+                            cache_saved = await self.auto_login.cache_manager.save_login_cache(
+                                device_id, 
+                                account.phone, 
+                                user_id=result.user_id
+                            )
+                            if cache_saved:
+                                file_logger.info("登录缓存已保存")
+                            else:
+                                file_logger.warning("登录缓存保存失败")
+                        except Exception as e:
+                            file_logger.error(f"保存登录缓存时出错: {str(e)}")
+                    
+                    # 启动后台任务，不等待完成
+                    asyncio.create_task(save_cache_async())
+                    file_logger.info("缓存保存任务已启动（后台执行）")
                 else:
-                    file_logger.info("异步保存登录缓存（未获取到用户ID）...")
+                    if not self.auto_login.enable_cache:
+                        file_logger.info("缓存功能未启用，跳过缓存保存")
+                    elif not self.auto_login.cache_manager:
+                        file_logger.warning("缓存管理器未初始化，跳过缓存保存")
                 
-                # 创建异步任务，不等待完成
-                async def save_cache_async():
-                    try:
-                        cache_saved = await self.auto_login.cache_manager.save_login_cache(
-                            device_id, 
-                            account.phone, 
-                            user_id=result.user_id
-                        )
-                        if cache_saved:
-                            file_logger.info("登录缓存已保存")
-                        else:
-                            file_logger.warning("登录缓存保存失败")
-                    except Exception as e:
-                        file_logger.error(f"保存登录缓存时出错: {str(e)}")
+                # 优化：移除不必要的1秒等待
+                # await asyncio.sleep(1)  # 已移除
                 
-                # 启动后台任务，不等待完成
-                asyncio.create_task(save_cache_async())
-                file_logger.info("缓存保存任务已启动（后台执行）")
-            else:
-                if not self.auto_login.enable_cache:
-                    file_logger.info("缓存功能未启用，跳过缓存保存")
-                elif not self.auto_login.cache_manager:
-                    file_logger.warning("缓存管理器未初始化，跳过缓存保存")
+                # ==================== 优化：跳过重复获取个人资料 ====================
+                # 步骤2已经获取了完整的个人资料，不需要在步骤4重复获取
+                # 直接使用步骤2的数据，节省时间
+                file_logger.info("="*60)
+                file_logger.info("使用步骤2已获取的个人资料数据")
+                file_logger.info(f"用户ID: {result.user_id}")
+                file_logger.info(f"昵称: {result.nickname}")
+                if result.balance_before:
+                    file_logger.info(f"余额: {result.balance_before:.2f} 元")
+                file_logger.info(f"积分: {result.points}")
+                file_logger.info(f"抵扣券: {result.vouchers}")
+                file_logger.info(f"优惠券: {result.coupons}")
+                file_logger.info("="*60)
             
-            # 优化：移除不必要的1秒等待
-            # await asyncio.sleep(1)  # 已移除
-            
-            # ==================== 优化：跳过重复获取个人资料 ====================
-            # 步骤2已经获取了完整的个人资料，不需要在步骤4重复获取
-            # 直接使用步骤2的数据，节省时间
-            file_logger.info("="*60)
-            file_logger.info("使用步骤2已获取的个人资料数据")
-            file_logger.info(f"用户ID: {result.user_id}")
-            file_logger.info(f"昵称: {result.nickname}")
-            if result.balance_before:
-                file_logger.info(f"余额: {result.balance_before:.2f} 元")
-            file_logger.info(f"积分: {result.points}")
-            file_logger.info(f"抵扣券: {result.vouchers}")
-            file_logger.info(f"优惠券: {result.coupons}")
-            file_logger.info("="*60)
-            
-            # ==================== 步骤3: 执行签到（仅在成功获取资料后执行）====================
+            # ==================== 步骤3: 执行签到 ====================
             # 检查是否启用签到流程
             if not workflow_config.get('enable_checkin', True):
                 file_logger.info("="*60)
@@ -1235,14 +1235,6 @@ class XimengAutomation:
                 # 标记为成功但跳过签到
                 result.success = True
                 # 跳过签到，不增加step_number
-            elif not profile_success:
-                file_logger.info("="*60)
-                file_logger.info("跳过签到流程")
-                file_logger.info("原因: 未能获取个人资料数据")
-                file_logger.info("="*60)
-                # 标记为成功但跳过签到
-                result.success = True
-                return result
             else:
                 # 执行签到流程
                 step_number += 1
@@ -1256,15 +1248,21 @@ class XimengAutomation:
                 file_logger.info("="*60)
                 
                 try:
-                    # 使用步骤2已获取的个人资料数据
-                    updated_profile_data = {
-                        'balance': result.balance_before,  # 使用步骤2获取的余额
-                        'points': result.points,
-                        'vouchers': result.vouchers,
-                        'coupons': result.coupons,
-                        'nickname': result.nickname,
-                        'user_id': result.user_id
-                    }
+                    # 准备个人资料数据
+                    # 如果步骤2获取了资料，使用步骤2的数据
+                    # 如果跳过了步骤2（快速签到模式），传递None，让签到流程自己获取
+                    if profile_success and profile_data:
+                        updated_profile_data = {
+                            'balance': result.balance_before,  # 使用步骤2获取的余额
+                            'points': result.points,
+                            'vouchers': result.vouchers,
+                            'coupons': result.coupons,
+                            'nickname': result.nickname,
+                            'user_id': result.user_id
+                        }
+                    else:
+                        # 快速签到模式：没有获取资料，传递None
+                        updated_profile_data = None
                     
                     # 直接调用 do_checkin，它会自动处理导航和返回首页
                     checkin_result = await self.daily_checkin.do_checkin(
@@ -1273,13 +1271,30 @@ class XimengAutomation:
                         password=account.password,
                         login_callback=None,  # 已经登录，不需要回调
                         log_callback=None,
-                        profile_data=updated_profile_data  # 传递最新获取的个人信息（步骤4的数据）
+                        profile_data=updated_profile_data  # 传递个人信息（可能为None）
                     )
                     
                     # 记录签到结果
                     if checkin_result['success']:
                         result.checkin_reward = checkin_result.get('reward_amount', 0.0)
                         result.checkin_total_times = checkin_result.get('total_times')
+                        
+                        # 如果是快速签到模式（没有获取资料），从签到结果中提取资料
+                        if not profile_success:
+                            # 提取昵称、用户ID等信息
+                            if checkin_result.get('nickname'):
+                                result.nickname = checkin_result.get('nickname')
+                            if checkin_result.get('user_id'):
+                                result.user_id = checkin_result.get('user_id')
+                            if checkin_result.get('balance_before') is not None:
+                                result.balance_before = checkin_result.get('balance_before')
+                            if checkin_result.get('points') is not None:
+                                result.points = checkin_result.get('points')
+                            if checkin_result.get('vouchers') is not None:
+                                result.vouchers = checkin_result.get('vouchers')
+                            if checkin_result.get('coupons') is not None:
+                                result.coupons = checkin_result.get('coupons')
+                        
                         # 使用签到流程返回的余额（如果有）
                         if checkin_result.get('balance_after') is not None:
                             result.balance_after = checkin_result.get('balance_after')
@@ -1295,6 +1310,23 @@ class XimengAutomation:
                     elif checkin_result.get('already_checked'):
                         # 即使已签到，也要获取总次数
                         result.checkin_total_times = checkin_result.get('total_times')
+                        
+                        # 如果是快速签到模式（没有获取资料），从签到结果中提取资料
+                        if not profile_success:
+                            # 提取昵称、用户ID等信息
+                            if checkin_result.get('nickname'):
+                                result.nickname = checkin_result.get('nickname')
+                            if checkin_result.get('user_id'):
+                                result.user_id = checkin_result.get('user_id')
+                            if checkin_result.get('balance_before') is not None:
+                                result.balance_before = checkin_result.get('balance_before')
+                            if checkin_result.get('points') is not None:
+                                result.points = checkin_result.get('points')
+                            if checkin_result.get('vouchers') is not None:
+                                result.vouchers = checkin_result.get('vouchers')
+                            if checkin_result.get('coupons') is not None:
+                                result.coupons = checkin_result.get('coupons')
+                        
                         # 尝试使用返回的余额
                         if checkin_result.get('balance_after') is not None:
                             result.balance_after = checkin_result.get('balance_after')
