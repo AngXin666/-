@@ -4,6 +4,7 @@ Transfer History and Statistics Module
 """
 
 import sqlite3
+import logging
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple
@@ -34,6 +35,44 @@ class TransferHistory:
         """初始化转账历史管理器"""
         self.db_path = Path("runtime_data") / "license.db"
         self._init_table()
+        self._init_transfer_logger()
+    
+    def _init_transfer_logger(self):
+        """初始化转账专用日志记录器"""
+        # 创建logs目录
+        log_dir = Path("logs")
+        log_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 创建转账日志记录器
+        self.transfer_logger = logging.getLogger("transfer_history")
+        self.transfer_logger.setLevel(logging.INFO)
+        self.transfer_logger.propagate = False  # 不传播到父logger
+        
+        # 清除已有的处理器
+        self.transfer_logger.handlers.clear()
+        
+        # 转账日志文件（成功和失败都记录）
+        transfer_log_file = log_dir / f"transfer_{datetime.now().strftime('%Y%m%d')}.log"
+        transfer_handler = logging.FileHandler(transfer_log_file, encoding='utf-8')
+        transfer_handler.setLevel(logging.INFO)
+        transfer_formatter = logging.Formatter(
+            '%(asctime)s | %(levelname)-8s | %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        transfer_handler.setFormatter(transfer_formatter)
+        self.transfer_logger.addHandler(transfer_handler)
+        
+        # 失败日志文件（只记录失败）
+        self.failure_logger = logging.getLogger("transfer_failure")
+        self.failure_logger.setLevel(logging.ERROR)
+        self.failure_logger.propagate = False
+        self.failure_logger.handlers.clear()
+        
+        failure_log_file = log_dir / f"transfer_failure_{datetime.now().strftime('%Y%m%d')}.log"
+        failure_handler = logging.FileHandler(failure_log_file, encoding='utf-8')
+        failure_handler.setLevel(logging.ERROR)
+        failure_handler.setFormatter(transfer_formatter)
+        self.failure_logger.addHandler(failure_handler)
     
     def _init_table(self):
         """初始化转账历史表"""
@@ -129,10 +168,30 @@ class TransferHistory:
             
             conn.commit()
             conn.close()
+            
+            # 记录到转账日志文件
+            if success:
+                self.transfer_logger.info(
+                    f"✓ 转账成功 | 发送方: {sender_name}({sender_phone}) | "
+                    f"接收方: {recipient_name}({recipient_phone}) | "
+                    f"金额: {amount:.2f}元 | 策略: {strategy}"
+                )
+            else:
+                # 同时记录到转账日志和失败日志
+                error_log = (
+                    f"❌ 转账失败 | 发送方: {sender_name}({sender_phone}) | "
+                    f"接收方: {recipient_name}({recipient_phone}) | "
+                    f"金额: {amount:.2f}元 | 策略: {strategy} | 错误: {error_message}"
+                )
+                self.transfer_logger.error(error_log)
+                self.failure_logger.error(error_log)
+            
             return True
             
         except Exception as e:
-            print(f"[转账历史] 保存记录失败: {e}")
+            error_msg = f"[转账历史] 保存记录失败: {e}"
+            print(error_msg)
+            self.failure_logger.error(error_msg)
             return False
     
     def get_recent_transfer(

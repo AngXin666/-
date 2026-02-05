@@ -1456,13 +1456,42 @@ class XimengAutomation:
                                             try:
                                                 log(f"  ✓ 已获取转账锁")
                                                 
-                                                # 执行转账（传入转账前余额用于验证）
-                                                transfer_result = await self.balance_transfer.transfer_balance(
-                                                    device_id,
-                                                    recipient_id,
-                                                    initial_balance=result.balance_after,
-                                                    log_callback=log
-                                                )
+                                                # 转账重试机制（最多重试3次）
+                                                max_transfer_retries = 3
+                                                transfer_result = None
+                                                
+                                                for transfer_attempt in range(max_transfer_retries):
+                                                    if transfer_attempt > 0:
+                                                        log(f"  ⚠️ 第 {transfer_attempt + 1} 次尝试转账...")
+                                                        await asyncio.sleep(3)  # 重试前等待3秒
+                                                        
+                                                        # 重试前重新导航到个人页面
+                                                        log(f"  重新导航到个人页面...")
+                                                        nav_success = await self.navigator.navigate_to_profile(device_id)
+                                                        if not nav_success:
+                                                            log(f"  ⚠️ 导航失败，继续尝试转账...")
+                                                        await asyncio.sleep(2)
+                                                    
+                                                    # 执行转账（传入转账前余额用于验证）
+                                                    transfer_result = await self.balance_transfer.transfer_balance(
+                                                        device_id,
+                                                        recipient_id,
+                                                        initial_balance=result.balance_after,
+                                                        log_callback=log
+                                                    )
+                                                    
+                                                    # 如果转账成功，跳出重试循环
+                                                    if transfer_result['success']:
+                                                        if transfer_attempt > 0:
+                                                            log(f"  ✓ 重试成功！")
+                                                        break
+                                                    else:
+                                                        # 转账失败，记录失败原因
+                                                        error_msg = transfer_result.get('message', '未知错误')
+                                                        if transfer_attempt < max_transfer_retries - 1:
+                                                            log(f"  ❌ 转账失败: {error_msg}，准备重试...")
+                                                        else:
+                                                            log(f"  ❌ 转账失败: {error_msg}，已达到最大重试次数")
                                                 
                                                 if transfer_result['success']:
                                                     log(f"  ✓ 转账成功")
