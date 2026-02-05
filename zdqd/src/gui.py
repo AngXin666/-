@@ -316,6 +316,9 @@ class AutomationGUI:
         )
         self.auto_transfer_switch.pack(side=tk.LEFT)
         
+        # 流程控制按钮
+        ttk.Button(row4, text="⚙️ 流程控制", command=self._open_workflow_control, width=12).pack(side=tk.LEFT, padx=(10, 0))
+        
         # 定时运行配置（新增一行）
         row5 = ttk.Frame(config_frame)
         row5.pack(fill=tk.X, pady=2)
@@ -3224,12 +3227,20 @@ class AutomationGUI:
             # 调用完整工作流
             ximeng._stop_check = self._check_stop_or_pause
             
+            # 获取流程控制配置
+            workflow_config = {
+                'enable_login': getattr(self.config, 'workflow_enable_login', True),
+                'enable_profile': getattr(self.config, 'workflow_enable_profile', True),
+                'enable_checkin': getattr(self.config, 'workflow_enable_checkin', True),
+                'enable_transfer': getattr(self.config, 'workflow_enable_transfer', True),
+            }
+            
             if has_valid_cache:
                 # 使用缓存登录
-                result = await ximeng.run_full_workflow(device_id, account, skip_login=True)
+                result = await ximeng.run_full_workflow(device_id, account, skip_login=True, workflow_config=workflow_config)
             else:
                 # 正常登录
-                result = await ximeng.run_full_workflow(device_id, account, skip_login=False)
+                result = await ximeng.run_full_workflow(device_id, account, skip_login=False, workflow_config=workflow_config)
             
             # 设置登录方式
             if has_valid_cache:
@@ -3367,6 +3378,18 @@ class AutomationGUI:
         
         # 创建新窗口
         self._transfer_config_window = TransferConfigWindow(self.root, self._log, self.accounts_file_var.get(), self)
+    
+    def _open_workflow_control(self):
+        """打开流程控制窗口"""
+        # 检查窗口是否已打开
+        if hasattr(self, '_workflow_control_window') and self._workflow_control_window and self._workflow_control_window.winfo_exists():
+            # 窗口已存在，激活它
+            self._workflow_control_window.lift()
+            self._workflow_control_window.focus_force()
+            return
+        
+        # 创建新窗口
+        self._workflow_control_window = WorkflowControlWindow(self.root, self)
     
     def _open_transfer_history(self):
         """打开转账历史窗口"""
@@ -5578,6 +5601,245 @@ class WindowArrangerDialog:
                 self.log_callback(f"❌ {error_msg}")
             messagebox.showerror("错误", error_msg, parent=self.dialog)
 
+
+class WorkflowControlWindow:
+    """流程控制窗口"""
+    
+    def __init__(self, parent, gui_instance):
+        """初始化流程控制窗口
+        
+        Args:
+            parent: 父窗口
+            gui_instance: AutomationGUI实例
+        """
+        self.parent = parent
+        self.gui = gui_instance
+        
+        # 创建顶层窗口
+        self.window = tk.Toplevel(parent)
+        self.window.title("流程控制")
+        self.window.geometry("500x450")
+        self.window.resizable(False, False)
+        
+        # 窗口居中
+        self._center_window()
+        
+        # 加载当前配置
+        self._load_config()
+        
+        # 创建界面
+        self._create_widgets()
+        
+        # 设置窗口关闭协议
+        self.window.protocol("WM_DELETE_WINDOW", self._on_closing)
+    
+    def _center_window(self):
+        """将窗口居中显示"""
+        self.window.update_idletasks()
+        width = 500
+        height = 450
+        screen_width = self.window.winfo_screenwidth()
+        screen_height = self.window.winfo_screenheight()
+        x = (screen_width // 2) - (width // 2)
+        y = (screen_height // 2) - (height // 2)
+        self.window.geometry(f'{width}x{height}+{x}+{y}')
+    
+    def _load_config(self):
+        """加载当前流程配置"""
+        # 从config加载，如果没有则使用默认值
+        config = self.gui.config
+        self.workflow_mode = getattr(config, 'workflow_mode', 'complete')
+        self.enable_login = getattr(config, 'workflow_enable_login', True)
+        self.enable_profile = getattr(config, 'workflow_enable_profile', True)
+        self.enable_checkin = getattr(config, 'workflow_enable_checkin', True)
+        self.enable_transfer = getattr(config, 'workflow_enable_transfer', True)
+    
+    def _create_widgets(self):
+        """创建界面组件"""
+        main_frame = ttk.Frame(self.window, padding="15")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # 标题
+        title_label = ttk.Label(main_frame, text="流程控制设置", font=("Microsoft YaHei UI", 12, "bold"))
+        title_label.pack(pady=(0, 15))
+        
+        # 说明文字
+        desc_label = ttk.Label(main_frame, text="选择要执行的流程模块，自由组合工作流程", foreground="gray")
+        desc_label.pack(pady=(0, 10))
+        
+        # === 预设模式选择 ===
+        mode_frame = ttk.LabelFrame(main_frame, text="预设模式", padding="10")
+        mode_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        self.mode_var = tk.StringVar(value=self.workflow_mode)
+        
+        modes = [
+            ("complete", "完整流程", "登录 → 获取资料 → 签到 → 获取最终余额 → 转账"),
+            ("quick_checkin", "快速签到", "登录 → 签到 → 获取余额 → 转账（跳过签到前资料获取）"),
+            ("login_only", "只登录", "仅登录（或验证缓存）→ 获取资料"),
+            ("transfer_only", "只转账", "登录 → 获取资料 → 转账（跳过签到）"),
+            ("custom", "自定义", "自由勾选需要的流程模块")
+        ]
+        
+        for value, text, desc in modes:
+            rb = ttk.Radiobutton(mode_frame, text=text, variable=self.mode_var, value=value, 
+                                command=self._on_mode_changed)
+            rb.pack(anchor=tk.W, pady=2)
+            desc_label = ttk.Label(mode_frame, text=f"  {desc}", foreground="gray", font=("Microsoft YaHei UI", 8))
+            desc_label.pack(anchor=tk.W, padx=(20, 0))
+        
+        # === 自定义流程模块 ===
+        custom_frame = ttk.LabelFrame(main_frame, text="自定义流程模块", padding="10")
+        custom_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        self.login_var = tk.BooleanVar(value=self.enable_login)
+        self.profile_var = tk.BooleanVar(value=self.enable_profile)
+        self.checkin_var = tk.BooleanVar(value=self.enable_checkin)
+        self.transfer_var = tk.BooleanVar(value=self.enable_transfer)
+        
+        ttk.Checkbutton(custom_frame, text="☑️ 登录", variable=self.login_var).pack(anchor=tk.W, pady=3)
+        ttk.Label(custom_frame, text="  执行登录流程（或使用缓存验证）", foreground="gray", font=("Microsoft YaHei UI", 8)).pack(anchor=tk.W, padx=(20, 0))
+        
+        ttk.Checkbutton(custom_frame, text="☑️ 获取资料", variable=self.profile_var).pack(anchor=tk.W, pady=3)
+        ttk.Label(custom_frame, text="  获取个人资料（昵称、ID、余额、积分等）", foreground="gray", font=("Microsoft YaHei UI", 8)).pack(anchor=tk.W, padx=(20, 0))
+        
+        ttk.Checkbutton(custom_frame, text="☑️ 签到", variable=self.checkin_var).pack(anchor=tk.W, pady=3)
+        ttk.Label(custom_frame, text="  执行签到流程并获取签到奖励", foreground="gray", font=("Microsoft YaHei UI", 8)).pack(anchor=tk.W, padx=(20, 0))
+        
+        ttk.Checkbutton(custom_frame, text="☑️ 转账", variable=self.transfer_var).pack(anchor=tk.W, pady=3)
+        ttk.Label(custom_frame, text="  执行转账流程（受'自动转账'开关控制）", foreground="gray", font=("Microsoft YaHei UI", 8)).pack(anchor=tk.W, padx=(20, 0))
+        
+        # 初始状态：如果不是自定义模式，禁用复选框
+        if self.mode_var.get() != "custom":
+            for var in [self.login_var, self.profile_var, self.checkin_var, self.transfer_var]:
+                for widget in custom_frame.winfo_children():
+                    if isinstance(widget, ttk.Checkbutton):
+                        widget.configure(state=tk.DISABLED)
+        
+        # === 按钮区域 ===
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        ttk.Button(button_frame, text="保存", command=self._save_config, width=12).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(button_frame, text="取消", command=self._on_closing, width=12).pack(side=tk.LEFT)
+        ttk.Button(button_frame, text="恢复默认", command=self._reset_to_default, width=12).pack(side=tk.RIGHT)
+    
+    def _on_mode_changed(self):
+        """预设模式改变时的回调"""
+        mode = self.mode_var.get()
+        
+        # 根据模式设置复选框状态
+        if mode == "complete":
+            # 完整流程：全部启用
+            self.login_var.set(True)
+            self.profile_var.set(True)
+            self.checkin_var.set(True)
+            self.transfer_var.set(True)
+            self._disable_checkboxes()
+        elif mode == "quick_checkin":
+            # 快速签到：登录 + 签到 + 转账（跳过签到前的资料获取）
+            self.login_var.set(True)
+            self.profile_var.set(False)  # 跳过签到前的资料获取
+            self.checkin_var.set(True)
+            self.transfer_var.set(True)
+            self._disable_checkboxes()
+        elif mode == "login_only":
+            # 只登录：登录 + 获取资料
+            self.login_var.set(True)
+            self.profile_var.set(True)
+            self.checkin_var.set(False)
+            self.transfer_var.set(False)
+            self._disable_checkboxes()
+        elif mode == "transfer_only":
+            # 只转账：登录 + 获取资料 + 转账
+            self.login_var.set(True)
+            self.profile_var.set(True)
+            self.checkin_var.set(False)
+            self.transfer_var.set(True)
+            self._disable_checkboxes()
+        elif mode == "custom":
+            # 自定义：启用复选框
+            self._enable_checkboxes()
+    
+    def _disable_checkboxes(self):
+        """禁用自定义流程模块的复选框"""
+        for widget in self.window.winfo_children():
+            self._disable_checkboxes_recursive(widget)
+    
+    def _disable_checkboxes_recursive(self, widget):
+        """递归禁用复选框"""
+        if isinstance(widget, ttk.Checkbutton):
+            widget.configure(state=tk.DISABLED)
+        for child in widget.winfo_children():
+            self._disable_checkboxes_recursive(child)
+    
+    def _enable_checkboxes(self):
+        """启用自定义流程模块的复选框"""
+        for widget in self.window.winfo_children():
+            self._enable_checkboxes_recursive(widget)
+    
+    def _enable_checkboxes_recursive(self, widget):
+        """递归启用复选框"""
+        if isinstance(widget, ttk.Checkbutton):
+            widget.configure(state=tk.NORMAL)
+        for child in widget.winfo_children():
+            self._enable_checkboxes_recursive(child)
+    
+    def _save_config(self):
+        """保存流程配置"""
+        # 保存到config
+        self.gui.config.workflow_mode = self.mode_var.get()
+        self.gui.config.workflow_enable_login = self.login_var.get()
+        self.gui.config.workflow_enable_profile = self.profile_var.get()
+        self.gui.config.workflow_enable_checkin = self.checkin_var.get()
+        self.gui.config.workflow_enable_transfer = self.transfer_var.get()
+        
+        # 保存配置文件
+        self.gui.config_loader.save(self.gui.config)
+        
+        # 显示保存成功消息
+        mode_names = {
+            "complete": "完整流程",
+            "quick_checkin": "快速签到",
+            "login_only": "只登录",
+            "transfer_only": "只转账",
+            "custom": "自定义"
+        }
+        mode_name = mode_names.get(self.mode_var.get(), "未知")
+        
+        messagebox.showinfo("成功", f"流程控制已保存\n当前模式: {mode_name}", parent=self.window)
+        self.gui._log(f"✓ 流程控制已保存: {mode_name}")
+        
+        # 关闭窗口
+        self._on_closing()
+    
+    def _reset_to_default(self):
+        """恢复默认设置"""
+        self.mode_var.set("complete")
+        self.login_var.set(True)
+        self.profile_var.set(True)
+        self.checkin_var.set(True)
+        self.transfer_var.set(True)
+        self._on_mode_changed()
+    
+    def _on_closing(self):
+        """窗口关闭时的处理"""
+        self.window.destroy()
+    
+    def winfo_exists(self):
+        """检查窗口是否存在"""
+        try:
+            return self.window.winfo_exists()
+        except:
+            return False
+    
+    def lift(self):
+        """将窗口提升到最前"""
+        self.window.lift()
+    
+    def focus_force(self):
+        """强制获取焦点"""
+        self.window.focus_force()
 
 
 def main(adb_bridge=None):
