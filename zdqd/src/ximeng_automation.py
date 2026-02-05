@@ -723,7 +723,7 @@ class XimengAutomation:
         log(f"  ❌ 导航到个人页超时（耗时: {int(elapsed)}秒，关闭广告: {ad_closed_count}次）")
         return False
     
-    async def run_full_workflow(self, device_id: str, account: Account, skip_login: bool = False) -> AccountResult:
+    async def run_full_workflow(self, device_id: str, account: Account, skip_login: bool = False, workflow_config: dict = None) -> AccountResult:
         """执行完整工作流：登录->获取初始数据->签到->获取最终数据->退出
         
         增强版数据收集流程：
@@ -737,6 +737,11 @@ class XimengAutomation:
             device_id: 设备 ID
             account: 账号信息
             skip_login: 是否跳过登录步骤（缓存登录已验证时使用）
+            workflow_config: 流程控制配置字典，包含：
+                - enable_login: 是否执行登录流程
+                - enable_profile: 是否获取个人资料
+                - enable_checkin: 是否执行签到
+                - enable_transfer: 是否执行转账
             
         Returns:
             账号处理结果（包含完整数据）
@@ -744,6 +749,15 @@ class XimengAutomation:
         import time
         from .concise_logger import ConciseLogger
         import logging
+        
+        # 默认流程配置（全部启用）
+        if workflow_config is None:
+            workflow_config = {
+                'enable_login': True,
+                'enable_profile': True,
+                'enable_checkin': True,
+                'enable_transfer': True,
+            }
         
         # 记录工作流开始时间
         workflow_start = time.time()
@@ -1199,7 +1213,15 @@ class XimengAutomation:
             file_logger.info("="*60)
             
             # ==================== 步骤3: 执行签到（仅在成功获取资料后执行）====================
-            if not profile_success:
+            # 检查是否启用签到流程
+            if not workflow_config.get('enable_checkin', True):
+                file_logger.info("="*60)
+                file_logger.info("跳过签到流程")
+                file_logger.info("原因: 流程控制已禁用签到")
+                file_logger.info("="*60)
+                # 标记为成功但跳过签到
+                result.success = True
+            elif not profile_success:
                 file_logger.info("="*60)
                 file_logger.info("跳过签到流程")
                 file_logger.info("原因: 未能获取个人资料数据")
@@ -1402,54 +1424,60 @@ class XimengAutomation:
             file_logger.info("步骤7.5: 检查自动转账")
             file_logger.info("="*60)
             
-            try:
-                # 每次处理账号时重新读取转账配置
-                from .transfer_config import get_transfer_config
-                from .transfer_lock import get_transfer_lock
-                from .transfer_history import get_transfer_history
-                
-                transfer_config = get_transfer_config()
-                transfer_lock = get_transfer_lock()
-                transfer_history = get_transfer_history()
-                
-                should_auto_transfer = transfer_config.enabled
-                
-                if should_auto_transfer:
-                    log(f"✓ 自动转账功能已启用，开始检查转账条件...")
+            # 检查是否启用转账流程
+            if not workflow_config.get('enable_transfer', True):
+                file_logger.info("跳过转账流程")
+                file_logger.info("原因: 流程控制已禁用转账")
+                file_logger.info("="*60)
+            else:
+                try:
+                    # 每次处理账号时重新读取转账配置
+                    from .transfer_config import get_transfer_config
+                    from .transfer_lock import get_transfer_lock
+                    from .transfer_history import get_transfer_history
                     
-                    # 检查必要的数据
-                    if not result.user_id:
-                        log(f"  ⚠️ 无法获取用户ID，跳过转账")
-                    elif result.balance_after is None:
-                        log(f"  ⚠️ 无法获取余额，跳过转账")
-                    else:
-                        # 【安全检查1】检查是否有转账锁
-                        if transfer_lock.is_locked(account.phone):
-                            lock_info = transfer_lock.get_lock_info(account.phone)
-                            log(f"  ⚠️ 转账进行中，跳过（已锁定 {lock_info['elapsed']:.1f}秒）")
+                    transfer_config = get_transfer_config()
+                    transfer_lock = get_transfer_lock()
+                    transfer_history = get_transfer_history()
+                    
+                    should_auto_transfer = transfer_config.enabled
+                    
+                    if should_auto_transfer:
+                        log(f"✓ 自动转账功能已启用，开始检查转账条件...")
+                        
+                        # 检查必要的数据
+                        if not result.user_id:
+                            log(f"  ⚠️ 无法获取用户ID，跳过转账")
+                        elif result.balance_after is None:
+                            log(f"  ⚠️ 无法获取余额，跳过转账")
                         else:
-                            # 【安全检查2】检查最近5分钟是否已转账
-                            recent_transfer = transfer_history.get_recent_transfer(
-                                sender_phone=account.phone,
-                                minutes=5
-                            )
-                            
-                            if recent_transfer:
-                                log(f"  ⚠️ 最近已有转账记录，跳过")
-                                log(f"    - 时间: {recent_transfer.timestamp}")
-                                log(f"    - 金额: {recent_transfer.amount:.2f} 元")
-                                log(f"    - 收款人: {recent_transfer.recipient_phone}")
-                                log(f"    - 状态: {'成功' if recent_transfer.success else '失败'}")
+                            # 【安全检查1】检查是否有转账锁
+                            if transfer_lock.is_locked(account.phone):
+                                lock_info = transfer_lock.get_lock_info(account.phone)
+                                log(f"  ⚠️ 转账进行中，跳过（已锁定 {lock_info['elapsed']:.1f}秒）")
                             else:
-                                # 判断是否需要转账（使用最新的配置）
-                                account_level = transfer_config.get_account_level(result.user_id)
+                                # 【安全检查2】检查最近5分钟是否已转账
+                                recent_transfer = transfer_history.get_recent_transfer(
+                                    sender_phone=account.phone,
+                                    minutes=5
+                                )
                                 
-                                if transfer_config.should_transfer(result.user_id, result.balance_after, current_level=0):
-                                    recipient_id = transfer_config.get_transfer_recipient(result.user_id, current_level=0)
-                                    if recipient_id:
-                                        log(f"  ✓ 满足转账条件，准备转账到 ID: {recipient_id}")
-                                        
-                                        # 【安全机制】获取转账锁
+                                if recent_transfer:
+                                    log(f"  ⚠️ 最近已有转账记录，跳过")
+                                    log(f"    - 时间: {recent_transfer.timestamp}")
+                                    log(f"    - 金额: {recent_transfer.amount:.2f} 元")
+                                    log(f"    - 收款人: {recent_transfer.recipient_phone}")
+                                    log(f"    - 状态: {'成功' if recent_transfer.success else '失败'}")
+                                else:
+                                    # 判断是否需要转账（使用最新的配置）
+                                    account_level = transfer_config.get_account_level(result.user_id)
+                                    
+                                    if transfer_config.should_transfer(result.user_id, result.balance_after, current_level=0):
+                                        recipient_id = transfer_config.get_transfer_recipient(result.user_id, current_level=0)
+                                        if recipient_id:
+                                            log(f"  ✓ 满足转账条件，准备转账到 ID: {recipient_id}")
+                                            
+                                            # 【安全机制】获取转账锁
                                         if not transfer_lock.acquire_lock(account.phone):
                                             log(f"  ⚠️ 无法获取转账锁，跳过")
                                         else:
@@ -1630,12 +1658,12 @@ class XimengAutomation:
                                     else:
                                         # 余额不足
                                         log(f"  ℹ️ 余额未达标")
-                else:
-                    log(f"  ℹ️ 自动转账功能未启用，跳过转账")
-                
-                log("")  # 空行
-            except Exception as e:
-                log(f"  ❌ 转账检查出错: {str(e)}\n")
+                    else:
+                        log(f"  ℹ️ 自动转账功能未启用，跳过转账")
+                    
+                    log("")  # 空行
+                except Exception as e:
+                    log(f"  ❌ 转账检查出错: {str(e)}\n")
             
             # ==================== 步骤8: 退出登录 ====================
             step_number += 1
