@@ -3381,10 +3381,10 @@ class AutomationGUI:
     def _open_workflow_control(self):
         """打开流程控制窗口"""
         # 检查窗口是否已打开
-        if hasattr(self, '_workflow_control_window') and self._workflow_control_window and self._workflow_control_window.winfo_exists():
+        if hasattr(self, '_workflow_control_window') and self._workflow_control_window and hasattr(self._workflow_control_window, 'window') and self._workflow_control_window.window.winfo_exists():
             # 窗口已存在，激活它
-            self._workflow_control_window.lift()
-            self._workflow_control_window.focus_force()
+            self._workflow_control_window.window.lift()
+            self._workflow_control_window.window.focus_force()
             return
         
         # 显示当前模式
@@ -3399,8 +3399,6 @@ class AutomationGUI:
         mode_name = mode_names.get(current_mode, "完整流程")
         self._log(f"当前流程模式: {mode_name}")
         
-        # 创建新窗口
-        self._workflow_control_window = WorkflowControlWindow(self.root, self)
         # 创建新窗口
         self._workflow_control_window = WorkflowControlWindow(self.root, self)
     
