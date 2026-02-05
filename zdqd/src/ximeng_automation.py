@@ -1136,8 +1136,13 @@ class XimengAutomation:
                             log(f"✗ 无法获取个人资料，终止流程\n")
                             return result
             
-            # 如果3次尝试后仍未成功
-            if not profile_success or not profile_data:
+            # 如果3次尝试后仍未成功（但快速签到模式除外）
+            # 快速签到模式下，允许跳过获取资料，在签到时获取
+            if not workflow_config.get('enable_profile', True):
+                # 快速签到模式：跳过资料检查，继续执行
+                file_logger.info("快速签到模式：跳过资料检查，将在签到时获取资料")
+            elif not profile_success or not profile_data:
+                # 非快速签到模式：必须成功获取资料
                 from .models.error_types import ErrorType
                 result.error_type = ErrorType.CANNOT_READ_PROFILE
                 result.error_message = "获取个人资料失败（3次尝试后）"
