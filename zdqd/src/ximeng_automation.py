@@ -950,24 +950,34 @@ class XimengAutomation:
                     await asyncio.sleep(2)
             
             # ==================== 步骤2: 获取初始个人资料 ====================
-            step_number += 1
-            
-            # 添加简洁日志：步骤2 - 获取资料
-            concise.step(step_number, "获取资料")
-            
-            # 文件日志记录详细信息
-            file_logger.info(f"步骤{step_number}: 获取初始个人资料")
-            
-            profile_success = False
-            profile_data = None
-            
-            # 尝试最多3次获取个人资料
-            for attempt in range(3):
-                try:
-                    if attempt > 0:
-                        file_logger.info(f"尝试 {attempt + 1}/3 重新获取个人资料...")
-                    
-                    # 如果是缓存登录，跳过导航（已经在个人页）
+            # 检查是否启用获取资料流程
+            if not workflow_config.get('enable_profile', True):
+                file_logger.info("="*60)
+                file_logger.info("跳过获取资料流程")
+                file_logger.info("原因: 流程控制已禁用获取资料（快速签到模式）")
+                file_logger.info("="*60)
+                # 标记为成功但跳过获取资料
+                profile_success = False
+                profile_data = None
+            else:
+                step_number += 1
+                
+                # 添加简洁日志：步骤2 - 获取资料
+                concise.step(step_number, "获取资料")
+                
+                # 文件日志记录详细信息
+                file_logger.info(f"步骤{step_number}: 获取初始个人资料")
+                
+                profile_success = False
+                profile_data = None
+                
+                # 尝试最多3次获取个人资料
+                for attempt in range(3):
+                    try:
+                        if attempt > 0:
+                            file_logger.info(f"尝试 {attempt + 1}/3 重新获取个人资料...")
+                        
+                        # 如果是缓存登录，跳过导航（已经在个人页）
                     if skip_login:
                         cache_check_start = time.time()
                         concise.action("验证当前页面")
@@ -1134,20 +1144,23 @@ class XimengAutomation:
                 log(f"✗ 无法获取个人资料，终止流程\n")
                 return result
             
-            # ==================== 步骤3: 存储初始数据到 result ====================
-            result.nickname = profile_data.get('nickname')  # 直接使用OCR结果，不使用历史数据
-            result.user_id = profile_data.get('user_id')  # 直接使用OCR结果，不使用历史数据
-            # phone 已经在初始化时设置
-            result.balance_before = profile_data.get('balance')
-            result.points = profile_data.get('points')
-            result.vouchers = profile_data.get('vouchers')
-            result.coupons = profile_data.get('coupons')
-            
-            # 显示收集到的账户信息（仅文件日志）
-            file_logger.info("="*60)
-            file_logger.info("账户信息")
-            file_logger.info(f"昵称: {result.nickname or 'N/A'}")
-            file_logger.info(f"ID: {result.user_id or 'N/A'}")
+            # ==================== 步骤2后处理：保存数据和缓存 ====================
+            # 只有在成功获取资料后才执行
+            if profile_success and profile_data:
+                # ==================== 步骤3: 存储初始数据到 result ====================
+                result.nickname = profile_data.get('nickname')  # 直接使用OCR结果，不使用历史数据
+                result.user_id = profile_data.get('user_id')  # 直接使用OCR结果，不使用历史数据
+                # phone 已经在初始化时设置
+                result.balance_before = profile_data.get('balance')
+                result.points = profile_data.get('points')
+                result.vouchers = profile_data.get('vouchers')
+                result.coupons = profile_data.get('coupons')
+                
+                # 显示收集到的账户信息（仅文件日志）
+                file_logger.info("="*60)
+                file_logger.info("账户信息")
+                file_logger.info(f"昵称: {result.nickname or 'N/A'}")
+                file_logger.info(f"ID: {result.user_id or 'N/A'}")
             file_logger.info(f"手机号: {result.phone}")
             if result.balance_before is not None:
                 file_logger.info(f"余额: {result.balance_before:.2f} 元")
