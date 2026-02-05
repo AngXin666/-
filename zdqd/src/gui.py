@@ -4635,6 +4635,9 @@ class HistoryResultsWindow:
         from datetime import datetime
         self.selected_date = datetime.now().strftime('%Y-%m-%d')
         
+        # 初始化筛选相关变量
+        self.all_tree_items = []  # 存储所有表格项目ID（用于筛选恢复）
+        
         # 加载历史结果
         self.results = []
         self._load_results()
@@ -4849,7 +4852,14 @@ class HistoryResultsWindow:
         
         ttk.Button(button_frame, text="刷新", command=self._refresh_data).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(button_frame, text="🔍 定位失败账户", command=self._locate_failed_account).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(button_frame, text="导出Excel", command=self._export_excel).pack(side=tk.LEFT, padx=(0, 5))
+        
+        # 快速筛选按钮
+        ttk.Button(button_frame, text="🔍 执行失败", command=self._filter_failed).pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Button(button_frame, text="💰 有余额", command=self._filter_has_balance).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(button_frame, text="📭 无余额", command=self._filter_no_balance).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(button_frame, text="🔄 显示全部", command=self._show_all).pack(side=tk.LEFT, padx=(0, 5))
+        
+        ttk.Button(button_frame, text="导出Excel", command=self._export_excel).pack(side=tk.LEFT, padx=(10, 5))
         ttk.Button(button_frame, text="关闭", command=self.window.destroy).pack(side=tk.RIGHT)
     
     def _refresh_tree(self):
@@ -4900,6 +4910,9 @@ class HistoryResultsWindow:
                 tag = ""
             
             self.tree.insert("", tk.END, values=values, tags=(tag,))
+        
+        # 保存所有项目ID（用于筛选）
+        self.all_tree_items = list(self.tree.get_children())
     
     def _on_date_scroll(self, event):
         """鼠标滚轮滚动日期
@@ -5364,6 +5377,129 @@ class HistoryResultsWindow:
         else:
             self.log("✓ 没有找到失败的账户")
             messagebox.showinfo("提示", "没有找到失败的账户")
+    
+    def _filter_failed(self):
+        """筛选执行失败的账户（只显示失败的账户）"""
+        # 保存所有项目ID（如果还没保存）
+        if not self.all_tree_items:
+            self.all_tree_items = list(self.tree.get_children())
+        
+        if not self.all_tree_items:
+            self.log("⚠️ 表格中没有数据")
+            messagebox.showinfo("提示", "表格中没有数据")
+            return
+        
+        # 先detach所有项目
+        for item in self.all_tree_items:
+            self.tree.detach(item)
+        
+        # 只reattach失败的账户
+        failed_count = 0
+        for item in self.all_tree_items:
+            values = self.tree.item(item, 'values')
+            if values and len(values) > 10:  # 确保有足够的列
+                status = values[10]  # 状态列是第11列（索引10）
+                if '失败' in str(status):
+                    self.tree.reattach(item, '', 'end')
+                    failed_count += 1
+        
+        if failed_count > 0:
+            self.log(f"✓ 已筛选出 {failed_count} 个执行失败的账户")
+        else:
+            self.log("✓ 没有找到失败的账户")
+            messagebox.showinfo("提示", "没有找到失败的账户")
+    
+    def _filter_has_balance(self):
+        """筛选有余额的账户（余额不为0）"""
+        # 保存所有项目ID（如果还没保存）
+        if not self.all_tree_items:
+            self.all_tree_items = list(self.tree.get_children())
+        
+        if not self.all_tree_items:
+            self.log("⚠️ 表格中没有数据")
+            messagebox.showinfo("提示", "表格中没有数据")
+            return
+        
+        # 先detach所有项目
+        for item in self.all_tree_items:
+            self.tree.detach(item)
+        
+        # 只reattach有余额的账户（余额 > 0）
+        has_balance_count = 0
+        for item in self.all_tree_items:
+            values = self.tree.item(item, 'values')
+            if values and len(values) > 8:  # 确保有足够的列
+                balance_after = values[8]  # 余额列是第9列（索引8）
+                try:
+                    balance = float(balance_after) if balance_after and balance_after != 'N/A' else 0.0
+                    if balance > 0:
+                        self.tree.reattach(item, '', 'end')
+                        has_balance_count += 1
+                except:
+                    pass
+        
+        if has_balance_count > 0:
+            self.log(f"✓ 已筛选出 {has_balance_count} 个有余额的账户")
+        else:
+            self.log("✓ 没有找到有余额的账户")
+            messagebox.showinfo("提示", "没有找到有余额的账户")
+    
+    def _filter_no_balance(self):
+        """筛选无余额的账户（余额为0）"""
+        # 保存所有项目ID（如果还没保存）
+        if not self.all_tree_items:
+            self.all_tree_items = list(self.tree.get_children())
+        
+        if not self.all_tree_items:
+            self.log("⚠️ 表格中没有数据")
+            messagebox.showinfo("提示", "表格中没有数据")
+            return
+        
+        # 先detach所有项目
+        for item in self.all_tree_items:
+            self.tree.detach(item)
+        
+        # 只reattach无余额的账户（余额 == 0）
+        no_balance_count = 0
+        for item in self.all_tree_items:
+            values = self.tree.item(item, 'values')
+            if values and len(values) > 8:  # 确保有足够的列
+                balance_after = values[8]  # 余额列是第9列（索引8）
+                try:
+                    balance = float(balance_after) if balance_after and balance_after != 'N/A' else 0.0
+                    if balance == 0:
+                        self.tree.reattach(item, '', 'end')
+                        no_balance_count += 1
+                except:
+                    pass
+        
+        if no_balance_count > 0:
+            self.log(f"✓ 已筛选出 {no_balance_count} 个无余额的账户")
+        else:
+            self.log("✓ 没有找到无余额的账户")
+            messagebox.showinfo("提示", "没有找到无余额的账户")
+    
+    def _show_all(self):
+        """显示全部账户（清除筛选）"""
+        # 如果有保存的项目，恢复所有项目
+        if self.all_tree_items:
+            # 先detach所有
+            for item in self.all_tree_items:
+                try:
+                    self.tree.detach(item)
+                except:
+                    pass
+            
+            # 重新attach所有项目
+            for item in self.all_tree_items:
+                try:
+                    self.tree.reattach(item, '', 'end')
+                except:
+                    pass
+            
+            self.log(f"✓ 已显示全部账户（共 {len(self.all_tree_items)} 个）")
+        else:
+            self.log("✓ 已显示全部账户")
     
     def _on_closing(self):
         """安全关闭窗口"""
