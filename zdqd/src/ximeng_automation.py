@@ -978,163 +978,163 @@ class XimengAutomation:
                             file_logger.info(f"尝试 {attempt + 1}/3 重新获取个人资料...")
                         
                         # 如果是缓存登录，跳过导航（已经在个人页）
-                    if skip_login:
-                        cache_check_start = time.time()
-                        concise.action("验证当前页面")
-                        file_logger.info("缓存登录 - 验证当前页面状态...")
-                        nav_success = True
-                        
-                        # 立即检测页面状态（不等待）- 使用整合检测器（GPU加速）
-                        detect_start = time.time()
-                        from .page_detector import PageState
-                        page_result = await self.integrated_detector.detect_page(
-                            device_id, use_cache=True, detect_elements=False
-                        )
-                        detect_time = time.time() - detect_start
-                        file_logger.info(f"页面检测耗时: {int(detect_time)}秒")
-                        
-                        if not page_result or not page_result.state:
-                            file_logger.warning("无法检测当前页面状态")
-                            if attempt < 2:
-                                await asyncio.sleep(2)
-                                continue
-                            else:
-                                result.error_message = "无法确认当前页面状态"
-                                return result
-                        
-                        file_logger.info(f"当前页面: {page_result.state.value}（置信度{page_result.confidence:.2%}）")
-                        
-                        # 确认在个人页（已登录）
-                        if page_result.state != PageState.PROFILE_LOGGED:
-                            file_logger.warning(f"当前不在个人页（已登录），尝试导航...")
-                            nav_start = time.time()
-                            # 使用统一的广告处理方法
-                            nav_success = await self._navigate_to_profile_with_ad_handling(device_id, log)
-                            nav_time = time.time() - nav_start
-                            file_logger.info(f"导航耗时: {int(nav_time)}秒")
-                            if not nav_success:
-                                if attempt < 2:
-                                    await asyncio.sleep(2)
-                                    continue
-                                else:
-                                    result.error_message = "无法导航到个人页"
-                                    return result
-                        else:
-                            file_logger.info("确认在个人页（已登录）")
-                            file_logger.info("页面已就绪，直接获取个人资料")
-                        
-                        cache_check_time = time.time() - cache_check_start
-                        file_logger.info(f"缓存登录验证总耗时: {int(cache_check_time)}秒")
-                    else:
-                        # 导航到个人资料页面（使用统一的广告处理方法）
-                        concise.action("进入个人页")
-                        nav_start = time.time()
-                        nav_success = await self._navigate_to_profile_with_ad_handling(device_id, log)
-                        nav_time = time.time() - nav_start
-                        file_logger.info(f"导航耗时: {int(nav_time)}秒")
-                        
-                        if not nav_success:
-                            log(f"⚠️ 导航到个人资料页面失败")
+                        if skip_login:
+                            cache_check_start = time.time()
+                            concise.action("验证当前页面")
+                            file_logger.info("缓存登录 - 验证当前页面状态...")
+                            nav_success = True
                             
-                            # 检查当前页面状态 - 使用整合检测器（GPU加速）
+                            # 立即检测页面状态（不等待）- 使用整合检测器（GPU加速）
+                            detect_start = time.time()
                             from .page_detector import PageState
                             page_result = await self.integrated_detector.detect_page(
                                 device_id, use_cache=True, detect_elements=False
                             )
+                            detect_time = time.time() - detect_start
+                            file_logger.info(f"页面检测耗时: {int(detect_time)}秒")
                             
-                            # 检查返回值是否有效
                             if not page_result or not page_result.state:
-                                log(f"  ⚠️ 无法检测当前页面状态")
+                                file_logger.warning("无法检测当前页面状态")
                                 if attempt < 2:
                                     await asyncio.sleep(2)
                                     continue
                                 else:
-                                    break
+                                    result.error_message = "无法确认当前页面状态"
+                                    return result
                             
-                            log(f"  当前页面: {page_result.state.value}")
+                            file_logger.info(f"当前页面: {page_result.state.value}（置信度{page_result.confidence:.2%}）")
                             
-                            # 如果已经在个人资料页面，继续
-                            if page_result.state in [PageState.PROFILE, PageState.PROFILE_LOGGED]:
-                                log(f"  ✓ 检测到已在个人资料页面，继续获取数据")
-                            else:
-                                # 尝试按返回键回到首页，然后重新导航
-                                log(f"  尝试返回首页...")
-                                await self.adb.press_back(device_id)
-                                await asyncio.sleep(2)
-                                
-                                # 重新导航
-                                nav_success = await self.navigator.navigate_to_profile(device_id)
+                            # 确认在个人页（已登录）
+                            if page_result.state != PageState.PROFILE_LOGGED:
+                                file_logger.warning(f"当前不在个人页（已登录），尝试导航...")
+                                nav_start = time.time()
+                                # 使用统一的广告处理方法
+                                nav_success = await self._navigate_to_profile_with_ad_handling(device_id, log)
+                                nav_time = time.time() - nav_start
+                                file_logger.info(f"导航耗时: {int(nav_time)}秒")
                                 if not nav_success:
                                     if attempt < 2:
-                                        log(f"  ⚠️ 导航仍然失败，等待2秒后重试...")
                                         await asyncio.sleep(2)
                                         continue
                                     else:
-                                        from .models.error_types import ErrorType
-                                        result.error_type = ErrorType.CANNOT_REACH_PROFILE
-                                        result.error_message = "无法导航到个人资料页面"
-                                        log(f"✗ 无法获取个人资料，终止流程\n")
+                                        result.error_message = "无法导航到个人页"
                                         return result
-                    
-                    # ===== 关键优化：直接尝试获取资料，通过获取结果判断是否成功 =====
-                    # 使用 ProfileReader 获取完整个人资料（带重试）
-                    # 传递账号字符串（格式：手机号----密码），用于提取手机号
-                    concise.action("获取详细资料")
-                    profile_read_start = time.time()
-                    file_logger.info("开始获取个人资料...")
-                    account_str = f"{account.phone}----{account.password}"
-                    profile_data = await self.profile_reader.get_full_profile_with_retry(
-                        device_id, 
-                        account=account_str,
-                        gui_logger=gui_logger_obj,
-                        step_number=step_number
-                    )
-                    profile_read_time = time.time() - profile_read_start
-                    file_logger.info(f"获取个人资料耗时: {int(profile_read_time)}秒")
-                    
-                    # 检查是否成功获取数据（必须获取到余额、昵称和用户ID）
-                    has_balance = profile_data and profile_data.get('balance') is not None
-                    has_nickname = profile_data and profile_data.get('nickname') is not None
-                    has_user_id = profile_data and profile_data.get('user_id') is not None
-                    
-                    # ===== 核心逻辑：基于获取资料的结果判断是否成功 =====
-                    if has_balance and has_nickname and has_user_id:
-                        file_logger.info("成功获取个人资料数据")
-                        profile_success = True
+                            else:
+                                file_logger.info("确认在个人页（已登录）")
+                                file_logger.info("页面已就绪，直接获取个人资料")
+                            
+                            cache_check_time = time.time() - cache_check_start
+                            file_logger.info(f"缓存登录验证总耗时: {int(cache_check_time)}秒")
+                        else:
+                            # 导航到个人资料页面（使用统一的广告处理方法）
+                            concise.action("进入个人页")
+                            nav_start = time.time()
+                            nav_success = await self._navigate_to_profile_with_ad_handling(device_id, log)
+                            nav_time = time.time() - nav_start
+                            file_logger.info(f"导航耗时: {int(nav_time)}秒")
+                            
+                            if not nav_success:
+                                log(f"⚠️ 导航到个人资料页面失败")
+                                
+                                # 检查当前页面状态 - 使用整合检测器（GPU加速）
+                                from .page_detector import PageState
+                                page_result = await self.integrated_detector.detect_page(
+                                    device_id, use_cache=True, detect_elements=False
+                                )
+                                
+                                # 检查返回值是否有效
+                                if not page_result or not page_result.state:
+                                    log(f"  ⚠️ 无法检测当前页面状态")
+                                    if attempt < 2:
+                                        await asyncio.sleep(2)
+                                        continue
+                                    else:
+                                        break
+                                
+                                log(f"  当前页面: {page_result.state.value}")
+                                
+                                # 如果已经在个人资料页面，继续
+                                if page_result.state in [PageState.PROFILE, PageState.PROFILE_LOGGED]:
+                                    log(f"  ✓ 检测到已在个人资料页面，继续获取数据")
+                                else:
+                                    # 尝试按返回键回到首页，然后重新导航
+                                    log(f"  尝试返回首页...")
+                                    await self.adb.press_back(device_id)
+                                    await asyncio.sleep(2)
+                                    
+                                    # 重新导航
+                                    nav_success = await self.navigator.navigate_to_profile(device_id)
+                                    if not nav_success:
+                                        if attempt < 2:
+                                            log(f"  ⚠️ 导航仍然失败，等待2秒后重试...")
+                                            await asyncio.sleep(2)
+                                            continue
+                                        else:
+                                            from .models.error_types import ErrorType
+                                            result.error_type = ErrorType.CANNOT_REACH_PROFILE
+                                            result.error_message = "无法导航到个人资料页面"
+                                            log(f"✗ 无法获取个人资料，终止流程\n")
+                                            return result
                         
-                        # 简洁日志已在 profile_reader.read_profile 中输出
-                        # 这里不需要重复输出
+                        # ===== 关键优化：直接尝试获取资料，通过获取结果判断是否成功 =====
+                        # 使用 ProfileReader 获取完整个人资料（带重试）
+                        # 传递账号字符串（格式：手机号----密码），用于提取手机号
+                        concise.action("获取详细资料")
+                        profile_read_start = time.time()
+                        file_logger.info("开始获取个人资料...")
+                        account_str = f"{account.phone}----{account.password}"
+                        profile_data = await self.profile_reader.get_full_profile_with_retry(
+                            device_id, 
+                            account=account_str,
+                            gui_logger=gui_logger_obj,
+                            step_number=step_number
+                        )
+                        profile_read_time = time.time() - profile_read_start
+                        file_logger.info(f"获取个人资料耗时: {int(profile_read_time)}秒")
                         
-                        break  # 获取成功，退出循环
-                    else:
-                        missing = []
-                        if not has_balance:
-                            missing.append("余额")
-                        if not has_nickname:
-                            missing.append("昵称")
-                        if not has_user_id:
-                            missing.append("用户ID")
-                        log(f"⚠️ 获取的数据不完整，缺少: {', '.join(missing)}")
+                        # 检查是否成功获取数据（必须获取到余额、昵称和用户ID）
+                        has_balance = profile_data and profile_data.get('balance') is not None
+                        has_nickname = profile_data and profile_data.get('nickname') is not None
+                        has_user_id = profile_data and profile_data.get('user_id') is not None
                         
-                        # 数据不完整，说明可能不在个人页或页面加载未完成
-                        # 重新导航并重试
+                        # ===== 核心逻辑：基于获取资料的结果判断是否成功 =====
+                        if has_balance and has_nickname and has_user_id:
+                            file_logger.info("成功获取个人资料数据")
+                            profile_success = True
+                            
+                            # 简洁日志已在 profile_reader.read_profile 中输出
+                            # 这里不需要重复输出
+                            
+                            break  # 获取成功，退出循环
+                        else:
+                            missing = []
+                            if not has_balance:
+                                missing.append("余额")
+                            if not has_nickname:
+                                missing.append("昵称")
+                            if not has_user_id:
+                                missing.append("用户ID")
+                            log(f"⚠️ 获取的数据不完整，缺少: {', '.join(missing)}")
+                            
+                            # 数据不完整，说明可能不在个人页或页面加载未完成
+                            # 重新导航并重试
+                            if attempt < 2:
+                                log(f"  重新导航到个人页...")
+                                await self.navigator.navigate_to_profile(device_id)
+                                log(f"  等待2秒后重试...")
+                                await asyncio.sleep(2)
+                        
+                    except Exception as e:
+                        log(f"⚠️ 获取个人资料出错: {str(e)}")
                         if attempt < 2:
-                            log(f"  重新导航到个人页...")
-                            await self.navigator.navigate_to_profile(device_id)
                             log(f"  等待2秒后重试...")
                             await asyncio.sleep(2)
-                        
-                except Exception as e:
-                    log(f"⚠️ 获取个人资料出错: {str(e)}")
-                    if attempt < 2:
-                        log(f"  等待2秒后重试...")
-                        await asyncio.sleep(2)
-                    else:
-                        from .models.error_types import ErrorType
-                        result.error_type = ErrorType.CANNOT_READ_PROFILE
-                        result.error_message = f"获取个人资料失败: {str(e)}"
-                        log(f"✗ 无法获取个人资料，终止流程\n")
-                        return result
+                        else:
+                            from .models.error_types import ErrorType
+                            result.error_type = ErrorType.CANNOT_READ_PROFILE
+                            result.error_message = f"获取个人资料失败: {str(e)}"
+                            log(f"✗ 无法获取个人资料，终止流程\n")
+                            return result
             
             # 如果3次尝试后仍未成功
             if not profile_success or not profile_data:

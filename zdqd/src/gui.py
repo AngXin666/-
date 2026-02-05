@@ -3388,6 +3388,20 @@ class AutomationGUI:
             self._workflow_control_window.focus_force()
             return
         
+        # 显示当前模式
+        mode_names = {
+            "complete": "完整流程",
+            "quick_checkin": "快速签到",
+            "login_only": "只登录",
+            "transfer_only": "只转账",
+            "custom": "自定义"
+        }
+        current_mode = getattr(self.config, 'workflow_mode', 'complete')
+        mode_name = mode_names.get(current_mode, "完整流程")
+        self._log(f"当前流程模式: {mode_name}")
+        
+        # 创建新窗口
+        self._workflow_control_window = WorkflowControlWindow(self.root, self)
         # 创建新窗口
         self._workflow_control_window = WorkflowControlWindow(self.root, self)
     
@@ -5760,6 +5774,9 @@ class WorkflowControlWindow:
         elif mode == "custom":
             # 自定义：启用复选框
             self._enable_checkboxes()
+        
+        # 实时保存配置
+        self._auto_save_config()
     
     def _disable_checkboxes(self):
         """禁用自定义流程模块的复选框"""
@@ -5785,8 +5802,31 @@ class WorkflowControlWindow:
         for child in widget.winfo_children():
             self._enable_checkboxes_recursive(child)
     
+    def _auto_save_config(self):
+        """自动保存流程配置（不显示消息）"""
+        # 保存到config
+        self.gui.config.workflow_mode = self.mode_var.get()
+        self.gui.config.workflow_enable_login = self.login_var.get()
+        self.gui.config.workflow_enable_profile = self.profile_var.get()
+        self.gui.config.workflow_enable_checkin = self.checkin_var.get()
+        self.gui.config.workflow_enable_transfer = self.transfer_var.get()
+        
+        # 保存配置文件
+        self.gui.config_loader.save(self.gui.config)
+        
+        # 在GUI日志中显示当前模式
+        mode_names = {
+            "complete": "完整流程",
+            "quick_checkin": "快速签到",
+            "login_only": "只登录",
+            "transfer_only": "只转账",
+            "custom": "自定义"
+        }
+        mode_name = mode_names.get(self.mode_var.get(), "未知")
+        self.gui._log(f"✓ 流程模式已切换: {mode_name}")
+    
     def _save_config(self):
-        """保存流程配置"""
+        """保存流程配置（显示消息）"""
         # 保存到config
         self.gui.config.workflow_mode = self.mode_var.get()
         self.gui.config.workflow_enable_login = self.login_var.get()
@@ -5824,6 +5864,8 @@ class WorkflowControlWindow:
     
     def _on_closing(self):
         """窗口关闭时的处理"""
+        # 关闭窗口时也保存配置
+        self._auto_save_config()
         self.window.destroy()
     
     def winfo_exists(self):
