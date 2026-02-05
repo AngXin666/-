@@ -3135,8 +3135,13 @@ class AutomationGUI:
                     raise Exception("用户中断操作")
                 raise Exception("启动流程失败")
             
-            # 如果有缓存，验证用户ID
-            if has_valid_cache:
+            # 如果有缓存，验证用户ID（快速签到模式除外）
+            # 快速签到模式下，跳过ID验证，直接进入登录流程
+            workflow_config = self.config_loader.get_workflow_config()
+            enable_profile = workflow_config.get('enable_profile', True)
+            
+            if has_valid_cache and enable_profile:
+                # 完整流程模式：需要验证用户ID
                 from .navigator import Navigator
                 from .model_manager import ModelManager
                 from .page_detector import PageState
@@ -3222,6 +3227,9 @@ class AutomationGUI:
                 else:
                     has_valid_cache = False
                     ximeng.hybrid_detector.clear_cache()
+            elif has_valid_cache and not enable_profile:
+                # 快速签到模式：跳过ID验证，直接使用缓存
+                log_callback("快速签到模式：跳过用户ID验证，直接使用缓存")
             
             # 调用完整工作流
             ximeng._stop_check = self._check_stop_or_pause
