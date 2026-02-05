@@ -508,6 +508,12 @@ class AutomationGUI:
         ttk.Button(button_row, text="撤回", command=self._undo_selection, width=8).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(button_row, text="👤 分配管理员", command=self._assign_owner_to_selected, width=12).pack(side=tk.LEFT, padx=(5, 0))
         
+        # 快速筛选按钮
+        ttk.Button(button_row, text="🔍 执行失败", command=self._filter_failed, width=10).pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Button(button_row, text="💰 有余额", command=self._filter_has_balance, width=10).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(button_row, text="📭 无余额", command=self._filter_no_balance, width=10).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(button_row, text="🔄 显示全部", command=self._show_all, width=10).pack(side=tk.LEFT, padx=(0, 5))
+        
         # 创建Treeview表格 (带勾选框)
         columns = (
             "phone", "nickname", "user_id", "balance_before", "points", "vouchers", "coupons",
@@ -552,6 +558,9 @@ class AutomationGUI:
         # 绑定点击事件(用于切换勾选状态)
         self.results_tree.bind("<Button-1>", self._on_tree_click)
         
+        # 绑定双击事件(用于快速勾选/取消勾选)
+        self.results_tree.bind("<Double-Button-1>", self._on_tree_double_click)
+        
         # 添加滚动条
         results_scrollbar_y = ttk.Scrollbar(results_frame, orient=tk.VERTICAL, command=self.results_tree.yview)
         results_scrollbar_x = ttk.Scrollbar(results_frame, orient=tk.HORIZONTAL, command=self.results_tree.xview)
@@ -574,6 +583,7 @@ class AutomationGUI:
         # 初始化勾选状态字典和历史记录
         self.checked_items = {}  # {item_id: True/False}
         self.selection_history = []  # 最多保存5个历史状态
+        self.all_tree_items = []  # 存储所有表格项目ID（用于筛选恢复）
     
     def _create_checkbox_images(self):
         """创建勾选框图标(使用对称的Unicode字符)"""
@@ -824,6 +834,9 @@ class AutomationGUI:
             self.checked_items.clear()
             self.selection_history.clear()
             
+            # 清空筛选缓存
+            self.all_tree_items = []
+            
             # 统计变量
             success_count = 0
             restored_count = 0  # 从历史恢复的账号数
@@ -970,6 +983,10 @@ class AutomationGUI:
                 
                 if restored_selection_count > 0:
                     self._log(f"✅ 已恢复 {restored_selection_count} 个账号的勾选状态")
+            
+            # ===== 步骤9: 更新筛选缓存 =====
+            # 保存所有项目ID，用于筛选功能
+            self.all_tree_items = list(self.results_tree.get_children())
         
         except Exception as e:
             import traceback
@@ -1404,6 +1421,15 @@ class AutomationGUI:
             if item:
                 self._toggle_check(item)
     
+    def _on_tree_double_click(self, event):
+        """处理表格双击事件(快速勾选/取消勾选)
+        
+        双击任意列都可以切换勾选状态，不限于勾选框列
+        """
+        item = self.results_tree.identify_row(event.y)
+        if item:
+            self._toggle_check(item)
+    
     def _toggle_check(self, item):
         """切换单个项目的勾选状态"""
         # 保存当前状态到历史
@@ -1428,11 +1454,11 @@ class AutomationGUI:
         self._save_timer = self.root.after(300, self._save_selections_to_file)
     
     def _select_all_results(self):
-        """全选或取消全选"""
+        """全选或取消全选（只操作当前显示的账户）"""
         # 保存当前状态到历史
         self._save_selection_state()
         
-        # 检查是否全部已选中
+        # 获取当前显示的项目（不包括被筛选隐藏的）
         all_items = self.results_tree.get_children()
         if not all_items:
             return
@@ -1449,6 +1475,10 @@ class AutomationGUI:
             else:
                 self.results_tree.item(item, text=self.checkbox_unchecked_text)
         
+        # 记录日志
+        action = "全选" if new_state else "取消全选"
+        self._log(f"✓ 已{action} {len(all_items)} 个显示的账户")
+        
         # 勾选状态变化后，延迟保存（防抖）
         if hasattr(self, '_save_timer'):
             self.root.after_cancel(self._save_timer)
@@ -1457,11 +1487,16 @@ class AutomationGUI:
         self._save_timer = self.root.after(300, self._save_selections_to_file)
     
     def _invert_selection(self):
-        """反选：选中未选中的，取消选中已选中的"""
+        """反选：选中未选中的，取消选中已选中的（只操作当前显示的账户）"""
         # 保存当前状态到历史
         self._save_selection_state()
         
+        # 获取当前显示的项目（不包括被筛选隐藏的）
         all_items = self.results_tree.get_children()
+        
+        checked_count = 0
+        unchecked_count = 0
+        
         for item in all_items:
             current_state = self.checked_items.get(item, False)
             new_state = not current_state
@@ -1469,8 +1504,13 @@ class AutomationGUI:
             
             if new_state:
                 self.results_tree.item(item, text=self.checkbox_checked_text)
+                checked_count += 1
             else:
                 self.results_tree.item(item, text=self.checkbox_unchecked_text)
+                unchecked_count += 1
+        
+        # 记录日志
+        self._log(f"✓ 已反选 {len(all_items)} 个显示的账户（勾选 {checked_count} 个，取消 {unchecked_count} 个）")
         
         # 勾选状态变化后，延迟保存（防抖）
         if hasattr(self, '_save_timer'):
@@ -1543,6 +1583,129 @@ class AutomationGUI:
         # 打开分配对话框
         from .user_management_gui import QuickAssignOwnerDialog
         QuickAssignOwnerDialog(self.root, selected_phones, self._refresh_account_list)
+    
+    def _filter_failed(self):
+        """筛选执行失败的账户（只显示失败的账户）"""
+        # 保存所有项目ID（如果还没保存）
+        if not self.all_tree_items:
+            self.all_tree_items = list(self.results_tree.get_children())
+        
+        if not self.all_tree_items:
+            self._log("⚠️ 表格中没有数据")
+            messagebox.showinfo("提示", "表格中没有数据")
+            return
+        
+        # 先detach所有项目
+        for item in self.all_tree_items:
+            self.results_tree.detach(item)
+        
+        # 只reattach失败的账户
+        failed_count = 0
+        for item in self.all_tree_items:
+            values = self.results_tree.item(item, 'values')
+            if values and len(values) > 13:  # 确保有足够的列
+                status = values[13]  # 状态列是第14列（索引13）
+                if '失败' in str(status):
+                    self.results_tree.reattach(item, '', 'end')
+                    failed_count += 1
+        
+        if failed_count > 0:
+            self._log(f"✓ 已筛选出 {failed_count} 个执行失败的账户（可勾选操作）")
+        else:
+            self._log("✓ 没有找到失败的账户")
+            messagebox.showinfo("提示", "没有找到失败的账户")
+    
+    def _filter_has_balance(self):
+        """筛选有余额的账户（余额不为0）"""
+        # 保存所有项目ID（如果还没保存）
+        if not self.all_tree_items:
+            self.all_tree_items = list(self.results_tree.get_children())
+        
+        if not self.all_tree_items:
+            self._log("⚠️ 表格中没有数据")
+            messagebox.showinfo("提示", "表格中没有数据")
+            return
+        
+        # 先detach所有项目
+        for item in self.all_tree_items:
+            self.results_tree.detach(item)
+        
+        # 只reattach有余额的账户（余额 > 0）
+        has_balance_count = 0
+        for item in self.all_tree_items:
+            values = self.results_tree.item(item, 'values')
+            if values and len(values) > 9:  # 确保有足够的列
+                balance_after = values[9]  # 余额列是第10列（索引9）
+                try:
+                    balance = float(balance_after) if balance_after and balance_after != 'N/A' else 0.0
+                    if balance > 0:
+                        self.results_tree.reattach(item, '', 'end')
+                        has_balance_count += 1
+                except:
+                    pass
+        
+        if has_balance_count > 0:
+            self._log(f"✓ 已筛选出 {has_balance_count} 个有余额的账户（可勾选操作）")
+        else:
+            self._log("✓ 没有找到有余额的账户")
+            messagebox.showinfo("提示", "没有找到有余额的账户")
+    
+    def _filter_no_balance(self):
+        """筛选无余额的账户（余额为0）"""
+        # 保存所有项目ID（如果还没保存）
+        if not self.all_tree_items:
+            self.all_tree_items = list(self.results_tree.get_children())
+        
+        if not self.all_tree_items:
+            self._log("⚠️ 表格中没有数据")
+            messagebox.showinfo("提示", "表格中没有数据")
+            return
+        
+        # 先detach所有项目
+        for item in self.all_tree_items:
+            self.results_tree.detach(item)
+        
+        # 只reattach无余额的账户（余额 == 0）
+        no_balance_count = 0
+        for item in self.all_tree_items:
+            values = self.results_tree.item(item, 'values')
+            if values and len(values) > 9:  # 确保有足够的列
+                balance_after = values[9]  # 余额列是第10列（索引9）
+                try:
+                    balance = float(balance_after) if balance_after and balance_after != 'N/A' else 0.0
+                    if balance == 0:
+                        self.results_tree.reattach(item, '', 'end')
+                        no_balance_count += 1
+                except:
+                    pass
+        
+        if no_balance_count > 0:
+            self._log(f"✓ 已筛选出 {no_balance_count} 个无余额的账户（可勾选操作）")
+        else:
+            self._log("✓ 没有找到无余额的账户")
+            messagebox.showinfo("提示", "没有找到无余额的账户")
+    
+    def _show_all(self):
+        """显示全部账户（清除筛选）"""
+        # 如果有保存的项目，恢复所有项目
+        if self.all_tree_items:
+            # 先detach所有
+            for item in self.all_tree_items:
+                try:
+                    self.results_tree.detach(item)
+                except:
+                    pass
+            
+            # 重新attach所有项目
+            for item in self.all_tree_items:
+                try:
+                    self.results_tree.reattach(item, '', 'end')
+                except:
+                    pass
+            
+            self._log(f"✓ 已显示全部账户（共 {len(self.all_tree_items)} 个）")
+        else:
+            self._log("✓ 已显示全部账户")
     
     def _refresh_account_list(self):
         """刷新账号列表（重新加载以显示更新后的管理员）"""
@@ -4651,6 +4814,7 @@ class HistoryResultsWindow:
         button_frame.pack(fill=tk.X)
         
         ttk.Button(button_frame, text="刷新", command=self._refresh_data).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(button_frame, text="🔍 定位失败账户", command=self._locate_failed_account).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(button_frame, text="导出Excel", command=self._export_excel).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(button_frame, text="关闭", command=self.window.destroy).pack(side=tk.RIGHT)
     
@@ -5126,6 +5290,46 @@ class HistoryResultsWindow:
         except Exception as e:
             self.log(f"导出失败: {e}")
             messagebox.showerror("错误", f"导出失败: {e}")
+    
+    def _locate_failed_account(self):
+        """定位到第一个失败的账户"""
+        # 获取所有表格项
+        all_items = self.tree.get_children()
+        
+        if not all_items:
+            self.log("⚠️ 表格中没有数据")
+            messagebox.showinfo("提示", "表格中没有数据")
+            return
+        
+        # 查找第一个失败的账户
+        failed_item = None
+        for item in all_items:
+            values = self.tree.item(item, 'values')
+            if values and len(values) > 10:  # 确保有足够的列
+                status = values[10]  # 状态列是第11列（索引10）
+                if '失败' in str(status):
+                    failed_item = item
+                    break
+        
+        if failed_item:
+            # 清除之前的选择
+            self.tree.selection_remove(*self.tree.selection())
+            
+            # 选中失败的账户
+            self.tree.selection_set(failed_item)
+            
+            # 滚动到该项，使其可见
+            self.tree.see(failed_item)
+            
+            # 获取账户信息
+            values = self.tree.item(failed_item, 'values')
+            nickname = values[0] if len(values) > 0 else 'N/A'
+            phone = values[2] if len(values) > 2 else 'N/A'
+            
+            self.log(f"✓ 已定位到失败账户: {nickname} ({phone})")
+        else:
+            self.log("✓ 没有找到失败的账户")
+            messagebox.showinfo("提示", "没有找到失败的账户")
     
     def _on_closing(self):
         """安全关闭窗口"""

@@ -774,7 +774,17 @@ class LocalDatabase:
                     existing = cursor.fetchone()
                     
                     if existing:
-                        # 更新现有记录 - 只更新非None的字段，保留原有值
+                        # 更新现有记录 - 智能合并：只用有效值更新，保留原有值
+                        # 先查询现有记录的值（用于累计计算）
+                        cursor.execute("""
+                            SELECT checkin_reward, transfer_amount
+                            FROM history_records 
+                            WHERE phone = ? AND run_date = ?
+                        """, (record.get('phone'), record.get('run_date')))
+                        existing_data = cursor.fetchone()
+                        existing_checkin_reward = existing_data[0] if existing_data and existing_data[0] else 0
+                        existing_transfer_amount = existing_data[1] if existing_data and existing_data[1] else 0
+                        
                         update_fields = []
                         values = []
                         
@@ -783,10 +793,51 @@ class LocalDatabase:
                                 continue  # 跳过主键字段
                             
                             field_value = record.get(field)
-                            # 只更新非None的字段（保留原有值）
-                            if field_value is not None:
+                            
+                            # 智能判断：只更新有意义的值
+                            should_update = False
+                            actual_value = field_value  # 实际要更新的值（可能是累计值）
+                            
+                            if field_value is None:
+                                # None值不更新
+                                should_update = False
+                            elif field in ['nickname', 'user_id', 'owner']:
+                                # 字符串字段：只有非空时才更新
+                                should_update = bool(field_value and str(field_value).strip())
+                            elif field == 'checkin_reward':
+                                # 签到奖励：累计（如果新值>0）
+                                if isinstance(field_value, (int, float)) and field_value > 0:
+                                    actual_value = existing_checkin_reward + field_value
+                                    should_update = True
+                            elif field == 'transfer_amount':
+                                # 转账金额：累计（如果新值>0）
+                                if isinstance(field_value, (int, float)) and field_value > 0:
+                                    actual_value = existing_transfer_amount + field_value
+                                    should_update = True
+                            elif field in ['balance_before', 'balance_after', 'points', 'vouchers', 'coupons',
+                                         'checkin_total_times', 'checkin_balance_after']:
+                                # 其他数值字段：只有大于0时才更新（0可能是无效数据）
+                                should_update = (isinstance(field_value, (int, float)) and field_value > 0)
+                            elif field == 'transfer_recipient':
+                                # 转账收款人：只有非空且不是"失败"时才更新
+                                should_update = (field_value and str(field_value).strip() and 
+                                               str(field_value).strip() not in ['失败', ''])
+                            elif field == 'status':
+                                # 状态字段：只有成功状态才更新（不用失败覆盖成功）
+                                should_update = (field_value in ['成功', 'success', '完成'])
+                            elif field in ['duration', 'timestamp']:
+                                # 时间字段：总是更新（记录最新的执行时间）
+                                should_update = True
+                            elif field == 'error_type':
+                                # 错误类型：只有非空时才更新
+                                should_update = bool(field_value)
+                            else:
+                                # 其他字段：非None就更新
+                                should_update = True
+                            
+                            if should_update:
                                 update_fields.append(field)
-                                values.append(field_value)
+                                values.append(actual_value)
                         
                         if update_fields:
                             set_clause = ', '.join([f"{field} = ?" for field in update_fields])
@@ -797,7 +848,7 @@ class LocalDatabase:
                                 WHERE phone = ? AND run_date = ?
                             """
                             cursor.execute(sql, values)
-                            print(f"[数据库] 更新记录: {record.get('phone')} - {record.get('run_date')} (更新了 {len(update_fields)} 个字段)")
+                            print(f"[数据库] 更新记录: {record.get('phone')} - {record.get('run_date')} (更新了 {len(update_fields)} 个字段: {', '.join(update_fields)})")
                         else:
                             print(f"[数据库] 跳过更新: {record.get('phone')} - {record.get('run_date')} (所有字段都是None)")
                     else:
