@@ -2798,7 +2798,8 @@ class AutomationGUI:
                                            self._update_stats(total, s, f, tcr, tb, tp, tv, tc))
                         
                         # 更新进度（基于总账号数）
-                        self.root.after(0, lambda p=current_processed, skipped=len(checked_phones), t=total: 
+                        skipped_count = total - queued_count  # 跳过的账号数 = 总数 - 队列数
+                        self.root.after(0, lambda p=current_processed, skipped=skipped_count, t=total: 
                                        self._update_progress(p + skipped, t, f"已完成: {p}/{queued_count} (总进度: {p + skipped}/{t})"))
                 
                 except Exception as e:
@@ -2837,7 +2838,8 @@ class AutomationGUI:
                                    self._update_stats(total, s, f, tcr, tb, tp, tv, tc))
                     
                     # 更新进度（基于总账号数）
-                    self.root.after(0, lambda p=current_processed, skipped=len(checked_phones), t=total: 
+                    skipped_count = total - queued_count  # 跳过的账号数 = 总数 - 队列数
+                    self.root.after(0, lambda p=current_processed, skipped=skipped_count, t=total: 
                                    self._update_progress(p + skipped, t, f"已完成: {p}/{queued_count} (总进度: {p + skipped}/{t})"))
                     
                     # 继续处理下一个账号,不要停止实例
@@ -3139,8 +3141,7 @@ class AutomationGUI:
             
             # 如果有缓存，验证用户ID（快速签到模式除外）
             # 快速签到模式下，跳过ID验证，直接进入登录流程
-            workflow_config = self.config_loader.get_workflow_config()
-            enable_profile = workflow_config.get('enable_profile', True)
+            enable_profile = getattr(self.config, 'workflow_enable_profile', True)
             
             if has_valid_cache and enable_profile:
                 # 完整流程模式：需要验证用户ID
