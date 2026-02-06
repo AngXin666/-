@@ -544,6 +544,8 @@ class LoginCacheManager:
         用于在没有缓存时，清理应用中旧账号的登录数据，
         避免启动应用后自动登录到错误的账号。
         
+        优化：合并删除命令，从4次ADB通信减少到1次
+        
         Args:
             device_id: 设备 ID
             package_name: 应用包名
@@ -554,10 +556,11 @@ class LoginCacheManager:
         try:
             data_path = f"/data/data/{package_name}"
             
-            # 删除登录相关的文件
-            for file_path in self.CACHE_FILES:
-                target_path = f"{data_path}/{file_path}"
-                await self.adb.shell(device_id, f"su -c 'rm -f {target_path}'")
+            # 优化：合并所有删除命令为一个命令，减少ADB通信次数
+            # 从4次 shell 调用 → 1次 shell 调用
+            target_paths = [f"{data_path}/{file_path}" for file_path in self.CACHE_FILES]
+            combined_cmd = f"su -c 'rm -f {' '.join(target_paths)}'"
+            await self.adb.shell(device_id, combined_cmd)
             
             return True
             

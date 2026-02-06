@@ -465,7 +465,7 @@ class DailyCheckin:
     
     async def do_checkin(self, device_id: str, phone: str = "unknown", password: str = None, 
                         login_callback=None, log_callback=None, profile_data: Optional[Dict] = None,
-                        step_number: int = 1, gui_logger=None) -> Dict[str, any]:
+                        step_number: int = 1, gui_logger=None, allow_skip_profile: bool = False) -> Dict[str, any]:
         """执行每日签到（循环签到直到次数用完）
         
         Args:
@@ -480,6 +480,7 @@ class DailyCheckin:
                 - vouchers: float, 抵扣券
             step_number: 步骤编号（用于简洁日志）
             gui_logger: GUI日志记录器（用于简洁日志输出）
+            allow_skip_profile: 是否允许跳过个人信息获取（快速签到模式使用）
             
         Returns:
             dict: 签到结果
@@ -550,6 +551,13 @@ class DailyCheckin:
                     log(f"    - 积分: {points} 积分")
                 if vouchers is not None:
                     log(f"    - 抵扣券: {vouchers} 张")
+            elif allow_skip_profile:
+                # 快速签到模式：允许跳过个人信息获取
+                log(f"  [签到] 快速签到模式：跳过个人信息获取")
+                profile_success = True  # 标记为成功，允许继续
+                balance = None
+                points = None
+                vouchers = None
             else:
                 # 需要获取个人信息
                 log(f"  [签到] 获取个人信息...")
@@ -588,8 +596,8 @@ class DailyCheckin:
                 except Exception as e:
                     log(f"  [签到] ❌ 获取个人信息出错: {e}")
             
-            # 如果获取个人信息失败，终止签到流程
-            if not profile_success:
+            # 如果获取个人信息失败，终止签到流程（快速签到模式除外）
+            if not profile_success and not allow_skip_profile:
                 result['message'] = "无法获取个人信息，可能不在应用内或登录状态异常"
                 result['error_type'] = ErrorType.CANNOT_REACH_CHECKIN  # 无法到达签到页（前置条件失败）
                 result['error_message'] = result['message']
@@ -851,7 +859,10 @@ class DailyCheckin:
                     log(f"  [签到 {attempt + 1}] 推算剩余次数: {remaining_times}")
                 
                 # 5.2 检查是否可以签到
-                if remaining_times is not None and remaining_times <= 0:
+                # 修复：第一次循环时，即使remaining_times为0，也要尝试点击一次
+                # 因为OCR可能识别错误，或者页面数据是旧的
+                # 只有在后续循环中，如果remaining_times为0才跳出
+                if attempt > 0 and remaining_times is not None and remaining_times <= 0:
                     log(f"  [签到 {attempt + 1}] 剩余次数为0，今日已签到完成")
                     # 设置已签到标志
                     result['already_checked'] = True
@@ -859,7 +870,10 @@ class DailyCheckin:
                     # 跳出循环
                     break
                 else:
-                    log(f"  [签到 {attempt + 1}] 剩余次数: {remaining_times if remaining_times is not None else '未知'}，继续签到...")
+                    if remaining_times is not None and remaining_times <= 0 and attempt == 0:
+                        log(f"  [签到 {attempt + 1}] OCR识别剩余次数为0，但仍尝试点击一次（可能是识别错误）")
+                    else:
+                        log(f"  [签到 {attempt + 1}] 剩余次数: {remaining_times if remaining_times is not None else '未知'}，继续签到...")
                 
                 # 5.4 执行签到（使用缓存的按钮位置）
                 if cached_button_pos is None:
