@@ -1813,7 +1813,10 @@ class AutomationGUI:
                      total_points: int = 0,
                      total_vouchers: float = 0.0,
                      total_coupons: int = 0):
-        """更新统计信息（已废弃，改用_update_stats_from_table）
+        """更新统计信息（运行时使用传入的实时统计数据）
+        
+        注意：此方法在运行时使用传入的实时统计数据，不重新遍历表格
+        只有在加载账号或手动刷新时才调用 _update_stats_from_table()
         
         Args:
             total: 总账号数
@@ -1825,11 +1828,21 @@ class AutomationGUI:
             total_vouchers: 总抵扣券(所有账号累加)
             total_coupons: 总优惠券(所有账号累加)
         """
-        # 改为从表格统计数据
-        self._update_stats_from_table()
+        # 运行时直接使用传入的统计数据，不重新遍历表格（性能优化）
+        self.total_var.set(f"总计: {total}")
+        self.success_var.set(f"成功: {success}")
+        self.failed_var.set(f"失败: {failed}")
+        self.total_balance_var.set(f"总余额: {total_balance:.2f} 元")
+        self.total_checkin_reward_var.set(f"总签到奖励: {total_checkin_reward:.2f} 元")
     
     def _update_stats_from_table(self):
-        """从表格中统计所有账号的数据"""
+        """从表格中统计所有账号的数据
+        
+        统计规则：
+        1. 总计：表格中所有账号
+        2. 成功/失败：根据状态列统计
+        3. 余额/签到奖励：只统计成功账号的数据（避免混合历史数据）
+        """
         total = 0
         success = 0
         failed = 0
@@ -1851,26 +1864,36 @@ class AutomationGUI:
             
             # 状态列（索引13）
             status = values[13]
-            if "成功" in status:  # 使用in判断，因为状态可能是"✅ 成功"
+            is_success = "成功" in status  # 使用in判断，因为状态可能是"✅ 成功"
+            is_failed = "失败" in status or "❌" in status  # 包含失败和错误状态
+            
+            if is_success:
                 success += 1
-            elif "失败" in status:
+            elif is_failed:
                 failed += 1
+            # 注意：待处理状态不计入成功或失败
             
-            # 余额（索引9，balance_after）
-            try:
-                balance_str = values[9]
-                if balance_str and balance_str != "N/A" and balance_str != "-":
-                    total_balance += float(balance_str)
-            except (ValueError, IndexError):
-                pass
-            
-            # 签到奖励（索引7）
-            try:
-                checkin_reward_str = values[7]
-                if checkin_reward_str and checkin_reward_str != "N/A" and checkin_reward_str != "-":
-                    total_checkin_reward += float(checkin_reward_str)
-            except (ValueError, IndexError):
-                pass
+            # 只统计成功账号的余额和签到奖励（避免混合历史数据）
+            if is_success:
+                # 余额（索引9，balance_after）
+                try:
+                    balance_str = values[9]
+                    if balance_str and balance_str != "N/A" and balance_str != "-" and balance_str != "待处理":
+                        total_balance += float(balance_str)
+                except (ValueError, IndexError, TypeError) as e:
+                    # 记录解析错误，便于调试
+                    phone = values[0] if values else 'unknown'
+                    print(f"[统计] 解析余额失败 - 账号: {phone}, 值: {balance_str}, 错误: {e}")
+                
+                # 签到奖励（索引7）
+                try:
+                    checkin_reward_str = values[7]
+                    if checkin_reward_str and checkin_reward_str != "N/A" and checkin_reward_str != "-" and checkin_reward_str != "待处理":
+                        total_checkin_reward += float(checkin_reward_str)
+                except (ValueError, IndexError, TypeError) as e:
+                    # 记录解析错误，便于调试
+                    phone = values[0] if values else 'unknown'
+                    print(f"[统计] 解析签到奖励失败 - 账号: {phone}, 值: {checkin_reward_str}, 错误: {e}")
         
         # 更新统计显示
         self.total_var.set(f"总计: {total}")
@@ -2033,10 +2056,19 @@ class AutomationGUI:
         self._save_single_account_to_history(account_result)
     
     def _update_progress(self, current: int, total: int, message: str):
-        """更新进度"""
+        """更新进度条和进度信息
+        
+        Args:
+            current: 当前已完成数量
+            total: 总数量（待处理账号数，不是所有账号数）
+            message: 进度消息
+        """
         if total > 0:
             progress = (current / total) * 100
             self.progress_var.set(progress)
+        else:
+            # 如果总数为0，设置进度为100%
+            self.progress_var.set(100)
         self.progress_label_var.set(message)
     
     def _save_single_account_to_history(self, account_result):
@@ -2395,6 +2427,10 @@ class AutomationGUI:
             finally:
                 self.executor = None
         
+        # 更新统计（从表格重新统计，确保数据准确）
+        self._update_stats_from_table()
+        
+        # 更新状态
         self.status_var.set("已停止")
         self._log("⏹ 已强制停止所有任务")
         self._log("提示：如需重新运行，请点击'开始运行'按钮")
@@ -2493,7 +2529,7 @@ class AutomationGUI:
         
         if auto_launch:
             self.root.after(0, lambda w=max_workers: self._log(f"准备启动 {w} 个实例"))
-        self.root.after(0, lambda: self._update_progress(0, total, f"正在检测模拟器实例..."))
+        self.root.after(0, lambda: self._update_progress(0, unchecked_count, f"正在检测模拟器实例... (待处理: {unchecked_count})"))
         
         # 检测正在运行的模拟器实例
         running_instances = await controller.get_running_instances()
@@ -2788,10 +2824,9 @@ class AutomationGUI:
                                            tp=current_tp, tv=current_tv, tc=current_tc:
                                            self._update_stats(total, s, f, tcr, tb, tp, tv, tc))
                         
-                        # 更新进度（基于总账号数）
-                        skipped_count = total - queued_count  # 跳过的账号数 = 总数 - 队列数
-                        self.root.after(0, lambda p=current_processed, skipped=skipped_count, t=total: 
-                                       self._update_progress(p + skipped, t, f"已完成: {p}/{queued_count} (总进度: {p + skipped}/{t})"))
+                        # 更新进度（只显示实际处理的账号进度）
+                        self.root.after(0, lambda p=current_processed, t=queued_count: 
+                                       self._update_progress(p, t, f"进度: {p}/{t} | 成功: {current_success} | 失败: {current_failed}"))
                 
                 except Exception as e:
                     # 捕获所有异常,确保实例不会因为单个账号的异常而停止
@@ -2828,10 +2863,9 @@ class AutomationGUI:
                                    tp=current_tp, tv=current_tv, tc=current_tc:
                                    self._update_stats(total, s, f, tcr, tb, tp, tv, tc))
                     
-                    # 更新进度（基于总账号数）
-                    skipped_count = total - queued_count  # 跳过的账号数 = 总数 - 队列数
-                    self.root.after(0, lambda p=current_processed, skipped=skipped_count, t=total: 
-                                   self._update_progress(p + skipped, t, f"已完成: {p}/{queued_count} (总进度: {p + skipped}/{t})"))
+                    # 更新进度（只显示实际处理的账号进度）
+                    self.root.after(0, lambda p=current_processed, t=queued_count: 
+                                   self._update_progress(p, t, f"进度: {p}/{t} | 成功: {current_success} | 失败: {current_failed}"))
                     
                     # 继续处理下一个账号,不要停止实例
                     instance_log_callback(f"继续处理下一个账号...")
@@ -3702,6 +3736,11 @@ class AutomationGUI:
         self.start_btn.config(state=tk.NORMAL)
         self.pause_btn.config(state=tk.DISABLED, text="⏸ 暂停")
         self.stop_btn.config(state=tk.DISABLED)
+        
+        # 先更新统计（从表格重新统计，确保数据准确）
+        self._update_stats_from_table()
+        
+        # 然后更新状态
         self.status_var.set("已完成")
         self._log("自动化任务完成")
         
