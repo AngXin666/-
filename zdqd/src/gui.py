@@ -475,7 +475,7 @@ class AutomationGUI:
         stats_frame = ttk.LabelFrame(main_frame, text="统计", padding="5")
         stats_frame.pack(fill=tk.X, pady=(0, 10))
         
-        # 单行统计：总计、成功、失败、总余额、积分、抵扣券、优惠券、总签到奖励
+        # 单行统计：总计、成功、失败、总余额、总签到奖励
         stats_row = ttk.Frame(stats_frame)
         stats_row.pack(fill=tk.X, pady=2)
         
@@ -483,18 +483,12 @@ class AutomationGUI:
         self.success_var = tk.StringVar(value="成功: 0")
         self.failed_var = tk.StringVar(value="失败: 0")
         self.total_balance_var = tk.StringVar(value="总余额: 0.00 元")
-        self.total_points_var = tk.StringVar(value="总积分: 0")
-        self.total_vouchers_var = tk.StringVar(value="总抵扣券: 0")
-        self.total_coupons_var = tk.StringVar(value="总优惠券: 0")
         self.total_checkin_reward_var = tk.StringVar(value="总签到奖励: 0.00 元")
         
         ttk.Label(stats_row, textvariable=self.total_var, width=12, foreground="blue").pack(side=tk.LEFT, padx=(0, 5))
         ttk.Label(stats_row, textvariable=self.success_var, width=12, foreground="green").pack(side=tk.LEFT, padx=(0, 5))
         ttk.Label(stats_row, textvariable=self.failed_var, width=12, foreground="red").pack(side=tk.LEFT, padx=(0, 5))
         ttk.Label(stats_row, textvariable=self.total_balance_var, width=18, foreground="purple").pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Label(stats_row, textvariable=self.total_points_var, width=12, foreground="orange").pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Label(stats_row, textvariable=self.total_vouchers_var, width=12, foreground="brown").pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Label(stats_row, textvariable=self.total_coupons_var, width=12, foreground="teal").pack(side=tk.LEFT, padx=(0, 5))
         ttk.Label(stats_row, textvariable=self.total_checkin_reward_var, width=20, foreground="darkgreen").pack(side=tk.LEFT)
         
         # === 结果表格区域 ===
@@ -578,7 +572,7 @@ class AutomationGUI:
         
         # 配置标签颜色(用于高亮正值变化)
         self.results_tree.tag_configure("positive", foreground="green")
-        self.results_tree.tag_configure("negative", foreground="red")
+        self.results_tree.tag_configure("negative", foreground="purple")  # 转账成功余额减少用紫色
         self.results_tree.tag_configure("neutral", foreground="black")
         self.results_tree.tag_configure("checked", foreground="blue")  # 已完成的行用蓝色
         
@@ -1840,9 +1834,6 @@ class AutomationGUI:
         success = 0
         failed = 0
         total_balance = 0.0
-        total_points = 0
-        total_vouchers = 0.0
-        total_coupons = 0
         total_checkin_reward = 0.0
         
         # 遍历表格中的所有行
@@ -1873,30 +1864,6 @@ class AutomationGUI:
             except (ValueError, IndexError):
                 pass
             
-            # 积分（索引4）
-            try:
-                points_str = values[4]
-                if points_str and points_str != "N/A" and points_str != "-":
-                    total_points += int(points_str)
-            except (ValueError, IndexError):
-                pass
-            
-            # 抵扣券（索引5）
-            try:
-                vouchers_str = values[5]
-                if vouchers_str and vouchers_str != "N/A" and vouchers_str != "-":
-                    total_vouchers += float(vouchers_str)
-            except (ValueError, IndexError):
-                pass
-            
-            # 优惠券（索引6）
-            try:
-                coupons_str = values[6]
-                if coupons_str and coupons_str != "N/A" and coupons_str != "-":
-                    total_coupons += int(coupons_str)
-            except (ValueError, IndexError):
-                pass
-            
             # 签到奖励（索引7）
             try:
                 checkin_reward_str = values[7]
@@ -1909,11 +1876,8 @@ class AutomationGUI:
         self.total_var.set(f"总计: {total}")
         self.success_var.set(f"成功: {success}")
         self.failed_var.set(f"失败: {failed}")
-        self.total_balance_var.set(f"总余额: {round(total_balance, 3)} 元")
-        self.total_points_var.set(f"总积分: {total_points}")
-        self.total_vouchers_var.set(f"总抵扣券: {round(total_vouchers, 3)}")
-        self.total_coupons_var.set(f"总优惠券: {total_coupons}")
-        self.total_checkin_reward_var.set(f"总签到奖励: {round(total_checkin_reward, 3)} 元")
+        self.total_balance_var.set(f"总余额: {total_balance:.2f} 元")
+        self.total_checkin_reward_var.set(f"总签到奖励: {total_checkin_reward:.2f} 元")
     
     def _format_status(self, account_result: AccountResult) -> str:
         """格式化状态文本
@@ -1972,28 +1936,28 @@ class AutomationGUI:
             pass
         
         # 余额前
-        balance_before = f"{round(account_result.balance_before, 3)}" if account_result.balance_before is not None else "N/A"
+        balance_before = f"{account_result.balance_before:.2f}" if account_result.balance_before is not None else "N/A"
         
         # 积分
         points = str(account_result.points) if account_result.points is not None else "N/A"
         
         # 抵扣券
-        vouchers = f"{round(account_result.vouchers, 3)}" if account_result.vouchers is not None else "N/A"
+        vouchers = f"{account_result.vouchers:.2f}" if account_result.vouchers is not None else "N/A"
         
         # 优惠券
         coupons = str(account_result.coupons) if account_result.coupons is not None else "N/A"
         
         # 签到奖励
-        checkin_reward = f"{round(account_result.checkin_reward, 3)}" if account_result.checkin_reward else "0"
+        checkin_reward = f"{account_result.checkin_reward:.2f}" if account_result.checkin_reward else "0"
         
         # 签到总次数
         checkin_total_times = str(account_result.checkin_total_times) if account_result.checkin_total_times is not None else "N/A"
         
         # 余额（最终余额）
-        balance_after = f"{round(account_result.balance_after, 3)}" if account_result.balance_after is not None else "N/A"
+        balance_after = f"{account_result.balance_after:.2f}" if account_result.balance_after is not None else "N/A"
         
         # 转账金额
-        transfer_amount = f"{round(account_result.transfer_amount, 3)}" if hasattr(account_result, 'transfer_amount') and account_result.transfer_amount is not None and account_result.transfer_amount > 0 else "-"
+        transfer_amount = f"{account_result.transfer_amount:.2f}" if hasattr(account_result, 'transfer_amount') and account_result.transfer_amount is not None and account_result.transfer_amount > 0 else "-"
         
         # 转账收款人
         transfer_recipient = account_result.transfer_recipient if hasattr(account_result, 'transfer_recipient') and account_result.transfer_recipient else "-"
@@ -2100,23 +2064,23 @@ class AutomationGUI:
                 print(f"[历史记录]   - hasattr transfer_recipient: {hasattr(account_result, 'transfer_recipient')}")
                 print(f"[历史记录]   - transfer_recipient value: {getattr(account_result, 'transfer_recipient', 'N/A')}")
                 
-                # 准备记录数据
+                # 准备记录数据（金额字段格式化为2位小数）
                 record = {
                     'phone': account_result.phone,
                     'nickname': account_result.nickname if account_result.nickname else '',
                     'user_id': account_result.user_id if account_result.user_id else '',
-                    'balance_before': account_result.balance_before if account_result.balance_before is not None else 0.0,
+                    'balance_before': round(account_result.balance_before, 2) if account_result.balance_before is not None else 0.0,
                     'points': account_result.points if account_result.points is not None else 0,
-                    'vouchers': account_result.vouchers if account_result.vouchers is not None else 0,
+                    'vouchers': round(account_result.vouchers, 2) if account_result.vouchers is not None else 0,
                     'coupons': account_result.coupons if account_result.coupons is not None else 0,
-                    'checkin_reward': account_result.checkin_reward if account_result.checkin_reward else 0.0,
+                    'checkin_reward': round(account_result.checkin_reward, 2) if account_result.checkin_reward else 0.0,
                     'checkin_total_times': account_result.checkin_total_times if account_result.checkin_total_times is not None else 0,
-                    'checkin_balance_after': account_result.balance_after if account_result.balance_after is not None else 0.0,
-                    'balance_after': account_result.balance_after if account_result.balance_after is not None else 0.0,
-                    'duration': account_result.duration if account_result.duration is not None else 0.0,
+                    'checkin_balance_after': round(account_result.balance_after, 2) if account_result.balance_after is not None else 0.0,
+                    'balance_after': round(account_result.balance_after, 2) if account_result.balance_after is not None else 0.0,
+                    'duration': round(account_result.duration, 2) if account_result.duration is not None else 0.0,
                     'status': '成功',
                     'login_method': account_result.login_method if account_result.login_method else '',
-                    'transfer_amount': account_result.transfer_amount if hasattr(account_result, 'transfer_amount') and account_result.transfer_amount is not None else 0.0,
+                    'transfer_amount': round(account_result.transfer_amount, 2) if hasattr(account_result, 'transfer_amount') and account_result.transfer_amount is not None else 0.0,
                     'transfer_recipient': account_result.transfer_recipient if hasattr(account_result, 'transfer_recipient') and account_result.transfer_recipient else '',
                     'run_date': run_date
                 }
@@ -2744,7 +2708,23 @@ class AutomationGUI:
                     with self.stats_lock:
                         processed += 1
                         
-                        if result and result.success:
+                        # 判断是否真正成功：
+                        # 1. result.success 为 True
+                        # 2. balance_after 不为 None（最终余额必须获取成功）
+                        # 3. 如果启用了转账，transfer_success 必须为 True
+                        is_really_success = (
+                            result and 
+                            result.success and 
+                            result.balance_after is not None  # 最终余额必须获取成功
+                        )
+                        
+                        # 如果启用了转账，还需要检查转账是否成功
+                        if is_really_success and hasattr(result, 'transfer_success'):
+                            # 如果有转账记录，必须转账成功
+                            if result.transfer_amount is not None and result.transfer_amount > 0:
+                                is_really_success = result.transfer_success
+                        
+                        if is_really_success:
                             success_count += 1
                             
                             # 累积统计数据
@@ -2778,8 +2758,19 @@ class AutomationGUI:
                             # 删除重复的成功消息，因为 _process_account 已经输出了 "✓ 账号处理完成"
                         else:
                             failed_count += 1
-                            failed_accounts.append((account, result.error_message if result else "处理失败"))
-                            instance_log_callback(f"✗ 账号 {account.phone} 处理失败: {result.error_message if result else '未知错误'}")
+                            
+                            # 确定失败原因
+                            if not result:
+                                error_msg = "处理失败"
+                            elif result.balance_after is None:
+                                error_msg = "最终余额获取失败"
+                            elif hasattr(result, 'transfer_success') and not result.transfer_success:
+                                error_msg = "转账失败"
+                            else:
+                                error_msg = result.error_message if result.error_message else "未知错误"
+                            
+                            failed_accounts.append((account, error_msg))
+                            instance_log_callback(f"✗ 账号 {account.phone} 处理失败: {error_msg}")
                             
                             # 在锁内获取当前值的副本
                             current_success = success_count
@@ -5895,11 +5886,11 @@ class WorkflowControlWindow:
             self.transfer_var.set(True)
             self._disable_checkboxes()
         elif mode == "quick_checkin":
-            # 快速签到：登录 + 签到 + 转账（跳过签到前的资料获取）
+            # 快速签到：登录 + 签到（跳过签到前的资料获取，跳过转账）
             self.login_var.set(True)
             self.profile_var.set(False)  # 跳过签到前的资料获取
             self.checkin_var.set(True)
-            self.transfer_var.set(True)
+            self.transfer_var.set(False)  # 跳过转账（因为没有用户ID）
             self._disable_checkboxes()
         elif mode == "login_only":
             # 只登录：登录 + 获取资料

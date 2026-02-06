@@ -16,7 +16,7 @@ class TimeoutsConfig:
     
     # ===== 导航相关超时 =====
     NAVIGATION_TIMEOUT = 15.0  # 导航超时（秒）
-    PAGE_LOAD_TIMEOUT = 10.0   # 页面加载超时（秒）
+    PAGE_LOAD_TIMEOUT = 15.0   # 页面加载超时（秒）- 统一为15秒
     PAGE_TRANSITION_TIMEOUT = 5.0  # 页面切换超时（秒）
     
     # ===== 签到相关超时 =====
@@ -34,14 +34,14 @@ class TimeoutsConfig:
     # ===== OCR识别超时 =====
     OCR_TIMEOUT = 5.0  # OCR识别超时（秒）
     OCR_TIMEOUT_SHORT = 2.0  # OCR短超时（秒）
-    OCR_TIMEOUT_LONG = 10.0  # OCR长超时（秒）
+    OCR_TIMEOUT_LONG = 15.0  # OCR长超时（秒）- 统一为15秒
     
     # ===== 页面检测超时 =====
     PAGE_DETECT_TIMEOUT = 5.0  # 页面检测超时（秒）
     ELEMENT_DETECT_TIMEOUT = 3.0  # 元素检测超时（秒）
     
     # ===== 网络请求超时 =====
-    HTTP_REQUEST_TIMEOUT = 10.0  # HTTP请求超时（秒）
+    HTTP_REQUEST_TIMEOUT = 15.0  # HTTP请求超时（秒）- 统一为15秒
     HTTP_REQUEST_SHORT = 5.0  # HTTP短超时（秒）
     
     # ===== 等待时间 =====
@@ -51,7 +51,7 @@ class TimeoutsConfig:
     WAIT_EXTRA_LONG = 3.0  # 超长等待（秒）
     
     # ===== 智能等待器超时 =====
-    SMART_WAIT_TIMEOUT = 10.0  # 智能等待器默认超时（秒）
+    SMART_WAIT_TIMEOUT = 15.0  # 智能等待器默认超时（秒）- 统一为15秒
     SMART_WAIT_INTERVAL = 0.5  # 智能等待器检测间隔（秒）
     
     # ===== 缓存相关 =====
@@ -204,7 +204,7 @@ class TimeoutsConfig:
         # 重新加载默认值（通过重新导入模块）
         # 这里简单地重新赋值
         cls.NAVIGATION_TIMEOUT = 15.0
-        cls.PAGE_LOAD_TIMEOUT = 10.0
+        cls.PAGE_LOAD_TIMEOUT = 15.0  # 统一为15秒
         cls.PAGE_TRANSITION_TIMEOUT = 5.0
         cls.CHECKIN_TIMEOUT = 15.0
         cls.CHECKIN_PAGE_LOAD = 3.0
@@ -216,16 +216,16 @@ class TimeoutsConfig:
         cls.TRANSFER_CONFIRM_WAIT = 2.0
         cls.OCR_TIMEOUT = 5.0
         cls.OCR_TIMEOUT_SHORT = 2.0
-        cls.OCR_TIMEOUT_LONG = 10.0
+        cls.OCR_TIMEOUT_LONG = 15.0  # 统一为15秒
         cls.PAGE_DETECT_TIMEOUT = 5.0
         cls.ELEMENT_DETECT_TIMEOUT = 3.0
-        cls.HTTP_REQUEST_TIMEOUT = 10.0
+        cls.HTTP_REQUEST_TIMEOUT = 15.0  # 统一为15秒
         cls.HTTP_REQUEST_SHORT = 5.0
         cls.WAIT_SHORT = 0.5
         cls.WAIT_MEDIUM = 1.0
         cls.WAIT_LONG = 2.0
         cls.WAIT_EXTRA_LONG = 3.0
-        cls.SMART_WAIT_TIMEOUT = 10.0
+        cls.SMART_WAIT_TIMEOUT = 15.0  # 统一为15秒
         cls.SMART_WAIT_INTERVAL = 0.5
         cls.CACHE_TTL_SHORT = 0.5
         cls.CACHE_TTL_MEDIUM = 1.0
