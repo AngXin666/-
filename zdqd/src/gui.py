@@ -2498,31 +2498,33 @@ class AutomationGUI:
         if self.stop_event.is_set():
             return
         
-        # 统计未勾选账号数（需要处理的账号数）
+        # 统计勾选账号数（需要处理的账号数）
+        # 只统计当前显示的（未被detach的）勾选账号
         checked_phones = set()
         with self.stats_lock:
-            for item_id in self.results_tree.get_children():
+            # 获取当前显示的项目（未被detach的）
+            visible_items = self.results_tree.get_children()
+            for item_id in visible_items:
                 if self.checked_items.get(item_id, False):
                     values = self.results_tree.item(item_id, 'values')
                     if values and len(values) > 0:
                         checked_phones.add(values[0])
         
         checked_count = len(checked_phones)
-        unchecked_count = len(accounts) - checked_count
         
         # 简化日志：只显示需要处理的账号数
-        self.root.after(0, lambda u=unchecked_count: 
-                       self._log(f"需要处理 {u} 个账号"))
+        self.root.after(0, lambda c=checked_count: 
+                       self._log(f"需要处理 {c} 个账号"))
         
-        # 如果没有未勾选的账号，直接返回
-        if unchecked_count == 0:
-            self.root.after(0, lambda: self._log("没有需要处理的账号"))
+        # 如果没有勾选的账号，直接返回
+        if checked_count == 0:
+            self.root.after(0, lambda: self._log("没有需要处理的账号（请勾选要运行的账号）"))
             return
         
         # 批量启动模拟器实例（支持多开）
         auto_launch = self.auto_launch_var.get()
         max_workers_config = self.instance_count_var.get()
-        max_workers = min(unchecked_count, max_workers_config)
+        max_workers = min(checked_count, max_workers_config)
         
         if auto_launch:
             self.root.after(0, lambda w=max_workers: self._log(f"准备启动 {w} 个实例"))
@@ -2623,7 +2625,7 @@ class AutomationGUI:
         # 失败账号列表（用于重试）
         failed_accounts = []
         
-        # 将未勾选的账号加入队列
+        # 将勾选的账号加入队列（只运行勾选的账号）
         queued_count = 0
         for i, account in enumerate(accounts):
             # 检查是否需要停止
@@ -2631,9 +2633,8 @@ class AutomationGUI:
                 self.root.after(0, lambda: self._log("用户中断操作"))
                 break
             
-            # 检查账号是否被选中（选中的账号跳过）
-            if account.phone in checked_phones:
-                self.root.after(0, lambda a=account, idx=i: self._log(f"⏭ 跳过已勾选的账号 {idx+1}/{total}: {a.phone}"))
+            # 只处理勾选的账号（未勾选的账号跳过）
+            if account.phone not in checked_phones:
                 continue
             
             # 加入共享队列
