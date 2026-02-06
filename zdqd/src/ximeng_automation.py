@@ -953,10 +953,29 @@ class XimengAutomation:
             # 检查是否启用获取资料流程
             if not workflow_config.get('enable_profile', True):
                 file_logger.info("="*60)
-                file_logger.info("跳过获取资料流程")
-                file_logger.info("原因: 流程控制已禁用获取资料（快速签到模式）")
+                file_logger.info("快速签到模式：仅获取余额，跳过昵称和用户ID")
                 file_logger.info("="*60)
-                # 标记为成功但跳过获取资料
+                
+                # 快速签到模式：只获取余额，不获取昵称和用户ID
+                step_number += 1
+                concise.step(step_number, "获取余额")
+                
+                try:
+                    # 使用 BalanceReader 快速获取余额
+                    balance = await self.balance_reader.get_balance(device_id)
+                    
+                    if balance is not None:
+                        result.balance_before = balance
+                        file_logger.info(f"登录余额: {balance:.2f} 元")
+                        concise.success(f"余额: {balance:.2f}元")
+                    else:
+                        file_logger.warning("未能获取余额")
+                        concise.error("未能获取余额")
+                except Exception as e:
+                    file_logger.error(f"获取余额出错: {str(e)}")
+                    concise.error(f"获取余额出错")
+                
+                # 标记为跳过完整资料获取
                 profile_success = False
                 profile_data = None
             else:
@@ -1255,7 +1274,7 @@ class XimengAutomation:
                 try:
                     # 准备个人资料数据
                     # 如果步骤2获取了资料，使用步骤2的数据
-                    # 如果跳过了步骤2（快速签到模式），传递None，让签到流程自己获取
+                    # 如果跳过了步骤2（快速签到模式），从数据库历史记录中获取
                     if profile_success and profile_data:
                         updated_profile_data = {
                             'balance': result.balance_before,  # 使用步骤2获取的余额
@@ -1266,7 +1285,20 @@ class XimengAutomation:
                             'user_id': result.user_id
                         }
                     else:
-                        # 快速签到模式：没有获取资料，传递None
+                        # 快速签到模式：从数据库历史记录中获取昵称和用户ID
+                        file_logger.info("快速签到模式：从数据库历史记录中获取用户信息")
+                        from .local_db import LocalDatabase
+                        db = LocalDatabase()
+                        latest_record = db.get_latest_record_by_phone(account.phone)
+                        
+                        if latest_record:
+                            # 从历史记录中提取信息
+                            result.nickname = latest_record.get('nickname', '未知')
+                            result.user_id = latest_record.get('user_id', '未知')
+                            file_logger.info(f"从历史记录获取: 昵称={result.nickname}, 用户ID={result.user_id}")
+                        else:
+                            file_logger.warning("未找到历史记录，昵称和用户ID将在签到后获取")
+                        
                         updated_profile_data = None
                     
                     # 直接调用 do_checkin，它会自动处理导航和返回首页
@@ -1276,7 +1308,8 @@ class XimengAutomation:
                         password=account.password,
                         login_callback=None,  # 已经登录，不需要回调
                         log_callback=None,
-                        profile_data=updated_profile_data  # 传递个人信息（可能为None）
+                        profile_data=updated_profile_data,  # 传递个人信息（可能为None）
+                        allow_skip_profile=not profile_success  # 快速签到模式下允许跳过
                     )
                     
                     # 记录签到结果
@@ -1381,6 +1414,24 @@ class XimengAutomation:
                     file_logger.info(f"最终余额: {result.balance_after:.2f} 元")
                     file_logger.info("(跳过重复获取，节省时间)")
                     file_logger.info("="*60)
+                elif not profile_success:
+                    # 快速签到模式：使用登录时获取的余额作为最终余额
+                    step_number += 1
+                    
+                    concise.step(step_number, "获取最终余额")
+                    
+                    file_logger.info("="*60)
+                    file_logger.info(f"步骤{step_number}: 快速签到模式 - 使用登录余额作为最终余额")
+                    file_logger.info("="*60)
+                    
+                    # 使用登录时获取的余额
+                    if result.balance_before is not None:
+                        result.balance_after = result.balance_before
+                        file_logger.info(f"最终余额: {result.balance_after:.2f} 元（使用登录数据）")
+                        concise.success(f"最终余额: {result.balance_after:.2f}元（使用登录数据）")
+                    else:
+                        file_logger.warning("登录时未获取到余额，无法设置最终余额")
+                        concise.error("未获取到余额")
                 else:
                     step_number += 1
                     
@@ -1410,7 +1461,7 @@ class XimengAutomation:
                                 account_str = f"{account.phone}----{account.password}"
                                 profile_task = self.profile_reader.get_full_profile_parallel(device_id, account=account_str)
                                 try:
-                                    final_profile = await asyncio.wait_for(profile_task, timeout=10.0)
+                                    final_profile = await asyncio.wait_for(profile_task, timeout=15.0)  # 统一为15秒
                                     
                                     # 更新最终数据（确保类型正确）
                                     balance = final_profile.get('balance')
@@ -1465,6 +1516,16 @@ class XimengAutomation:
                 file_logger.info("跳过获取最终余额")
                 file_logger.info("原因: 流程控制已禁用签到，无需获取最终余额")
                 file_logger.info("="*60)
+                
+                # 只登录模式：使用初始余额作为最终余额
+                file_logger.info(f"[调试] 只登录模式 - balance_before = {result.balance_before}")
+                if result.balance_before is not None:
+                    result.balance_after = result.balance_before
+                    file_logger.info(f"使用初始余额作为最终余额: {result.balance_after:.2f} 元")
+                    concise.success(f"最终余额: {result.balance_after:.2f}元（使用登录数据）")
+                else:
+                    file_logger.warning("[调试] balance_before 为 None，无法设置 balance_after")
+                    concise.error("未获取到余额")
             
             # 显示执行总结（仅文件日志）
             file_logger.info("="*60)
@@ -1606,6 +1667,17 @@ class XimengAutomation:
                                                                 else:
                                                                     strategy = "单级转账"
                                                                 
+                                                                # 获取账号的管理员信息
+                                                                owner_name = ""
+                                                                try:
+                                                                    from .user_manager import UserManager
+                                                                    user_manager = UserManager()
+                                                                    user = user_manager.get_account_user(account.phone)
+                                                                    if user:
+                                                                        owner_name = user.user_name
+                                                                except Exception as e:
+                                                                    log(f"    - ⚠️ 获取管理员信息失败: {e}")
+                                                                
                                                                 # 保存转账记录
                                                                 save_success = transfer_history.save_transfer_record(
                                                                     sender_phone=account.phone,
@@ -1617,7 +1689,7 @@ class XimengAutomation:
                                                                     strategy=strategy,
                                                                     success=True,
                                                                     error_message="",
-                                                                    owner=""  # Account 类没有 owner 属性，使用空字符串
+                                                                    owner=owner_name
                                                                 )
                                                                 
                                                                 if save_success:
@@ -1647,6 +1719,17 @@ class XimengAutomation:
                                                             else:
                                                                 strategy = "单级转账"
                                                             
+                                                            # 获取账号的管理员信息
+                                                            owner_name = ""
+                                                            try:
+                                                                from .user_manager import UserManager
+                                                                user_manager = UserManager()
+                                                                user = user_manager.get_account_user(account.phone)
+                                                                if user:
+                                                                    owner_name = user.user_name
+                                                            except Exception as e:
+                                                                log(f"    - ⚠️ 获取管理员信息失败: {e}")
+                                                            
                                                             transfer_history.save_transfer_record(
                                                                 sender_phone=account.phone,
                                                                 sender_user_id=result.user_id,
@@ -1657,7 +1740,7 @@ class XimengAutomation:
                                                                 strategy=strategy,
                                                                 success=False,
                                                                 error_message=result.error_message,
-                                                                owner=""  # Account 类没有 owner 属性，使用空字符串
+                                                                owner=owner_name
                                                             )
                                                             log(f"    - ✓ 失败记录已保存到数据库")
                                                         except Exception as e:
@@ -1678,6 +1761,17 @@ class XimengAutomation:
                                                     try:
                                                         strategy = transfer_config.strategy
                                                         
+                                                        # 获取账号的管理员信息
+                                                        owner_name = ""
+                                                        try:
+                                                            from .user_manager import UserManager
+                                                            user_manager = UserManager()
+                                                            user = user_manager.get_account_user(account.phone)
+                                                            if user:
+                                                                owner_name = user.user_name
+                                                        except Exception as e:
+                                                            log(f"    - ⚠️ 获取管理员信息失败: {e}")
+                                                        
                                                         transfer_history.save_transfer_record(
                                                             sender_phone=account.phone,
                                                             sender_user_id=result.user_id,
@@ -1688,7 +1782,7 @@ class XimengAutomation:
                                                             strategy=strategy,
                                                             success=False,
                                                             error_message=result.error_message,
-                                                            owner=""  # Account 类没有 owner 属性，使用空字符串
+                                                            owner=owner_name
                                                         )
                                                         log(f"    - ✓ 异常记录已保存到数据库")
                                                     except Exception as save_error:
@@ -1737,7 +1831,14 @@ class XimengAutomation:
             except Exception as e:
                 file_logger.error(f"退出登录失败: {str(e)}")
             
-            result.success = True
+            # 最终检查：如果最终余额为 None，标记为失败
+            if result.balance_after is None:
+                result.success = False
+                if not result.error_message:
+                    result.error_message = "最终余额获取失败"
+                file_logger.error(f"[最终检查] 最终余额为 None，标记为失败")
+            else:
+                result.success = True
             
             return result
             
