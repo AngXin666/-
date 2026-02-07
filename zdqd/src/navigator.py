@@ -215,14 +215,16 @@ class Navigator:
                 use_cache=True
             )
             if not page_result or not page_result.state:
-                self._silent_log.info(f"[导航到首页] ⚠️ 无法检测页面状态，重试...")
+                self._silent_log.info(f"[导航到首页] ⚠️ 无法检测页面状态（尝试{attempt+1}/{max_attempts}），重试...")
                 await asyncio.sleep(0.5)
                 continue
             
             current_state = page_result.state
+            self._silent_log.info(f"[导航到首页] 当前页面: {current_state.value}（尝试{attempt+1}/{max_attempts}）")
             
             # 已经在首页
             if current_state == PageState.HOME:
+                self._silent_log.info(f"[导航到首页] ✓ 已在首页")
                 return True
             
             # 如果是个人页广告，使用YOLO关闭广告

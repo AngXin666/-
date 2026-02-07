@@ -352,12 +352,15 @@ class LoginCacheManager:
             
             # 先停止应用
             await self.adb.shell(device_id, f"am force-stop {package_name}")
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.5)  # 优化：减少等待时间从1秒到0.5秒
             
             data_path = f"/data/data/{package_name}"
             restored_count = 0
             
-            # 恢复每个文件
+            # 优化：批量准备所有文件
+            files_to_restore = []  # [(local_file, file_path, temp_decrypted_file), ...]
+            
+            # 第一步：解密所有文件（准备阶段）
             for file_path in self.CACHE_FILES:
                 cache_file_name = file_path.replace('/', '_')
                 
@@ -388,51 +391,69 @@ class LoginCacheManager:
                         print(f"  [缓存] ⚠️ 必需文件不存在: {file_path}")
                         continue
                 
-                target_path = f"{data_path}/{file_path}"
+                files_to_restore.append((local_file, file_path, temp_decrypted_file))
+            
+            if not files_to_restore:
+                print(f"  [缓存] 没有文件需要恢复")
+                return False
+            
+            # 第二步：批量传输所有文件到 sdcard
+            temp_files = []
+            for local_file, file_path, _ in files_to_restore:
                 temp_path = f"/sdcard/temp_{file_path.replace('/', '_')}"
+                temp_files.append((temp_path, file_path))
+                await self.adb.push(device_id, str(local_file), temp_path)
+            
+            # 第三步：批量复制到应用目录（一次性执行多个命令）
+            # 先获取应用的 UID（只需要一次）
+            uid_result = await self.adb.shell(device_id, f"su -c 'stat -c %u {data_path}'")
+            uid = uid_result.strip()
+            
+            # 构建批量命令
+            batch_commands = []
+            for temp_path, file_path in temp_files:
+                target_path = f"{data_path}/{file_path}"
+                target_dir = target_path.rsplit('/', 1)[0]
                 
-                try:
-                    # 推送到 sdcard
-                    await self.adb.push(device_id, str(local_file), temp_path)
-                    
-                    # 确保目标目录存在
-                    target_dir = target_path.rsplit('/', 1)[0]
-                    await self.adb.shell(device_id, f"su -c 'mkdir -p {target_dir}'")
-                    
-                    # 先删除旧文件（确保替换彻底）
-                    await self.adb.shell(device_id, f"su -c 'rm -f {target_path}'")
-                    
-                    # 从 sdcard 复制到应用数据目录（需要 root）
-                    await self.adb.shell(device_id, f"su -c 'cp {temp_path} {target_path}'")
-                    
-                    # 设置正确的权限和所有者
-                    # 先获取应用的 UID
-                    uid_result = await self.adb.shell(device_id, f"su -c 'stat -c %u {data_path}'")
-                    uid = uid_result.strip()
-                    
-                    # 设置权限
-                    await self.adb.shell(device_id, f"su -c 'chmod 660 {target_path}'")
-                    # 设置所有者（使用实际的 UID）
-                    await self.adb.shell(device_id, f"su -c 'chown {uid}:{uid} {target_path}'")
-                    
-                    # 删除临时文件
-                    await self.adb.shell(device_id, f"rm {temp_path}")
-                    
-                    print(f"  [缓存] ✓ 已恢复: {file_path}")
-                    restored_count += 1
-                    
-                finally:
-                    # 清理临时解密文件
-                    if temp_decrypted_file and temp_decrypted_file.exists():
-                        try:
-                            temp_decrypted_file.unlink()
-                        except:
-                            pass
+                # 创建目录、删除旧文件、复制、设置权限和所有者
+                batch_commands.append(f"mkdir -p {target_dir}")
+                batch_commands.append(f"rm -f {target_path}")
+                batch_commands.append(f"cp {temp_path} {target_path}")
+                batch_commands.append(f"chmod 660 {target_path}")
+                batch_commands.append(f"chown {uid}:{uid} {target_path}")
+            
+            # 一次性执行所有命令（用 && 连接）
+            batch_command = " && ".join(batch_commands)
+            await self.adb.shell(device_id, f"su -c '{batch_command}'")
+            
+            # 第四步：清理临时文件
+            cleanup_commands = [f"rm {temp_path}" for temp_path, _ in temp_files]
+            cleanup_command = " && ".join(cleanup_commands)
+            await self.adb.shell(device_id, cleanup_command)
+            
+            # 清理临时解密文件
+            for _, _, temp_decrypted_file in files_to_restore:
+                if temp_decrypted_file and temp_decrypted_file.exists():
+                    try:
+                        temp_decrypted_file.unlink()
+                    except:
+                        pass
+            
+            restored_count = len(files_to_restore)
+            print(f"  [缓存] ✓ 已恢复 {restored_count} 个文件")
             
             return restored_count > 0
             
         except Exception as e:
             print(f"恢复登录缓存失败: {e}")
+            # 清理临时解密文件
+            if 'files_to_restore' in locals():
+                for _, _, temp_decrypted_file in files_to_restore:
+                    if temp_decrypted_file and temp_decrypted_file.exists():
+                        try:
+                            temp_decrypted_file.unlink()
+                        except:
+                            pass
             return False
     
     def has_cache(self, phone: str, user_id: Optional[str] = None) -> bool:

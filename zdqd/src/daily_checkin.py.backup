@@ -464,7 +464,8 @@ class DailyCheckin:
             return None
     
     async def do_checkin(self, device_id: str, phone: str = "unknown", password: str = None, 
-                        login_callback=None, log_callback=None, profile_data: Optional[Dict] = None) -> Dict[str, any]:
+                        login_callback=None, log_callback=None, profile_data: Optional[Dict] = None,
+                        step_number: int = 1, gui_logger=None, allow_skip_profile: bool = False) -> Dict[str, any]:
         """执行每日签到（循环签到直到次数用完）
         
         Args:
@@ -477,6 +478,9 @@ class DailyCheckin:
                 - balance: float, 余额
                 - points: int, 积分
                 - vouchers: float, 抵扣券
+            step_number: 步骤编号（用于简洁日志）
+            gui_logger: GUI日志记录器（用于简洁日志输出）
+            allow_skip_profile: 是否允许跳过个人信息获取（快速签到模式使用）
             
         Returns:
             dict: 签到结果
@@ -494,6 +498,13 @@ class DailyCheckin:
         # 导入日志记录器
         from .logger import get_logger
         logger = get_logger()
+        
+        # 创建简洁日志记录器
+        from .concise_logger import ConciseLogger
+        concise = ConciseLogger("daily_checkin", gui_logger, logger)
+        
+        # 记录步骤开始
+        concise.step(step_number, "签到")
         
         # 定义日志函数（同时输出到控制台和日志文件）
         def log(msg):
@@ -540,6 +551,13 @@ class DailyCheckin:
                     log(f"    - 积分: {points} 积分")
                 if vouchers is not None:
                     log(f"    - 抵扣券: {vouchers} 张")
+            elif allow_skip_profile:
+                # 快速签到模式：允许跳过个人信息获取
+                log(f"  [签到] 快速签到模式：跳过个人信息获取")
+                profile_success = True  # 标记为成功，允许继续
+                balance = None
+                points = None
+                vouchers = None
             else:
                 # 需要获取个人信息
                 log(f"  [签到] 获取个人信息...")
@@ -578,8 +596,8 @@ class DailyCheckin:
                 except Exception as e:
                     log(f"  [签到] ❌ 获取个人信息出错: {e}")
             
-            # 如果获取个人信息失败，终止签到流程
-            if not profile_success:
+            # 如果获取个人信息失败，终止签到流程（快速签到模式除外）
+            if not profile_success and not allow_skip_profile:
                 result['message'] = "无法获取个人信息，可能不在应用内或登录状态异常"
                 result['error_type'] = ErrorType.CANNOT_REACH_CHECKIN  # 无法到达签到页（前置条件失败）
                 result['error_message'] = result['message']
@@ -590,6 +608,7 @@ class DailyCheckin:
             # 优化：删除不必要的1秒等待
             
             # 4. 导航到首页准备签到
+            concise.action("导航到首页")
             log(f"  [签到] 导航到首页...")
             success = await self.guard.ensure_page_state(
                 device_id,
@@ -618,12 +637,25 @@ class DailyCheckin:
                 log(f"  [签到] YOLO检测到按钮: {checkin_button_pos}")
             
             # 6. 点击签到按钮进入签到页面
+            concise.action("点击每日签到")
             log(f"  [签到] 点击签到按钮 ({checkin_button_pos[0]}, {checkin_button_pos[1]})...")
             await self.adb.tap(device_id, checkin_button_pos[0], checkin_button_pos[1])
             
-            # 等待页面加载（增加等待时间，确保页面完全加载）
-            log(f"  [签到] 等待页面加载...")
-            await asyncio.sleep(TimeoutsConfig.CHECKIN_PAGE_LOAD)  # 从2秒增加到3秒
+            # 等待页面加载（优化：使用智能等待器代替固定等待）
+            log(f"  [签到] 等待签到页面加载...")
+            from .performance.smart_waiter import wait_for_page
+            page_loaded = await wait_for_page(
+                device_id,
+                self.detector,
+                [PageState.CHECKIN, PageState.WARMTIP],  # 可能到达签到页或温馨提示
+                timeout=5.0,  # 最多等待5秒
+                log_callback=None  # 不输出技术日志
+            )
+            
+            if not page_loaded:
+                # 如果智能等待超时，给一个短暂的固定等待作为降级
+                log(f"  [签到] 智能等待超时，使用降级等待...")
+                await asyncio.sleep(1.0)  # 降级等待1秒
             
             # 6.1 进入签到页面后先截图并OCR识别
             log(f"  [签到] 保存进入页面截图...")
@@ -653,6 +685,15 @@ class DailyCheckin:
                 
                 result['total_times'] = initial_info['total_times']
                 result['remaining_times'] = initial_info['daily_remaining_times']
+                
+                # 添加简洁日志：验证页面和获取次数
+                concise.action("验证当前页面")
+                concise.action("签到页")
+                concise.action("获取签到次数")
+                if initial_info['total_times'] is not None:
+                    concise.action(f"总次数: {initial_info['total_times']}")
+                if initial_info['daily_remaining_times'] is not None:
+                    concise.action(f"当日剩余: {initial_info['daily_remaining_times']}")
             else:
                 # OCR识别失败，尝试使用深度学习检测页面状态
                 log(f"  [签到] OCR识别失败，使用深度学习检测页面状态...")
@@ -748,7 +789,7 @@ class DailyCheckin:
                         close_success = await self.detector.close_popup(device_id)
                         if close_success:
                             log(f"  [签到] ✓ 弹窗已关闭，等待页面刷新...")
-                            await asyncio.sleep(2)  # 等待弹窗动画完成
+                            await asyncio.sleep(0.5)  # 优化：减少等待时间从2秒到0.5秒
                             # 重新验证页面状态（失效缓存）
                             self._page_cache.invalidate(device_id, f"loop_{attempt}")
                             page_result_loop = await self._detect_page_cached(device_id, use_cache=False, cache_key=f"after_close_{attempt}")
@@ -762,7 +803,7 @@ class DailyCheckin:
                                 if current_state == PageState.CHECKIN_POPUP or current_state == PageState.WARMTIP:
                                     log(f"  [签到] 再次尝试关闭弹窗...")
                                     await self.adb.press_back(device_id)
-                                    await asyncio.sleep(2)
+                                    await asyncio.sleep(0.5)  # 优化：减少等待时间
                                     self._page_cache.invalidate(device_id, f"after_close_{attempt}")
                                     page_result_loop = await self._detect_page_cached(device_id, use_cache=False, cache_key=f"retry_close_{attempt}")
                                     current_state = page_result_loop.state if page_result_loop else PageState.UNKNOWN
@@ -772,7 +813,7 @@ class DailyCheckin:
                         else:
                             log(f"  [签到] ⚠️ 关闭弹窗失败，尝试按返回键...")
                             await self.adb.press_back(device_id)
-                            await asyncio.sleep(2)
+                            await asyncio.sleep(0.5)  # 优化：减少等待时间
                             self._page_cache.invalidate(device_id, f"loop_{attempt}")
                             page_result_loop = await self._detect_page_cached(device_id, use_cache=False, cache_key=f"fallback_{attempt}")
                             current_state = page_result_loop.state if page_result_loop else PageState.UNKNOWN
@@ -809,14 +850,31 @@ class DailyCheckin:
                     # 第一次循环：直接使用进入页面时已读取的次数信息（避免重复OCR）
                     total_times = result['total_times']
                     remaining_times = result['remaining_times']
-                    log(f"  [签到 1] 使用已读取的次数信息 - 总次数: {total_times}, 剩余次数: {remaining_times}")
+                    
+                    # 修复：如果进入页面时OCR识别失败（total_times为None），在第一次循环时再次尝试OCR
+                    if total_times is None:
+                        log(f"  [签到 1] 进入页面时未获取到次数信息，重新尝试OCR识别...")
+                        retry_info = await self.reader.get_checkin_info(device_id)
+                        if retry_info and retry_info['total_times'] is not None:
+                            total_times = retry_info['total_times']
+                            remaining_times = retry_info['daily_remaining_times']
+                            result['total_times'] = total_times
+                            result['remaining_times'] = remaining_times
+                            log(f"  [签到 1] ✓ 重新识别成功 - 总次数: {total_times}, 剩余次数: {remaining_times}")
+                        else:
+                            log(f"  [签到 1] ⚠️ 重新识别失败，继续执行签到（无法显示次数信息）")
+                    else:
+                        log(f"  [签到 1] 使用已读取的次数信息 - 总次数: {total_times}, 剩余次数: {remaining_times}")
                 else:
                     # 后续循环：通过计数推算剩余次数（不需要OCR）
                     remaining_times = total_times - checkin_count if total_times else None
                     log(f"  [签到 {attempt + 1}] 推算剩余次数: {remaining_times}")
                 
                 # 5.2 检查是否可以签到
-                if remaining_times is not None and remaining_times <= 0:
+                # 修复：第一次循环时，即使remaining_times为0，也要尝试点击一次
+                # 因为OCR可能识别错误，或者页面数据是旧的
+                # 只有在后续循环中，如果remaining_times为0才跳出
+                if attempt > 0 and remaining_times is not None and remaining_times <= 0:
                     log(f"  [签到 {attempt + 1}] 剩余次数为0，今日已签到完成")
                     # 设置已签到标志
                     result['already_checked'] = True
@@ -824,7 +882,10 @@ class DailyCheckin:
                     # 跳出循环
                     break
                 else:
-                    log(f"  [签到 {attempt + 1}] 剩余次数: {remaining_times if remaining_times is not None else '未知'}，继续签到...")
+                    if remaining_times is not None and remaining_times <= 0 and attempt == 0:
+                        log(f"  [签到 {attempt + 1}] OCR识别剩余次数为0，但仍尝试点击一次（可能是识别错误）")
+                    else:
+                        log(f"  [签到 {attempt + 1}] 剩余次数: {remaining_times if remaining_times is not None else '未知'}，继续签到...")
                 
                 # 5.4 执行签到（使用缓存的按钮位置）
                 if cached_button_pos is None:
@@ -869,6 +930,12 @@ class DailyCheckin:
                 
                 # 5.4.2 点击签到按钮
                 log(f"  [签到 {attempt + 1}] 点击签到按钮 ({x}, {y})...")
+                
+                # 添加简洁日志：点击立即签到
+                if attempt == 0:
+                    concise.action("开始签到")
+                concise.action(f"第{attempt + 1}次签到")
+                
                 await self.adb.tap(device_id, x, y)
                 
                 # 5.4.3 清除页面检测缓存，确保智能等待器检测到最新状态
@@ -907,6 +974,7 @@ class DailyCheckin:
                 # 5.5.1 如果检测到温馨提示弹窗，直接处理
                 if is_warmtip:
                     log(f"  [签到] ⚠️ 检测到温馨提示弹窗（次数用完）")
+                    concise.action("出现温馨提示")
                     log(f"  [签到] 关闭温馨提示弹窗并返回首页...")
                     
                     # 关闭弹窗（按返回键）
@@ -967,8 +1035,8 @@ class DailyCheckin:
                     log(f"  [签到] 点击关闭按钮: {close_button_pos}")
                     await self.adb.tap(device_id, close_button_pos[0], close_button_pos[1])
                     
-                    # 等待0.5秒检查是否关闭成功
-                    await asyncio.sleep(TimeoutsConfig.WAIT_SHORT)
+                    # 等待0.3秒检查是否关闭成功（优化：减少等待时间）
+                    await asyncio.sleep(0.3)
                     quick_check = await self._detect_page_cached(device_id, use_cache=False, cache_key=f"quick_check_{attempt}")
                     if quick_check and quick_check.state == PageState.CHECKIN_POPUP:
                         log(f"  [签到] 单击无效，尝试双击...")
@@ -1007,6 +1075,7 @@ class DailyCheckin:
                     # 签到计数+1
                     checkin_count += 1
                     log(f"  [签到] ✓ 第{checkin_count}次签到完成")
+                    concise.action(f"第{checkin_count}次签到完成")
                     
                     # 继续下一轮循环
                     continue
@@ -1029,6 +1098,7 @@ class DailyCheckin:
                                 
                                 if has_warmtip or has_no_times:
                                     log(f"  [签到] ⚠️ OCR检测到温馨提示弹窗（次数用完）")
+                                    concise.action("出现温馨提示")
                                     # 调试模式下打印OCR文本（生产环境应关闭）
                                     # log(f"  [签到] OCR文本: {text_str[:100]}...")
                                     log(f"  [签到] 关闭温馨提示弹窗并返回首页...")
@@ -1071,6 +1141,7 @@ class DailyCheckin:
                                     
                                     checkin_count += 1
                                     log(f"  [签到] ✓ 第{checkin_count}次签到完成")
+                                    concise.action(f"第{checkin_count}次签到完成")
                                     continue
                         except Exception as e:
                             log(f"  [签到] OCR验证失败: {e}")
@@ -1169,18 +1240,20 @@ class DailyCheckin:
             if result['checkin_count'] > 0:
                 result['success'] = True
                 result['message'] = f"签到完成，共签到 {result['checkin_count']} 次，总奖励 {round(result['reward_amount'], 3)} 元"
+                # 添加简洁日志：签到完成
+                concise.success("签到完成")
             elif result['already_checked']:
                 result['success'] = True
                 result['message'] = "今日已签到完成（签到次数已用完）"
+                # 添加简洁日志：签到完成
+                concise.success("签到完成")
             else:
                 result['success'] = False
                 result['message'] = "签到失败，未能进入签到页面或识别签到信息"
                 result['error_type'] = ErrorType.CHECKIN_FAILED  # 签到失败
                 result['error_message'] = result['message']
             
-            # 7. 返回首页
-            await self.navigator.safe_return_to_home(device_id)
-            # 优化：删除不必要的1秒等待
+            # 优化：获取到最终余额后不需要返回首页，直接返回结果（下一步是退出登录）
             
             return result
             
@@ -1188,10 +1261,7 @@ class DailyCheckin:
             result['message'] = f"签到失败: {str(e)}"
             result['error_type'] = ErrorType.CHECKIN_EXCEPTION  # 签到异常
             result['error_message'] = str(e)
-            try:
-                await self.navigator.safe_return_to_home(device_id)
-            except:
-                pass
+            # 优化：异常情况下也不需要返回首页，直接返回错误结果
             return result
         finally:
             pass  # 不需要恢复 print

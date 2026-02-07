@@ -1314,7 +1314,18 @@ class XimengAutomation:
                     
                     # 记录签到结果
                     if checkin_result['success']:
-                        result.checkin_reward = checkin_result.get('reward_amount', 0.0)
+                        # 保存签到后余额（用于计算签到奖励）
+                        checkin_balance_after = checkin_result.get('checkin_balance_after')
+                        if checkin_balance_after is not None:
+                            result.checkin_balance_after = checkin_balance_after
+                        
+                        # 计算签到奖励：签到后余额 - 余额前
+                        if result.balance_before is not None and checkin_balance_after is not None:
+                            result.checkin_reward = checkin_balance_after - result.balance_before
+                        else:
+                            # 如果无法计算，使用返回的reward_amount（可能不准确）
+                            result.checkin_reward = checkin_result.get('reward_amount', 0.0)
+                        
                         result.checkin_total_times = checkin_result.get('total_times')
                         
                         # 如果是快速签到模式（没有获取资料），从签到结果中提取资料
@@ -1333,14 +1344,11 @@ class XimengAutomation:
                             if checkin_result.get('coupons') is not None:
                                 result.coupons = checkin_result.get('coupons')
                         
-                        # 使用签到流程返回的余额（如果有）
-                        if checkin_result.get('balance_after') is not None:
-                            result.balance_after = checkin_result.get('balance_after')
-                            file_logger.info("签到成功（已获取最终余额）")
-                        else:
-                            file_logger.info("签到成功")
+                        # 注意：这里不要使用checkin_result的balance_after，因为那是签到后余额
+                        # 最终余额应该在转账后更新
+                        file_logger.info("签到成功")
                         file_logger.info(f"签到次数: {checkin_result.get('checkin_count', 0)}")
-                        file_logger.info(f"总奖励: {result.checkin_reward:.2f} 元")
+                        file_logger.info(f"签到奖励: {result.checkin_reward:.2f} 元")
                         
                         # 添加简洁日志：签到完成
                         concise.success("签到完成")
@@ -1349,6 +1357,11 @@ class XimengAutomation:
                         # 即使已签到，也要获取总次数
                         result.checkin_total_times = checkin_result.get('total_times')
                         
+                        # 保存签到后余额
+                        checkin_balance_after = checkin_result.get('checkin_balance_after')
+                        if checkin_balance_after is not None:
+                            result.checkin_balance_after = checkin_balance_after
+                        
                         # 如果是快速签到模式（没有获取资料），从签到结果中提取资料
                         if not profile_success:
                             # 提取昵称、用户ID等信息
@@ -1365,9 +1378,6 @@ class XimengAutomation:
                             if checkin_result.get('coupons') is not None:
                                 result.coupons = checkin_result.get('coupons')
                         
-                        # 尝试使用返回的余额
-                        if checkin_result.get('balance_after') is not None:
-                            result.balance_after = checkin_result.get('balance_after')
                         file_logger.info("今日已签到")
                         if result.checkin_total_times:
                             file_logger.info(f"总签到次数: {result.checkin_total_times}")
@@ -1414,6 +1424,18 @@ class XimengAutomation:
                     file_logger.info(f"最终余额: {result.balance_after:.2f} 元")
                     file_logger.info("(跳过重复获取，节省时间)")
                     file_logger.info("="*60)
+                elif result.checkin_balance_after is not None:
+                    # 如果有签到后余额，使用它作为最终余额（没有转账的情况）
+                    step_number += 1
+                    
+                    concise.step(step_number, "获取最终余额")
+                    
+                    result.balance_after = result.checkin_balance_after
+                    file_logger.info("="*60)
+                    file_logger.info(f"步骤{step_number}: 使用签到后余额作为最终余额")
+                    file_logger.info(f"最终余额: {result.balance_after:.2f} 元")
+                    file_logger.info("="*60)
+                    concise.success(f"最终余额: {result.balance_after:.2f}元（使用签到后余额）")
                 elif not profile_success:
                     # 快速签到模式：使用登录时获取的余额作为最终余额
                     step_number += 1
@@ -1444,16 +1466,46 @@ class XimengAutomation:
                     file_logger.info("="*60)
                 
                     try:
-                        # 使用统一的导航方法（高频扫描，自动处理广告）
-                        concise.action("导航到个人页")
-                        file_logger.info("导航到个人页...")
-                        nav_success = await self._navigate_to_profile_with_ad_handling(device_id, log)
+                        # 判断是否执行了转账
+                        has_transfer = result.transfer_amount is not None and result.transfer_amount > 0
                         
-                        if not nav_success:
-                            file_logger.warning("导航到个人资料页面失败，跳过最终数据获取")
-                            concise.error("导航失败")
+                        if has_transfer:
+                            # 情况2：转账后，程序可能在钱包页或个人页
+                            file_logger.info("检测到已执行转账，检查当前页面状态")
+                            
+                            # 检测当前页面
+                            page_result = await self.detector.detect_page(device_id, use_cache=False, detect_elements=False)
+                            
+                            if page_result and page_result.state == PageState.WALLET:
+                                # 在钱包页，按返回键回到个人页
+                                concise.action("从钱包页返回个人页")
+                                file_logger.info("当前在钱包页，按返回键回到个人页...")
+                                await self.adb.press_back(device_id)
+                                await asyncio.sleep(1.0)  # 等待页面切换
+                                file_logger.info("✓ 已返回个人页")
+                            elif page_result and page_result.state in [PageState.PROFILE, PageState.PROFILE_LOGGED]:
+                                # 已经在个人页
+                                file_logger.info("当前已在个人页")
+                            else:
+                                # 其他页面，尝试导航到个人页
+                                file_logger.info(f"当前在其他页面（{page_result.state.value if page_result else 'unknown'}），导航到个人页")
+                                concise.action("导航到个人页")
+                                nav_success = await self.navigator.navigate_to_profile(device_id)
+                                if not nav_success:
+                                    file_logger.warning("导航到个人资料页面失败，跳过最终数据获取")
+                                    concise.error("导航失败")
+                                    # 继续执行，不要中断流程
                         else:
-                            # 直接获取个人资料（不再需要检测和处理广告）
+                            # 情况1：不转账，直接导航到个人页
+                            concise.action("导航到个人页")
+                            file_logger.info("导航到个人页...")
+                            nav_success = await self.navigator.navigate_to_profile(device_id)
+                            
+                            if not nav_success:
+                                file_logger.warning("导航到个人资料页面失败，跳过最终数据获取")
+                                concise.error("导航失败")
+                        
+                        # 直接获取个人资料（不再需要检测和处理广告）
                             try:
                                 # 获取完整个人资料（带超时）
                                 # 使用并行处理方法提升性能

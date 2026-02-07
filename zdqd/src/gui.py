@@ -510,6 +510,14 @@ class AutomationGUI:
         ttk.Button(button_row, text="📭 无余额", command=self._filter_no_balance, width=10).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(button_row, text="🔄 显示全部", command=self._show_all, width=10).pack(side=tk.LEFT, padx=(0, 5))
         
+        # 搜索框
+        ttk.Label(button_row, text="搜索:", width=6).pack(side=tk.LEFT, padx=(10, 5))
+        self.main_search_var = tk.StringVar()
+        self.main_search_entry = ttk.Entry(button_row, textvariable=self.main_search_var, width=15)
+        self.main_search_entry.pack(side=tk.LEFT, padx=(0, 5))
+        self.main_search_entry.bind('<Return>', lambda e: self._search_main_table())
+        ttk.Button(button_row, text="🔍 搜索", command=self._search_main_table, width=8).pack(side=tk.LEFT, padx=(0, 5))
+        
         # 创建Treeview表格 (带勾选框)
         columns = (
             "phone", "nickname", "user_id", "balance_before", "points", "vouchers", "coupons",
@@ -1703,6 +1711,64 @@ class AutomationGUI:
         else:
             self._log("✓ 已显示全部账户")
     
+    def _search_main_table(self):
+        """搜索主界面表格（根据手机号或ID）"""
+        search_text = self.main_search_var.get().strip()
+        
+        if not search_text:
+            # 如果搜索框为空，显示全部
+            self._show_all()
+            return
+        
+        # 先显示全部（清除之前的筛选）
+        if self.all_tree_items:
+            for item in self.all_tree_items:
+                try:
+                    self.results_tree.detach(item)
+                except:
+                    pass
+        
+        # 搜索匹配的项目
+        matched_items = []
+        for item in self.all_tree_items:
+            try:
+                values = self.results_tree.item(item, 'values')
+                if values and len(values) > 2:
+                    phone = str(values[0])  # 手机号在第一列
+                    user_id = str(values[2])  # 用户ID在第三列
+                    
+                    # 模糊匹配：手机号或ID包含搜索文本
+                    if search_text in phone or search_text in user_id:
+                        matched_items.append(item)
+            except:
+                pass
+        
+        # 显示匹配的项目
+        for item in matched_items:
+            try:
+                self.results_tree.reattach(item, '', 'end')
+            except:
+                pass
+        
+        # 高亮显示匹配的行（使用蓝色）
+        for item in matched_items:
+            try:
+                # 获取当前标签
+                current_tags = list(self.results_tree.item(item, 'tags'))
+                # 添加checked标签（蓝色）
+                if 'checked' not in current_tags:
+                    current_tags.append('checked')
+                    self.results_tree.item(item, tags=current_tags)
+            except:
+                pass
+        
+        if matched_items:
+            self._log(f"🔍 找到 {len(matched_items)} 个匹配的账户")
+        else:
+            self._log(f"🔍 未找到匹配 '{search_text}' 的账户")
+            messagebox.showinfo("提示", f"未找到匹配 '{search_text}' 的账户")
+    
+    
     def _refresh_account_list(self):
         """刷新账号列表（重新加载以显示更新后的管理员）"""
         self._auto_load_accounts()
@@ -2658,6 +2724,16 @@ class AutomationGUI:
             log_dir.mkdir(parents=True, exist_ok=True)
             log_file = log_dir / f"instance_{instance_id}.log"
             
+            # 清空旧的日志文件（重新开始执行时清理旧日志）
+            try:
+                with open(log_file, "w", encoding="utf-8") as f:
+                    from datetime import datetime
+                    f.write(f"{'='*80}\n")
+                    f.write(f"实例 {instance_id} 日志 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write(f"{'='*80}\n\n")
+            except Exception as e:
+                print(f"清空日志文件失败: {e}")
+            
             # 为该实例创建带前缀的日志回调（同时输出到GUI和文件）
             def instance_log_callback(msg):
                 # 如果消息已经包含实例编号，不要重复添加
@@ -2684,16 +2760,6 @@ class AutomationGUI:
                         f.write(f"[{timestamp}] {prefixed_msg}\n")
                 except Exception:
                     pass  # 静默失败，不影响主流程
-            
-            # 在日志文件开头写入分隔符
-            try:
-                from datetime import datetime
-                with open(log_file, "a", encoding="utf-8") as f:
-                    f.write(f"\n{'='*80}\n")
-                    f.write(f"实例 {instance_id} 开始运行 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                    f.write(f"{'='*80}\n\n")
-            except Exception:
-                pass
             
             # 持续从队列获取账号处理
             while True:
@@ -2798,12 +2864,30 @@ class AutomationGUI:
                             # 确定失败原因
                             if not result:
                                 error_msg = "处理失败"
+                                error_type = "处理失败"
                             elif result.balance_after is None:
                                 error_msg = "最终余额获取失败"
+                                error_type = "余额获取失败"
                             elif hasattr(result, 'transfer_success') and not result.transfer_success:
                                 error_msg = "转账失败"
+                                error_type = "转账失败"
                             else:
                                 error_msg = result.error_message if result.error_message else "未知错误"
+                                error_type = "未知错误"
+                            
+                            # 记录到失败日志文件
+                            try:
+                                from .failure_logger import get_failure_logger
+                                failure_logger = get_failure_logger()
+                                failure_logger.log_failure(
+                                    phone=account.phone,
+                                    user_id=result.user_id if result else None,
+                                    nickname=result.nickname if result else None,
+                                    error_message=error_msg,
+                                    error_type=error_type
+                                )
+                            except Exception as log_err:
+                                instance_log_callback(f"记录失败日志时出错: {log_err}")
                             
                             failed_accounts.append((account, error_msg))
                             instance_log_callback(f"✗ 账号 {account.phone} 处理失败: {error_msg}")
@@ -2833,6 +2917,20 @@ class AutomationGUI:
                     instance_log_callback(f"❌ 账号 {account.phone} 处理时发生异常: {e}")
                     import traceback
                     instance_log_callback(f"异常详情: {traceback.format_exc()}")
+                    
+                    # 记录到失败日志文件
+                    try:
+                        from .failure_logger import get_failure_logger
+                        failure_logger = get_failure_logger()
+                        failure_logger.log_failure(
+                            phone=account.phone,
+                            user_id=None,
+                            nickname=None,
+                            error_message=str(e),
+                            error_type="异常错误"
+                        )
+                    except Exception as log_err:
+                        instance_log_callback(f"记录失败日志时出错: {log_err}")
                     
                     # 记录错误日志
                     error_msg = str(e)
@@ -3114,7 +3212,7 @@ class AutomationGUI:
             
             # 准备阶段：停止应用、检查缓存、启动应用
             await adb.stop_app(device_id, target_app)
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.5)  # 优化：减少等待时间从1秒到0.5秒
             
             # 处理缓存验证
             has_valid_cache = False
@@ -3143,7 +3241,7 @@ class AutomationGUI:
             success = await adb.start_app(device_id, target_app, target_activity)
             if not success:
                 raise Exception("应用启动失败")
-            await asyncio.sleep(3)
+            await asyncio.sleep(1.5)  # 优化：减少等待时间从3秒到1.5秒，让启动流程智能检测
             
             # 处理启动流程（跳过广告、弹窗等）
             # 获取文件日志记录器
@@ -3203,12 +3301,12 @@ class AutomationGUI:
                                 
                                 # 停止应用并清理
                                 await adb.stop_app(device_id, target_app)
-                                await asyncio.sleep(1)
+                                await asyncio.sleep(0.5)  # 优化：减少等待时间
                                 await auto_login.cache_manager.clear_app_login_data(device_id, target_app)
                                 
                                 # 重新启动
                                 await adb.start_app(device_id, target_app, target_activity)
-                                await asyncio.sleep(3)
+                                await asyncio.sleep(1.5)  # 优化：减少等待时间，让启动流程智能检测
                                 
                                 # 清理页面检测缓存
                                 ximeng.hybrid_detector.clear_cache()
@@ -3233,10 +3331,10 @@ class AutomationGUI:
                         else:
                             # 无法获取用户ID，清理后重新登录
                             await adb.stop_app(device_id, target_app)
-                            await asyncio.sleep(1)
+                            await asyncio.sleep(0.5)  # 优化：减少等待时间
                             await auto_login.cache_manager.clear_app_login_data(device_id, target_app)
                             await adb.start_app(device_id, target_app, target_activity)
-                            await asyncio.sleep(3)
+                            await asyncio.sleep(1.5)  # 优化：减少等待时间
                             ximeng.hybrid_detector.clear_cache()
                             file_logger = logging.getLogger(__name__)
                             startup_ok = await ximeng.handle_startup_flow_integrated(
@@ -4697,8 +4795,13 @@ class HistoryResultsWindow:
     def _load_results(self, date_filter=None):
         """加载历史结果（直接从数据库读取）
         
+        统计逻辑：
+        1. 每个账号每天只显示一条记录（去重）
+        2. 如果当天有多次有效执行，累加数据（签到奖励、余额变化等）
+        3. 选择"全部"时，显示每个账号每天的累计数据
+        
         Args:
-            date_filter: 日期过滤器（格式：YYYY-MM-DD），如果为None则加载当天记录
+            date_filter: 日期过滤器（格式：YYYY-MM-DD），如果为None则加载所有记录
         """
         try:
             from datetime import datetime
@@ -4707,59 +4810,104 @@ class HistoryResultsWindow:
             if date_filter is None:
                 date_filter = self.selected_date
             
-            self.log(f"开始加载历史记录（日期：{date_filter}）...")
+            self.log(f"开始加载历史记录（日期：{date_filter if date_filter else '全部'}）...")
             
             # 创建数据库实例
             db = LocalDatabase()
             self.log("✓ 成功创建数据库实例")
             
-            # 获取指定日期的历史记录
+            # 获取所有历史记录
             records = db.get_all_history_records()
             self.log(f"✓ 从数据库查询到 {len(records)} 条记录")
             
-            # 按日期过滤并去重（保留最新记录）
-            phone_records = {}  # 用于去重，key为手机号
+            # 按日期过滤
+            if date_filter:
+                # 只保留指定日期的记录
+                records = [r for r in records if r.get('运行日期', '') == date_filter]
+                self.log(f"✓ 过滤后剩余 {len(records)} 条记录（日期：{date_filter}）")
+            
+            # 按"日期-手机号"分组并累加数据
+            date_phone_groups = {}  # key: "日期-手机号", value: [记录列表]
+            
             for record in records:
                 run_date = record.get('运行日期', '')
-                
-                # 如果指定了日期过滤器，只保留匹配的记录
-                if date_filter and run_date != date_filter:
-                    continue
-                
                 phone = record['手机号']
-                created_at = record.get('创建时间', '')
+                key = f"{run_date}-{phone}"
                 
-                # 如果该手机号还没有记录，或者当前记录更新，则保存
-                if phone not in phone_records or created_at > phone_records[phone].get('创建时间', ''):
-                    phone_records[phone] = record
+                if key not in date_phone_groups:
+                    date_phone_groups[key] = []
+                date_phone_groups[key].append(record)
             
-            # 转换为列表
+            # 对每组数据进行累加处理
             self.results = []
-            for record in phone_records.values():
-                # 格式化时间戳（精确到秒）
-                timestamp = record.get('创建时间', '')
+            for key, group_records in date_phone_groups.items():
+                # 按创建时间排序，最新的在前
+                group_records.sort(key=lambda x: x.get('创建时间', ''), reverse=True)
                 
+                # 基础信息使用最新记录
+                latest_record = group_records[0]
+                
+                # 累加数值字段
+                total_checkin_reward = 0.0  # 签到奖励累加
+                total_transfer_amount = 0.0  # 转账金额累加
+                
+                # 余额：使用最早记录的"余额前"和最新记录的"余额后"
+                earliest_record = group_records[-1]  # 最早的记录
+                balance_before = earliest_record.get('余额前(元)', 'N/A')
+                balance_after = latest_record.get('余额(元)', 'N/A')
+                
+                # 累加所有有效记录的数值
+                for record in group_records:
+                    # 只累加成功的记录
+                    if '成功' in record.get('状态', ''):
+                        # 签到奖励累加
+                        reward = record.get('签到奖励(元)', 0)
+                        if reward and reward != '-' and reward != 'N/A':
+                            try:
+                                total_checkin_reward += float(reward)
+                            except:
+                                pass
+                        
+                        # 转账金额累加
+                        transfer = record.get('转账金额(元)', 0)
+                        if transfer and transfer != '-' and transfer != 'N/A':
+                            try:
+                                total_transfer_amount += float(transfer)
+                            except:
+                                pass
+                
+                # 格式化转账信息（使用累加后的金额）
+                transfer_recipient = latest_record.get('转账收款人', '')
+                
+                # 构建结果字典
                 result_dict = {
-                    '手机号': record['手机号'],
-                    '昵称': record['昵称'],
-                    '用户ID': record['用户ID'],
-                    '余额前(元)': record['余额前(元)'],
-                    '积分': record['积分'],
-                    '抵扣券(张)': record['抵扣券(张)'],
-                    '优惠券(张)': record['优惠券(张)'],
-                    '签到奖励(元)': record['签到奖励(元)'],
-                    '签到总次数': record['签到总次数'],
-                    '余额(元)': record['余额(元)'],
-                    '转账金额(元)': record.get('转账金额(元)', 0.0),
-                    '转账收款人': record.get('转账收款人', ''),
-                    '耗时(秒)': record['耗时(秒)'],
-                    '状态': record['状态'],
-                    '登录方式': record['登录方式'],
-                    '时间戳': timestamp
+                    '手机号': latest_record['手机号'],
+                    '昵称': latest_record['昵称'],
+                    '用户ID': latest_record['用户ID'],
+                    '余额前(元)': balance_before,  # 使用最早记录的余额前
+                    '积分': latest_record['积分'],
+                    '抵扣券(张)': latest_record['抵扣券(张)'],
+                    '优惠券(张)': latest_record['优惠券(张)'],
+                    '签到奖励(元)': total_checkin_reward,  # 累加后的签到奖励
+                    '签到总次数': latest_record['签到总次数'],
+                    '余额(元)': balance_after,  # 使用最新记录的余额后
+                    '转账金额(元)': total_transfer_amount,  # 累加后的转账金额
+                    '转账收款人': transfer_recipient,
+                    '耗时(秒)': latest_record['耗时(秒)'],
+                    '状态': latest_record['状态'],
+                    '登录方式': latest_record['登录方式'],
+                    '管理员': latest_record.get('管理员', '-'),
+                    '时间戳': latest_record.get('创建时间', ''),
+                    '执行次数': len(group_records)  # 记录当天执行次数
                 }
                 self.results.append(result_dict)
             
-            self.log(f"✓ 成功加载 {len(self.results)} 条历史结果（日期：{date_filter}）")
+            self.log(f"✓ 成功加载 {len(self.results)} 条历史结果（日期：{date_filter if date_filter else '全部'}）")
+            if date_filter:
+                # 统计当天多次执行的账号
+                multi_exec_count = sum(1 for r in self.results if r.get('执行次数', 1) > 1)
+                if multi_exec_count > 0:
+                    self.log(f"  其中 {multi_exec_count} 个账号当天有多次执行（已累加数据）")
             
         except Exception as e:
             self.log(f"❌ 加载历史结果失败: {e}")
@@ -4799,7 +4947,13 @@ class HistoryResultsWindow:
         ttk.Button(date_control_frame, text="◀ 前一天", command=self._select_previous_day).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(date_control_frame, text="今天", command=self._select_today).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(date_control_frame, text="后一天 ▶", command=self._select_next_day).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(date_control_frame, text="全部", command=self._select_all).pack(side=tk.LEFT, padx=(0, 5))
+        
+        # 时间范围筛选按钮
+        ttk.Button(date_control_frame, text="最近一周", command=self._select_last_week).pack(side=tk.LEFT, padx=(10, 5))
+        ttk.Button(date_control_frame, text="最近半月", command=self._select_last_half_month).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(date_control_frame, text="最近一月", command=self._select_last_month).pack(side=tk.LEFT, padx=(0, 5))
+        
+        ttk.Button(date_control_frame, text="全部", command=self._select_all).pack(side=tk.LEFT, padx=(10, 5))
         
         # 提示信息
         ttk.Label(date_control_frame, text="（提示：在日期框上滚动鼠标滚轮可切换日期）", 
@@ -4880,9 +5034,10 @@ class HistoryResultsWindow:
         table_frame.grid_rowconfigure(0, weight=1)
         table_frame.grid_columnconfigure(0, weight=1)
         
-        # 配置标签颜色
+        # 配置标签颜色（整行文字颜色）
         self.tree.tag_configure("success", foreground="green")
         self.tree.tag_configure("failed", foreground="red")
+        self.tree.tag_configure("transfer_success", foreground="blue")  # 转账成功：蓝色
         
         # 填充数据
         self._refresh_tree()
@@ -4899,6 +5054,14 @@ class HistoryResultsWindow:
         ttk.Button(button_frame, text="💰 有余额", command=self._filter_has_balance).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(button_frame, text="📭 无余额", command=self._filter_no_balance).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(button_frame, text="🔄 显示全部", command=self._show_all).pack(side=tk.LEFT, padx=(0, 5))
+        
+        # 搜索框
+        ttk.Label(button_frame, text="搜索:", width=6).pack(side=tk.LEFT, padx=(10, 5))
+        self.history_search_var = tk.StringVar()
+        self.history_search_entry = ttk.Entry(button_frame, textvariable=self.history_search_var, width=15)
+        self.history_search_entry.pack(side=tk.LEFT, padx=(0, 5))
+        self.history_search_entry.bind('<Return>', lambda e: self._search_history_table())
+        ttk.Button(button_frame, text="🔍 搜索", command=self._search_history_table, width=8).pack(side=tk.LEFT, padx=(0, 5))
         
         ttk.Button(button_frame, text="导出Excel", command=self._export_excel).pack(side=tk.LEFT, padx=(10, 5))
         ttk.Button(button_frame, text="关闭", command=self.window.destroy).pack(side=tk.RIGHT)
@@ -4941,12 +5104,20 @@ class HistoryResultsWindow:
                 owner_name
             )
             
-            # 根据状态选择标签（支持带emoji的状态）
+            # 根据状态和转账情况选择标签颜色
             status = result.get('状态', 'N/A')
-            if '成功' in status:
-                tag = "success"
+            transfer_amount = result.get('转账金额(元)', 0.0)
+            
+            # 优先级：转账成功 > 失败 > 成功
+            if '成功' in status and transfer_amount and transfer_amount > 0:
+                # 转账成功：蓝色
+                tag = "transfer_success"
             elif '失败' in status:
+                # 失败：红色
                 tag = "failed"
+            elif '成功' in status:
+                # 成功（无转账）：绿色
+                tag = "success"
             else:
                 tag = ""
             
@@ -5056,6 +5227,156 @@ class HistoryResultsWindow:
         self.date_entry.insert(0, "全部")
         self._refresh_by_date()
     
+    def _select_last_week(self):
+        """选择最近一周（7天）"""
+        from datetime import datetime, timedelta
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=6)  # 包括今天，共7天
+        
+        date_range = f"{start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}"
+        self.selected_date = date_range
+        self.date_entry.delete(0, tk.END)
+        self.date_entry.insert(0, date_range)
+        self._refresh_by_date_range(start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
+    
+    def _select_last_half_month(self):
+        """选择最近半月（15天）"""
+        from datetime import datetime, timedelta
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=14)  # 包括今天，共15天
+        
+        date_range = f"{start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}"
+        self.selected_date = date_range
+        self.date_entry.delete(0, tk.END)
+        self.date_entry.insert(0, date_range)
+        self._refresh_by_date_range(start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
+    
+    def _select_last_month(self):
+        """选择最近一月（30天）"""
+        from datetime import datetime, timedelta
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=29)  # 包括今天，共30天
+        
+        date_range = f"{start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}"
+        self.selected_date = date_range
+        self.date_entry.delete(0, tk.END)
+        self.date_entry.insert(0, date_range)
+        self._refresh_by_date_range(start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
+    
+    def _refresh_by_date_range(self, start_date, end_date):
+        """根据日期范围刷新数据
+        
+        Args:
+            start_date: 开始日期（格式：YYYY-MM-DD）
+            end_date: 结束日期（格式：YYYY-MM-DD）
+        """
+        try:
+            from datetime import datetime
+            
+            self.log(f"开始加载历史记录（日期范围：{start_date} ~ {end_date}）...")
+            
+            # 创建数据库实例
+            db = LocalDatabase()
+            
+            # 获取所有历史记录
+            records = db.get_all_history_records()
+            self.log(f"✓ 从数据库查询到 {len(records)} 条记录")
+            
+            # 按日期范围过滤
+            filtered_records = []
+            for r in records:
+                run_date = r.get('运行日期', '')
+                if run_date and start_date <= run_date <= end_date:
+                    filtered_records.append(r)
+            
+            self.log(f"✓ 过滤后剩余 {len(filtered_records)} 条记录（日期范围：{start_date} ~ {end_date}）")
+            
+            # 按"日期-手机号"分组并累加数据
+            date_phone_groups = {}
+            
+            for record in filtered_records:
+                run_date = record.get('运行日期', '')
+                phone = record['手机号']
+                key = f"{run_date}-{phone}"
+                
+                if key not in date_phone_groups:
+                    date_phone_groups[key] = []
+                date_phone_groups[key].append(record)
+            
+            # 对每组数据进行累加处理
+            self.results = []
+            for key, group_records in date_phone_groups.items():
+                # 按创建时间排序，最新的在前
+                group_records.sort(key=lambda x: x.get('创建时间', ''), reverse=True)
+                
+                # 基础信息使用最新记录
+                latest_record = group_records[0]
+                
+                # 累加数值字段
+                total_checkin_reward = 0.0
+                total_transfer_amount = 0.0
+                
+                # 余额：使用最早记录的"余额前"和最新记录的"余额后"
+                earliest_record = group_records[-1]
+                balance_before = earliest_record.get('余额前(元)', 'N/A')
+                balance_after = latest_record.get('余额(元)', 'N/A')
+                
+                # 累加所有有效记录的数值
+                for record in group_records:
+                    if '成功' in record.get('状态', ''):
+                        reward = record.get('签到奖励(元)', 0)
+                        if reward and reward != '-' and reward != 'N/A':
+                            try:
+                                total_checkin_reward += float(reward)
+                            except:
+                                pass
+                        
+                        transfer = record.get('转账金额(元)', 0)
+                        if transfer and transfer != '-' and transfer != 'N/A':
+                            try:
+                                total_transfer_amount += float(transfer)
+                            except:
+                                pass
+                
+                # 格式化转账信息
+                transfer_recipient = latest_record.get('转账收款人', '')
+                
+                # 构建结果字典
+                result_dict = {
+                    '手机号': latest_record['手机号'],
+                    '昵称': latest_record['昵称'],
+                    '用户ID': latest_record['用户ID'],
+                    '余额前(元)': balance_before,
+                    '积分': latest_record['积分'],
+                    '抵扣券(张)': latest_record['抵扣券(张)'],
+                    '优惠券(张)': latest_record['优惠券(张)'],
+                    '签到奖励(元)': total_checkin_reward,
+                    '签到总次数': latest_record['签到总次数'],
+                    '余额(元)': balance_after,
+                    '转账金额(元)': total_transfer_amount,
+                    '转账收款人': transfer_recipient,
+                    '耗时(秒)': latest_record['耗时(秒)'],
+                    '状态': latest_record['状态'],
+                    '登录方式': latest_record['登录方式'],
+                    '管理员': latest_record.get('管理员', '-'),
+                    '时间戳': latest_record.get('创建时间', ''),
+                    '执行次数': len(group_records)
+                }
+                self.results.append(result_dict)
+            
+            self.log(f"✓ 成功加载 {len(self.results)} 条历史结果（日期范围：{start_date} ~ {end_date}）")
+            
+            # 刷新界面
+            self._refresh_tree()
+            self._update_stats()
+            
+        except Exception as e:
+            self.log(f"❌ 加载历史结果失败: {e}")
+            import traceback
+            error_details = traceback.format_exc()
+            self.log(f"错误详情:\n{error_details}")
+            self.results = []
+    
     def _refresh_by_date(self):
         """根据选择的日期刷新数据（自动刷新，不需要点击按钮）"""
         # 获取输入框中的日期
@@ -5115,14 +5436,90 @@ class HistoryResultsWindow:
         self.log("历史结果已刷新")
     
     def _export_excel(self):
-        """导出Excel"""
+        """导出Excel - 支持按时间范围导出，每天记录清晰区分"""
         try:
-            from tkinter import filedialog
-            from datetime import datetime
+            from tkinter import filedialog, messagebox
+            from datetime import datetime, timedelta
+            
+            # 创建导出选项对话框
+            export_dialog = tk.Toplevel(self.window)
+            export_dialog.title("导出Excel - 选择时间范围")
+            export_dialog.geometry("400x250")
+            export_dialog.transient(self.window)
+            export_dialog.grab_set()
+            
+            # 居中显示
+            export_dialog.update_idletasks()
+            x = (export_dialog.winfo_screenwidth() // 2) - (400 // 2)
+            y = (export_dialog.winfo_screenheight() // 2) - (250 // 2)
+            export_dialog.geometry(f'400x250+{x}+{y}')
+            
+            main_frame = ttk.Frame(export_dialog, padding="20")
+            main_frame.pack(fill=tk.BOTH, expand=True)
+            
+            # 标题
+            ttk.Label(main_frame, text="选择导出时间范围", font=("TkDefaultFont", 12, "bold")).pack(pady=(0, 15))
+            
+            # 时间范围选项
+            range_var = tk.StringVar(value="today")
+            
+            ttk.Radiobutton(main_frame, text="今天", variable=range_var, value="today").pack(anchor=tk.W, pady=5)
+            ttk.Radiobutton(main_frame, text="最近7天", variable=range_var, value="week").pack(anchor=tk.W, pady=5)
+            ttk.Radiobutton(main_frame, text="最近半月（15天）", variable=range_var, value="half_month").pack(anchor=tk.W, pady=5)
+            ttk.Radiobutton(main_frame, text="最近一月（30天）", variable=range_var, value="month").pack(anchor=tk.W, pady=5)
+            ttk.Radiobutton(main_frame, text="全部记录", variable=range_var, value="all").pack(anchor=tk.W, pady=5)
+            
+            # 按钮
+            button_frame = ttk.Frame(main_frame)
+            button_frame.pack(pady=(15, 0))
+            
+            result = {'confirmed': False, 'range': None}
+            
+            def on_confirm():
+                result['confirmed'] = True
+                result['range'] = range_var.get()
+                export_dialog.destroy()
+            
+            def on_cancel():
+                export_dialog.destroy()
+            
+            ttk.Button(button_frame, text="确定", command=on_confirm, width=10).pack(side=tk.LEFT, padx=5)
+            ttk.Button(button_frame, text="取消", command=on_cancel, width=10).pack(side=tk.LEFT, padx=5)
+            
+            # 等待对话框关闭
+            self.window.wait_window(export_dialog)
+            
+            if not result['confirmed']:
+                return
+            
+            # 计算日期范围
+            now = datetime.now()
+            today = now.strftime('%Y-%m-%d')
+            
+            range_type = result['range']
+            if range_type == "today":
+                start_date = today
+                end_date = today
+                range_name = "今天"
+            elif range_type == "week":
+                start_date = (now - timedelta(days=6)).strftime('%Y-%m-%d')
+                end_date = today
+                range_name = "最近7天"
+            elif range_type == "half_month":
+                start_date = (now - timedelta(days=14)).strftime('%Y-%m-%d')
+                end_date = today
+                range_name = "最近半月"
+            elif range_type == "month":
+                start_date = (now - timedelta(days=29)).strftime('%Y-%m-%d')
+                end_date = today
+                range_name = "最近一月"
+            else:  # all
+                start_date = None
+                end_date = None
+                range_name = "全部"
             
             # 选择保存路径
-            now = datetime.now()
-            default_name = f"历史结果_{now.year}年{now.month}月{now.day}日.xlsx"
+            default_name = f"历史结果_{range_name}_{now.year}年{now.month}月{now.day}日.xlsx"
             filepath = filedialog.asksaveasfilename(
                 title="导出Excel",
                 defaultextension=".xlsx",
@@ -5133,251 +5530,265 @@ class HistoryResultsWindow:
             if not filepath:
                 return
             
-            # 导出数据到Excel
-            try:
-                import openpyxl
-                from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
-                from openpyxl.utils import get_column_letter
+            # 从数据库加载指定范围的数据
+            self.log(f"正在导出{range_name}的数据...")
+            db = LocalDatabase()
+            
+            if start_date and end_date:
+                all_records = db.get_history_records(start_date=start_date, end_date=end_date, limit=100000)
+            else:
+                all_records = db.get_history_records(limit=100000)
+            
+            if not all_records:
+                messagebox.showinfo("提示", "没有数据可导出")
+                return
+            
+            # 按日期+手机号分组并累加数据
+            date_phone_groups = {}
+            for record in all_records:
+                run_date = record.get('run_date', '')
+                phone = record.get('phone', '')
+                key = f"{run_date}-{phone}"
                 
-                # 创建工作簿
-                wb = openpyxl.Workbook()
-                ws = wb.active
-                ws.title = "历史结果"
+                if key not in date_phone_groups:
+                    date_phone_groups[key] = []
+                date_phone_groups[key].append(record)
+            
+            # 处理每组数据
+            processed_records = []
+            for key, group_records in date_phone_groups.items():
+                group_records.sort(key=lambda x: x.get('created_at', ''), reverse=True)
                 
-                # 定义边框样式
-                thin_border = Border(
-                    left=Side(style='thin'),
-                    right=Side(style='thin'),
-                    top=Side(style='thin'),
-                    bottom=Side(style='thin')
-                )
+                latest_record = group_records[0]
+                earliest_record = group_records[-1]
                 
-                if self.results:
-                    # 写入表头
-                    headers = list(self.results[0].keys())
-                    for col_idx, header in enumerate(headers, 1):
-                        cell = ws.cell(row=1, column=col_idx, value=header)
-                        cell.font = Font(bold=True, size=11)
-                        cell.fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
-                        cell.font = Font(bold=True, size=11, color="FFFFFF")
-                        cell.alignment = Alignment(horizontal='center', vertical='center')
-                        cell.border = thin_border
-                    
-                    # 写入数据
-                    # 定义数值列（这些列保持数字格式）
-                    numeric_columns = ['余额前(元)', '积分', '抵扣券(张)', '签到奖励(元)', '签到总次数', '余额(元)']
-                    # 定义必须保持文本格式的列（避免前导零丢失）
-                    text_only_columns = ['用户ID', 'ID', '手机号']
-                    
-                    for row_idx, result in enumerate(self.results, 2):
-                        for col_idx, header in enumerate(headers, 1):
-                            value = result.get(header, '')
-                            
-                            # ID和手机号必须保持文本格式
-                            if header in text_only_columns:
-                                cell = ws.cell(row=row_idx, column=col_idx, value=value)
-                                cell.number_format = '@'
-                            # 尝试转换数值列为数字
-                            elif header in numeric_columns and value and value != 'N/A':
-                                try:
-                                    # 移除可能的单位文字
-                                    numeric_value = value.replace('元', '').replace('张', '').replace('次', '').strip()
-                                    # 如果是空字符串，设为0
-                                    if not numeric_value:
-                                        numeric_value = 0
-                                    else:
-                                        numeric_value = float(numeric_value)
-                                    cell = ws.cell(row=row_idx, column=col_idx, value=numeric_value)
-                                    # 数值格式设置
-                                    if header in ['余额前(元)', '签到奖励(元)', '余额(元)', '抵扣券(张)']:
-                                        # 余额和抵扣券保留2位小数
-                                        cell.number_format = '0.00'
-                                    elif header == '积分':
-                                        # 积分保留2位小数（因为可能有小数）
-                                        cell.number_format = '0.00'
-                                    else:
-                                        # 签到次数等整数
-                                        cell.number_format = '0'
-                                except:
-                                    # 转换失败，使用文本格式
-                                    cell = ws.cell(row=row_idx, column=col_idx, value=value)
-                                    cell.number_format = '@'
-                            else:
-                                # 非数值列，使用文本格式
-                                cell = ws.cell(row=row_idx, column=col_idx, value=value)
-                                cell.number_format = '@'
-                            
-                            cell.alignment = Alignment(horizontal='center', vertical='center')
-                            cell.border = thin_border
-                            
-                            # 根据状态设置颜色
-                            if header == '状态':
-                                if value == '成功':
-                                    cell.font = Font(color="008000", bold=True)  # 绿色加粗
-                                elif value == '失败':
-                                    cell.font = Font(color="FF0000", bold=True)  # 红色加粗
-                    
-                    # 添加汇总统计行
-                    summary_start_row = len(self.results) + 3
-                    
-                    # 空行
-                    ws.cell(row=len(self.results) + 2, column=1, value="")
-                    
-                    # 汇总标题
-                    summary_title_cell = ws.cell(row=summary_start_row, column=1, value="=== 汇总统计 ===")
-                    summary_title_cell.font = Font(bold=True, size=12, color="FF0000")
-                    summary_title_cell.alignment = Alignment(horizontal='left', vertical='center')
-                    
-                    # 计算统计数据
-                    total_count = len(self.results)
-                    success_count = sum(1 for r in self.results if r.get('状态') == '成功')
-                    failed_count = total_count - success_count
-                    success_rate = (success_count / total_count * 100) if total_count > 0 else 0
-                    
-                    # 计算各项总计
-                    total_balance_before = 0.0
-                    total_balance_after = 0.0
-                    total_balance_change = 0.0
-                    total_points = 0
-                    total_vouchers = 0.0
-                    total_coupons = 0
-                    total_checkin_reward = 0.0
-                    
-                    for r in self.results:
-                        # 累加余额前
-                        balance_before = r.get('余额前(元)', 'N/A')
-                        if balance_before != 'N/A':
+                # 累加签到奖励
+                total_checkin_reward = 0.0
+                for r in group_records:
+                    if '成功' in r.get('status', ''):
+                        reward = r.get('checkin_reward', 0)
+                        if reward:
                             try:
-                                total_balance_before += float(balance_before)
+                                total_checkin_reward += float(reward)
                             except:
                                 pass
-                        
-                        # 累加余额
-                        balance_after = r.get('余额(元)', 'N/A')
-                        if balance_after != 'N/A':
-                            try:
-                                total_balance_after += float(balance_after)
-                            except:
-                                pass
-                        
-                        # 计算余额变化
-                        if balance_before != 'N/A' and balance_after != 'N/A':
-                            try:
-                                total_balance_change += float(balance_after) - float(balance_before)
-                            except:
-                                pass
-                        
-                        # 累加积分
-                        points = r.get('积分', 'N/A')
-                        if points != 'N/A' and points:
-                            try:
-                                # 移除可能的单位，转换为浮点数
-                                points_value = str(points).strip()
-                                if points_value:
-                                    total_points += float(points_value)
-                            except:
-                                pass
-                        
-                        # 累加抵扣券
-                        vouchers = r.get('抵扣券(张)', 'N/A')
-                        if vouchers != 'N/A' and vouchers:
-                            try:
-                                # 移除可能的单位，转换为浮点数
-                                vouchers_value = str(vouchers).replace('张', '').strip()
-                                if vouchers_value:
-                                    total_vouchers += float(vouchers_value)
-                            except:
-                                pass
-                        
-                        # 累加优惠券
-                        coupons = r.get('优惠券(张)', 'N/A')
-                        if coupons != 'N/A' and coupons:
-                            try:
-                                # 移除可能的单位，转换为整数
-                                coupons_value = str(coupons).replace('张', '').strip()
-                                if coupons_value:
-                                    total_coupons += int(float(coupons_value))
-                            except:
-                                pass
-                        
-                        # 累加签到奖励
-                        checkin_reward = r.get('签到奖励(元)', '0.00')
-                        if checkin_reward != 'N/A':
-                            try:
-                                total_checkin_reward += float(checkin_reward)
-                            except:
-                                pass
-                    
-                    # 写入统计数据
-                    summary_data = [
-                        ("总账号数", total_count, '0'),
-                        ("成功数", success_count, '0'),
-                        ("失败数", failed_count, '0'),
-                        ("成功率", success_rate, '0.0"%"'),  # 百分比格式
-                        ("总余额前(元)", total_balance_before, '0.00'),
-                        ("总余额(元)", total_balance_after, '0.00'),
-                        ("总余额变化(元)", total_balance_change, '0.00'),
-                        ("总积分", total_points, '0.00'),  # 改为保留2位小数
-                        ("总抵扣券(张)", total_vouchers, '0.00'),
-                        ("总优惠券(张)", total_coupons, '0'),
-                        ("总签到奖励(元)", total_checkin_reward, '0.00')
-                    ]
-                    
-                    for idx, (label, value, num_format) in enumerate(summary_data, 1):
-                        row = summary_start_row + idx
-                        label_cell = ws.cell(row=row, column=1, value=label)
-                        label_cell.font = Font(bold=True)
-                        label_cell.alignment = Alignment(horizontal='left', vertical='center')
-                        
-                        value_cell = ws.cell(row=row, column=2, value=value)
-                        value_cell.number_format = num_format
-                        value_cell.alignment = Alignment(horizontal='left', vertical='center')
-                        
-                        # 根据数值设置颜色
-                        if isinstance(value, (int, float)) and value > 0:
-                            if "余额变化" in label or "签到奖励" in label or "积分" in label or "抵扣券" in label:
-                                value_cell.font = Font(color="008000", bold=True)
-                    
-                    # 自动调整列宽（改进算法）
-                    for col_idx, col in enumerate(ws.columns, 1):
-                        max_length = 0
-                        column_letter = get_column_letter(col_idx)
-                        
-                        for cell in col:
-                            if cell.value:
-                                # 计算字符串长度（中文字符算2个长度）
-                                cell_value = str(cell.value)
-                                length = sum(2 if '\u4e00' <= char <= '\u9fff' else 1 for char in cell_value)
-                                max_length = max(max_length, length)
-                        
-                        # 设置列宽（加上一些边距）
-                        adjusted_width = min(max_length + 3, 50)
-                        ws.column_dimensions[column_letter].width = adjusted_width
-                    
-                    # 冻结首行
-                    ws.freeze_panes = 'A2'
-                    
-                    # 添加自动筛选功能（应用到表头行）
-                    if len(self.results) > 0:
-                        # 获取数据范围（从A1到最后一列的最后一行）
-                        max_col = len(headers)
-                        max_row = len(self.results) + 1  # +1 是因为有表头
-                        ws.auto_filter.ref = f"A1:{get_column_letter(max_col)}{max_row}"
                 
-                # 保存文件
-                wb.save(filepath)
-                
-                self.log(f"已导出到: {filepath}")
-                messagebox.showinfo("成功", f"已导出到:\n{filepath}")
-                
-            except ImportError:
-                # 如果没有安装openpyxl，提示用户
-                self.log("未安装openpyxl库，无法导出Excel格式")
-                messagebox.showerror("错误", "未安装openpyxl库\n\n请运行: pip install openpyxl")
+                processed_record = {
+                    '日期': latest_record.get('run_date', ''),
+                    '手机号': latest_record.get('phone', ''),
+                    '昵称': latest_record.get('nickname', ''),
+                    '用户ID': latest_record.get('user_id', ''),
+                    '余额前(元)': earliest_record.get('balance_before', 0),
+                    '积分': latest_record.get('points', 0),
+                    '抵扣券(张)': latest_record.get('vouchers', 0),
+                    '优惠券(张)': latest_record.get('coupons', 0),
+                    '签到奖励(元)': total_checkin_reward,
+                    '签到总次数': latest_record.get('checkin_total_times', 0),
+                    '余额(元)': latest_record.get('balance_after', 0),
+                    '转账金额(元)': latest_record.get('transfer_amount', 0),
+                    '转账收款人': latest_record.get('transfer_recipient', ''),
+                    '耗时(秒)': latest_record.get('duration', 0),
+                    '状态': latest_record.get('status', ''),
+                    '登录方式': latest_record.get('login_method', ''),
+                    '管理员': latest_record.get('owner', '-'),
+                    '执行次数': len(group_records)
+                }
+                processed_records.append(processed_record)
+            
+            # 按日期排序
+            processed_records.sort(key=lambda x: x['日期'], reverse=True)
+            
+            # 导出到Excel（按日期分组）
+            self._export_to_excel_with_date_groups(filepath, processed_records, range_name)
+            
+            messagebox.showinfo("成功", f"已成功导出 {len(processed_records)} 条记录到:\n{filepath}")
+            self.log(f"✓ 成功导出 {len(processed_records)} 条记录")
             
         except Exception as e:
-            self.log(f"导出失败: {e}")
             messagebox.showerror("错误", f"导出失败: {e}")
+            self.log(f"❌ 导出失败: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _export_to_excel_with_date_groups(self, filepath: str, records: list, range_name: str):
+        """导出数据到Excel文件（按日期分组显示）"""
+        import openpyxl
+        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+        from openpyxl.utils import get_column_letter
+        from collections import defaultdict
+        
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = f"历史结果_{range_name}"[:31]  # Excel工作表名称限制31字符
+        
+        thin_border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin')
+        )
+        
+        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+        date_header_fill = PatternFill(start_color="FFC000", end_color="FFC000", fill_type="solid")
+        
+        current_row = 1
+        
+        # 按日期分组
+        records_by_date = defaultdict(list)
+        for record in records:
+            date = record['日期']
+            records_by_date[date].append(record)
+        
+        sorted_dates = sorted(records_by_date.keys(), reverse=True)
+        
+        headers = ['手机号', '昵称', '用户ID', '余额前(元)', '积分', '抵扣券(张)', '优惠券(张)', 
+                  '签到奖励(元)', '签到总次数', '余额(元)', '余额变化(元)', '转账金额(元)', '转账收款人', 
+                  '耗时(秒)', '状态', '登录方式', '管理员', '执行次数']
+        
+        # 遍历每个日期
+        for date in sorted_dates:
+            date_records = records_by_date[date]
+            
+            # 日期标题行
+            date_cell = ws.cell(row=current_row, column=1, value=f"📅 {date} ({len(date_records)}个账号)")
+            date_cell.font = Font(bold=True, size=12, color="FFFFFF")
+            date_cell.fill = date_header_fill
+            date_cell.alignment = Alignment(horizontal='left', vertical='center')
+            ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=len(headers))
+            current_row += 1
+            
+            # 表头行
+            for col_idx, header in enumerate(headers, 1):
+                cell = ws.cell(row=current_row, column=col_idx, value=header)
+                cell.font = Font(bold=True, size=10, color="FFFFFF")
+                cell.fill = header_fill
+                cell.alignment = Alignment(horizontal='center', vertical='center')
+                cell.border = thin_border
+            current_row += 1
+            
+            # 数据行
+            date_total_balance_change = 0.0
+            date_total_checkin_reward = 0.0
+            
+            for record in date_records:
+                balance_before = record.get('余额前(元)', 0)
+                balance_after = record.get('余额(元)', 0)
+                try:
+                    balance_change = float(balance_after) - float(balance_before)
+                    date_total_balance_change += balance_change
+                except:
+                    balance_change = 0
+                
+                try:
+                    date_total_checkin_reward += float(record.get('签到奖励(元)', 0))
+                except:
+                    pass
+                
+                row_data = [
+                    record.get('手机号', ''),
+                    record.get('昵称', ''),
+                    record.get('用户ID', ''),
+                    record.get('余额前(元)', 0),
+                    record.get('积分', 0),
+                    record.get('抵扣券(张)', 0),
+                    record.get('优惠券(张)', 0),
+                    record.get('签到奖励(元)', 0),
+                    record.get('签到总次数', 0),
+                    record.get('余额(元)', 0),
+                    balance_change,
+                    record.get('转账金额(元)', 0),
+                    record.get('转账收款人', ''),
+                    record.get('耗时(秒)', 0),
+                    record.get('状态', ''),
+                    record.get('登录方式', ''),
+                    record.get('管理员', '-'),
+                    record.get('执行次数', 1)
+                ]
+                
+                for col_idx, value in enumerate(row_data, 1):
+                    cell = ws.cell(row=current_row, column=col_idx, value=value)
+                    cell.alignment = Alignment(horizontal='center', vertical='center')
+                    cell.border = thin_border
+                    
+                    if col_idx in [4, 5, 6, 7, 8, 9, 10, 11, 12, 14]:
+                        if col_idx in [4, 7, 9, 10, 11, 12]:
+                            cell.number_format = '0.00'
+                        else:
+                            cell.number_format = '0'
+                    elif col_idx in [1, 3]:
+                        cell.number_format = '@'
+                    
+                    if col_idx == 15:
+                        if value == '成功':
+                            cell.font = Font(color="008000", bold=True)
+                        elif value == '失败':
+                            cell.font = Font(color="FF0000", bold=True)
+                    
+                    if col_idx == 11:
+                        if isinstance(value, (int, float)) and value > 0:
+                            cell.font = Font(color="008000")
+                        elif isinstance(value, (int, float)) and value < 0:
+                            cell.font = Font(color="FF0000")
+                
+                current_row += 1
+            
+            # 当天小计行
+            subtotal_cell = ws.cell(row=current_row, column=1, value=f"📊 {date} 小计")
+            subtotal_cell.font = Font(bold=True, color="0000FF")
+            subtotal_cell.alignment = Alignment(horizontal='left', vertical='center')
+            
+            ws.cell(row=current_row, column=8, value=date_total_checkin_reward).number_format = '0.00'
+            ws.cell(row=current_row, column=8).font = Font(bold=True, color="008000")
+            
+            ws.cell(row=current_row, column=11, value=date_total_balance_change).number_format = '0.00'
+            ws.cell(row=current_row, column=11).font = Font(bold=True, color="008000")
+            
+            current_row += 2
+        
+        # 总计统计
+        current_row += 1
+        summary_title = ws.cell(row=current_row, column=1, value="=== 总计统计 ===")
+        summary_title.font = Font(bold=True, size=12, color="FF0000")
+        current_row += 1
+        
+        total_count = len(records)
+        success_count = sum(1 for r in records if r.get('状态') == '成功')
+        total_checkin_reward = sum(float(r.get('签到奖励(元)', 0)) for r in records)
+        total_balance_change = sum(
+            float(r.get('余额(元)', 0)) - float(r.get('余额前(元)', 0))
+            for r in records
+            if r.get('余额(元)') and r.get('余额前(元)')
+        )
+        
+        summary_data = [
+            ("总记录数", total_count),
+            ("成功数", success_count),
+            ("失败数", total_count - success_count),
+            ("成功率", f"{success_count/total_count*100:.1f}%" if total_count > 0 else "0%"),
+            ("总签到奖励(元)", f"{total_checkin_reward:.2f}"),
+            ("总余额变化(元)", f"{total_balance_change:.2f}")
+        ]
+        
+        for label, value in summary_data:
+            ws.cell(row=current_row, column=1, value=label).font = Font(bold=True)
+            ws.cell(row=current_row, column=2, value=value)
+            current_row += 1
+        
+        # 自动调整列宽
+        for col_idx in range(1, len(headers) + 1):
+            max_length = 0
+            column_letter = get_column_letter(col_idx)
+            
+            for cell in ws[column_letter]:
+                if cell.value:
+                    cell_value = str(cell.value)
+                    length = sum(2 if '\u4e00' <= char <= '\u9fff' else 1 for char in cell_value)
+                    max_length = max(max_length, length)
+            
+            adjusted_width = min(max_length + 2, 50)
+            ws.column_dimensions[column_letter].width = adjusted_width
+        
+        wb.save(filepath)
     
     def _locate_failed_account(self):
         """定位到第一个失败的账户"""
@@ -5541,6 +5952,56 @@ class HistoryResultsWindow:
             self.log(f"✓ 已显示全部账户（共 {len(self.all_tree_items)} 个）")
         else:
             self.log("✓ 已显示全部账户")
+    
+    def _search_history_table(self):
+        """搜索历史记录表格（根据手机号或ID）"""
+        search_text = self.history_search_var.get().strip()
+        
+        if not search_text:
+            # 如果搜索框为空，显示全部
+            self._show_all()
+            return
+        
+        # 保存所有项目ID（如果还没保存）
+        if not self.all_tree_items:
+            self.all_tree_items = list(self.tree.get_children())
+        
+        # 先detach所有项目
+        for item in self.all_tree_items:
+            try:
+                self.tree.detach(item)
+            except:
+                pass
+        
+        # 搜索匹配的项目
+        matched_items = []
+        for item in self.all_tree_items:
+            try:
+                values = self.tree.item(item, 'values')
+                if values and len(values) > 2:
+                    nickname = str(values[0])  # 昵称在第一列
+                    user_id = str(values[1])  # 用户ID在第二列
+                    phone = str(values[2])  # 手机号在第三列
+                    
+                    # 模糊匹配：手机号或ID包含搜索文本
+                    if search_text in phone or search_text in user_id:
+                        matched_items.append(item)
+            except:
+                pass
+        
+        # 显示匹配的项目
+        for item in matched_items:
+            try:
+                self.tree.reattach(item, '', 'end')
+            except:
+                pass
+        
+        if matched_items:
+            self.log(f"🔍 找到 {len(matched_items)} 个匹配的账户")
+        else:
+            self.log(f"🔍 未找到匹配 '{search_text}' 的账户")
+            messagebox.showinfo("提示", f"未找到匹配 '{search_text}' 的账户")
+    
     
     def _on_closing(self):
         """安全关闭窗口"""

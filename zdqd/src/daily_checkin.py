@@ -641,9 +641,20 @@ class DailyCheckin:
             log(f"  [签到] 点击签到按钮 ({checkin_button_pos[0]}, {checkin_button_pos[1]})...")
             await self.adb.tap(device_id, checkin_button_pos[0], checkin_button_pos[1])
             
-            # 等待页面加载（增加等待时间，确保页面完全加载）
-            log(f"  [签到] 等待页面加载...")
-            await asyncio.sleep(TimeoutsConfig.CHECKIN_PAGE_LOAD)  # 从2秒增加到3秒
+            # 等待页面加载（优化：使用智能等待器代替固定等待）
+            log(f"  [签到] 等待签到页面加载...")
+            from .performance.smart_waiter import wait_for_page
+            page_loaded = await wait_for_page(
+                device_id,
+                self.detector,
+                [PageState.CHECKIN, PageState.WARMTIP],  # 可能到达签到页或温馨提示
+                log_callback=None  # 不输出技术日志
+            )
+            
+            if not page_loaded:
+                # 如果智能等待超时，给一个短暂的固定等待作为降级
+                log(f"  [签到] 智能等待超时，使用降级等待...")
+                await asyncio.sleep(1.0)  # 降级等待1秒
             
             # 6.1 进入签到页面后先截图并OCR识别
             log(f"  [签到] 保存进入页面截图...")
@@ -777,7 +788,7 @@ class DailyCheckin:
                         close_success = await self.detector.close_popup(device_id)
                         if close_success:
                             log(f"  [签到] ✓ 弹窗已关闭，等待页面刷新...")
-                            await asyncio.sleep(2)  # 等待弹窗动画完成
+                            await asyncio.sleep(0.5)  # 优化：减少等待时间从2秒到0.5秒
                             # 重新验证页面状态（失效缓存）
                             self._page_cache.invalidate(device_id, f"loop_{attempt}")
                             page_result_loop = await self._detect_page_cached(device_id, use_cache=False, cache_key=f"after_close_{attempt}")
@@ -791,7 +802,7 @@ class DailyCheckin:
                                 if current_state == PageState.CHECKIN_POPUP or current_state == PageState.WARMTIP:
                                     log(f"  [签到] 再次尝试关闭弹窗...")
                                     await self.adb.press_back(device_id)
-                                    await asyncio.sleep(2)
+                                    await asyncio.sleep(0.5)  # 优化：减少等待时间
                                     self._page_cache.invalidate(device_id, f"after_close_{attempt}")
                                     page_result_loop = await self._detect_page_cached(device_id, use_cache=False, cache_key=f"retry_close_{attempt}")
                                     current_state = page_result_loop.state if page_result_loop else PageState.UNKNOWN
@@ -801,7 +812,7 @@ class DailyCheckin:
                         else:
                             log(f"  [签到] ⚠️ 关闭弹窗失败，尝试按返回键...")
                             await self.adb.press_back(device_id)
-                            await asyncio.sleep(2)
+                            await asyncio.sleep(0.5)  # 优化：减少等待时间
                             self._page_cache.invalidate(device_id, f"loop_{attempt}")
                             page_result_loop = await self._detect_page_cached(device_id, use_cache=False, cache_key=f"fallback_{attempt}")
                             current_state = page_result_loop.state if page_result_loop else PageState.UNKNOWN
@@ -1023,8 +1034,8 @@ class DailyCheckin:
                     log(f"  [签到] 点击关闭按钮: {close_button_pos}")
                     await self.adb.tap(device_id, close_button_pos[0], close_button_pos[1])
                     
-                    # 等待0.5秒检查是否关闭成功
-                    await asyncio.sleep(TimeoutsConfig.WAIT_SHORT)
+                    # 等待0.3秒检查是否关闭成功（优化：减少等待时间）
+                    await asyncio.sleep(0.3)
                     quick_check = await self._detect_page_cached(device_id, use_cache=False, cache_key=f"quick_check_{attempt}")
                     if quick_check and quick_check.state == PageState.CHECKIN_POPUP:
                         log(f"  [签到] 单击无效，尝试双击...")
@@ -1178,7 +1189,7 @@ class DailyCheckin:
             log(f"  [签到] 签到循环结束，计算总奖励...")
             
             # 获取签到后的余额（增加重试机制）
-            balance_after = None
+            checkin_balance_after = None  # 改名：签到后余额
             max_retries = 3
             
             for retry in range(max_retries):
@@ -1191,10 +1202,10 @@ class DailyCheckin:
                     
                     from .profile_reader import ProfileReader
                     profile_reader = ProfileReader(self.adb, self.detector)
-                    balance_after = await profile_reader.get_balance(device_id)
+                    checkin_balance_after = await profile_reader.get_balance(device_id)
                     
-                    if balance_after is not None:
-                        log(f"  [签到] ✓ 成功获取签到后余额: {balance_after:.2f} 元")
+                    if checkin_balance_after is not None:
+                        log(f"  [签到] ✓ 成功获取签到后余额: {checkin_balance_after:.2f} 元")
                         break
                     else:
                         log(f"  [签到] ⚠️ 第{retry+1}次获取余额失败，返回None")
@@ -1206,22 +1217,22 @@ class DailyCheckin:
                         await asyncio.sleep(TimeoutsConfig.WAIT_MEDIUM)  # 等待后重试
             
             # 计算总奖励
-            if balance_after is not None and balance is not None:
+            if checkin_balance_after is not None and balance is not None:
                 # 计算总奖励
-                total_reward = balance_after - balance
+                total_reward = checkin_balance_after - balance
                 result['reward_amount'] = total_reward
                 result['checkin_count'] = checkin_count
-                result['balance_after'] = balance_after  # 返回签到后余额
+                result['checkin_balance_after'] = checkin_balance_after  # 返回签到后余额（新增字段）
                 
                 log(f"  [签到] 签到前余额: {round(balance, 3)} 元")
-                log(f"  [签到] 签到后余额: {round(balance_after, 3)} 元")
+                log(f"  [签到] 签到后余额: {round(checkin_balance_after, 3)} 元")
                 log(f"  [签到] ✓ 总奖励: {round(total_reward, 3)} 元")
             else:
                 log(f"  [签到] ⚠️ 无法获取余额，无法计算总奖励")
                 log(f"  [签到]    - 签到前余额: {balance}")
-                log(f"  [签到]    - 签到后余额: {balance_after}")
+                log(f"  [签到]    - 签到后余额: {checkin_balance_after}")
                 result['checkin_count'] = checkin_count
-                result['balance_after'] = balance_after  # 即使为None也返回
+                result['checkin_balance_after'] = checkin_balance_after  # 即使为None也返回
                 # 即使无法计算奖励，也要保存记录（reward_amount保持为0.0）
             
             # 6. 设置最终结果
