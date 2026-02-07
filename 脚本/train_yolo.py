@@ -1,39 +1,40 @@
 """
-统一YOLO训练脚本
-Unified YOLO Training Script
-
-用法:
-    python train_yolo.py --type stage1
-    python train_yolo.py --type profile_regions
-    python train_yolo.py --type profile_numbers
-    python train_yolo.py --type profile_detailed
+统一YOLO训练脚本 - 简化版
 """
-import argparse
 import sys
+import os
+
+sys.path.insert(0, os.path.dirname(__file__))
 
 def main():
-    parser = argparse.ArgumentParser(description='统一YOLO训练脚本')
-    parser.add_argument('--type', type=str, required=True,
-                        choices=['stage1', 'profile_regions', 'profile_numbers', 'profile_detailed'],
-                        help='YOLO模型类型')
-    parser.add_argument('--epochs', type=int, default=30, help='训练轮数')
-    parser.add_argument('--batch', type=int, default=16, help='批次大小')
+    print("=" * 60)
+    print("YOLO训练脚本")
+    print("=" * 60)
+    print("\n请选择模型类型:")
+    print("  1. 阶段1模型（核心按钮）")
+    print("  2. 个人页区域检测")
+    print("  3. 个人页数字识别")
+    print("  4. 个人页详细标注")
+    print("  0. 退出")
     
-    args = parser.parse_args()
+    choice = input("\n请输入选项 (0-4): ").strip()
     
-    # 根据类型调用对应的训练函数
-    if args.type == 'stage1':
+    if choice == '1':
         from train_yolo_stage1 import train_model
-        train_model(epochs=args.epochs, batch=args.batch)
-    elif args.type == 'profile_regions':
+        train_model()
+    elif choice == '2':
         from train_profile_regions_yolo import train_profile_regions_detector
         train_profile_regions_detector()
-    elif args.type == 'profile_numbers':
+    elif choice == '3':
         from train_profile_numbers_yolo import train_profile_numbers_detector
         train_profile_numbers_detector()
-    elif args.type == 'profile_detailed':
+    elif choice == '4':
         from train_profile_detailed import train_model
         train_model()
+    elif choice == '0':
+        print("退出")
+    else:
+        print("无效选项")
 
 if __name__ == '__main__':
     main()
