@@ -1,47 +1,49 @@
 """
-统一数据准备脚本
-Unified Dataset Preparation Script
-
-用法:
-    python prepare_dataset.py --type page_classifier
-    python prepare_dataset.py --type profile_detailed
-    python prepare_dataset.py --type profile_regions
-    python prepare_dataset.py --type profile_numbers
-    python prepare_dataset.py --type checkin_popup
-    python prepare_dataset.py --type full_classifier
+统一数据准备脚本 - 简化版
 """
-import argparse
 import sys
-from pathlib import Path
+import os
+
+# 添加当前目录到路径
+sys.path.insert(0, os.path.dirname(__file__))
 
 def main():
-    parser = argparse.ArgumentParser(description='统一数据准备脚本')
-    parser.add_argument('--type', type=str, required=True,
-                        choices=['page_classifier', 'profile_detailed', 'profile_regions', 
-                                'profile_numbers', 'checkin_popup', 'full_classifier'],
-                        help='数据集类型')
+    print("=" * 60)
+    print("数据准备脚本")
+    print("=" * 60)
+    print("\n请选择数据集类型:")
+    print("  1. 页面分类器数据")
+    print("  2. 个人页详细标注数据")
+    print("  3. 个人页区域数据")
+    print("  4. 个人页数字数据")
+    print("  5. 签到弹窗数据")
+    print("  6. 完整分类器数据")
+    print("  0. 退出")
     
-    args = parser.parse_args()
+    choice = input("\n请输入选项 (0-6): ").strip()
     
-    # 根据类型调用对应的准备函数
-    if args.type == 'page_classifier':
+    if choice == '1':
         from prepare_page_classifier_data import prepare_dataset
         prepare_dataset()
-    elif args.type == 'profile_detailed':
+    elif choice == '2':
         from prepare_profile_detailed_data import prepare_dataset
         prepare_dataset()
-    elif args.type == 'profile_regions':
+    elif choice == '3':
         from prepare_profile_region_data import prepare_dataset
         prepare_dataset()
-    elif args.type == 'profile_numbers':
+    elif choice == '4':
         from prepare_profile_numbers_dataset import prepare_dataset
         prepare_dataset()
-    elif args.type == 'checkin_popup':
+    elif choice == '5':
         from prepare_checkin_popup_dataset import prepare_dataset
         prepare_dataset()
-    elif args.type == 'full_classifier':
+    elif choice == '6':
         from prepare_full_classifier_dataset import prepare_dataset
         prepare_dataset()
+    elif choice == '0':
+        print("退出")
+    else:
+        print("无效选项")
 
 if __name__ == '__main__':
     main()

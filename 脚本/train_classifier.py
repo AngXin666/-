@@ -1,38 +1,40 @@
 """
-统一分类器训练脚本
-Unified Classifier Training Script
-
-用法:
-    python train_classifier.py --type keras
-    python train_classifier.py --type pytorch
-    python train_classifier.py --type binary
-    python train_classifier.py --type 4class
+统一分类器训练脚本 - 简化版
 """
-import argparse
 import sys
+import os
+
+sys.path.insert(0, os.path.dirname(__file__))
 
 def main():
-    parser = argparse.ArgumentParser(description='统一分类器训练脚本')
-    parser.add_argument('--type', type=str, required=True,
-                        choices=['keras', 'pytorch', 'binary', '4class'],
-                        help='分类器类型')
-    parser.add_argument('--epochs', type=int, default=30, help='训练轮数')
+    print("=" * 60)
+    print("分类器训练脚本")
+    print("=" * 60)
+    print("\n请选择分类器类型:")
+    print("  1. Keras版本")
+    print("  2. PyTorch版本")
+    print("  3. 二分类版本")
+    print("  4. 4类分类器")
+    print("  0. 退出")
     
-    args = parser.parse_args()
+    choice = input("\n请输入选项 (0-4): ").strip()
     
-    # 根据类型调用对应的训练函数
-    if args.type == 'keras':
+    if choice == '1':
         from train_page_classifier import main as train_keras
         train_keras()
-    elif args.type == 'pytorch':
+    elif choice == '2':
         from train_page_classifier_pytorch import main as train_pytorch
         train_pytorch()
-    elif args.type == 'binary':
+    elif choice == '3':
         from train_page_classifier_binary_v2 import main as train_binary
         train_binary()
-    elif args.type == '4class':
+    elif choice == '4':
         from train_4class_classifier import main as train_4class
         train_4class()
+    elif choice == '0':
+        print("退出")
+    else:
+        print("无效选项")
 
 if __name__ == '__main__':
     main()

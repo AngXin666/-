@@ -1,81 +1,56 @@
 # 训练脚本使用指南
 
-## 统一脚本（推荐使用）
+## 统一脚本（推荐使用 - 菜单选择）
 
-### 1. 数据准备 - prepare_dataset.py
+### 1. 数据准备
 ```bash
-# 准备页面分类器数据
-python prepare_dataset.py --type page_classifier
-
-# 准备个人页详细标注数据
-python prepare_dataset.py --type profile_detailed
-
-# 准备个人页区域数据
-python prepare_dataset.py --type profile_regions
-
-# 准备个人页数字数据
-python prepare_dataset.py --type profile_numbers
-
-# 准备签到弹窗数据
-python prepare_dataset.py --type checkin_popup
-
-# 准备完整分类器数据
-python prepare_dataset.py --type full_classifier
+python prepare_dataset.py
 ```
+运行后会显示菜单，选择数据集类型：
+- 1. 页面分类器数据
+- 2. 个人页详细标注数据
+- 3. 个人页区域数据
+- 4. 个人页数字数据
+- 5. 签到弹窗数据
+- 6. 完整分类器数据
 
-### 2. 数据增强 - augment_dataset.py
+### 2. 数据增强
 ```bash
-# 4类数据增强
-python augment_dataset.py --type 4class
-
-# 页面分类器数据增强
-python augment_dataset.py --type page_classifier
-
-# 个人页详细标注数据增强
-python augment_dataset.py --type profile_detailed
-
-# 个人页区域数据增强
-python augment_dataset.py --type profile_regions
+python augment_dataset.py
 ```
+运行后会显示菜单，选择增强类型：
+- 1. 4类数据增强
+- 2. 页面分类器数据增强
+- 3. 个人页详细标注数据增强
+- 4. 个人页区域数据增强
 
-### 3. YOLO训练 - train_yolo.py
+### 3. YOLO训练
 ```bash
-# 训练阶段1模型（核心按钮）
-python train_yolo.py --type stage1 --epochs 30 --batch 16
-
-# 训练个人页区域检测
-python train_yolo.py --type profile_regions
-
-# 训练个人页数字识别
-python train_yolo.py --type profile_numbers
-
-# 训练个人页详细标注
-python train_yolo.py --type profile_detailed
+python train_yolo.py
 ```
+运行后会显示菜单，选择模型类型：
+- 1. 阶段1模型（核心按钮）
+- 2. 个人页区域检测
+- 3. 个人页数字识别
+- 4. 个人页详细标注
 
-### 4. 分类器训练 - train_classifier.py
+### 4. 分类器训练
 ```bash
-# Keras版本
-python train_classifier.py --type keras --epochs 30
-
-# PyTorch版本
-python train_classifier.py --type pytorch --epochs 30
-
-# 二分类版本
-python train_classifier.py --type binary
-
-# 4类分类器
-python train_classifier.py --type 4class
+python train_classifier.py
 ```
+运行后会显示菜单，选择分类器类型：
+- 1. Keras版本
+- 2. PyTorch版本
+- 3. 二分类版本
+- 4. 4类分类器
 
-### 5. 训练监控 - monitor.py
+### 5. 训练监控
 ```bash
-# 监控训练进度
-python monitor.py --type training
-
-# 监控性能
-python monitor.py --type performance
+python monitor.py
 ```
+运行后会显示菜单，选择监控类型：
+- 1. 训练进度监控
+- 2. 性能监控
 
 ## 原始脚本（仍然可用）
 
