@@ -1,6 +1,6 @@
 {
-  "version": "1.0.5",
-  "update_date": "2026-01-31",
+  "version": "1.0.7",
+  "update_date": "2026-02-08",
   "description": "自动注册 1 个新模型",
   "models": {
     "page_classifier": {

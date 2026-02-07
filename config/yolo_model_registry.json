@@ -98,7 +98,7 @@
     "balance": {
       "name": "余额积分检测模型",
       "page_type": "个人页_已登录_余额积分",
-      "model_path": "runs/detect/yolo_runs/balance_detector/train4/weights/best.pt",
+      "model_path": "runs/detect/yolo_runs/balance_detector/train/weights/best.pt",
       "classes": [
         "余额数字",
         "积分数字",

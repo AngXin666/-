@@ -207,6 +207,8 @@ class ProfileReader:
                     enhanced_image = enhance_for_ocr(image)
                     full_ocr_result = await self._ocr_pool.recognize(enhanced_image)
                     
+                    self._silent_log.log(f"  [整合检测器] OCR识别到 {len(full_ocr_result.texts) if full_ocr_result and full_ocr_result.texts else 0} 个文本")
+                    
                     # 记录检测到的元素类型，用于后续判断
                     detected_elements = set()
                     for element in detection_result.elements:
@@ -219,10 +221,14 @@ class ProfileReader:
                         elif '优惠' in element.class_name:
                             detected_elements.add('coupons')
                     
+                    self._silent_log.log(f"  [整合检测器] 检测到的元素类型: {detected_elements}")
+                    
                     if full_ocr_result and full_ocr_result.texts and full_ocr_result.boxes is not None:
                         # 根据YOLO检测到的元素位置，从全屏OCR结果中匹配文本
                         for element in detection_result.elements:
                             x1, y1, x2, y2 = element.bbox
+                            
+                            self._silent_log.log(f"  [整合检测器] 处理元素: {element.class_name}, 位置: ({x1}, {y1}, {x2}, {y2})")
                             
                             # 查找与元素位置重叠的OCR文本
                             matched_texts = []
@@ -237,6 +243,9 @@ class ProfileReader:
                                 # 检查OCR文本框是否在YOLO元素框内
                                 if x1 <= ocr_center_x <= x2 and y1 <= ocr_center_y <= y2:
                                     matched_texts.append(text)
+                                    self._silent_log.log(f"  [整合检测器]   匹配到文本: '{text}' (中心点: {ocr_center_x:.0f}, {ocr_center_y:.0f})")
+                            
+                            self._silent_log.log(f"  [整合检测器] 元素 {element.class_name} 匹配到 {len(matched_texts)} 个文本: {matched_texts}")
                             
                             if matched_texts:
                                 # 合并所有匹配的文本
@@ -245,22 +254,34 @@ class ProfileReader:
                                 # 查找所有数字（包括小数）
                                 all_numbers = re.findall(r'(\d+\.?\d*)', combined_text)
                                 
+                                self._silent_log.log(f"  [整合检测器] 从文本中提取到的所有数字: {all_numbers}")
+                                
                                 if all_numbers:
-                                    # 转换为浮点数并选择最大的合理值
+                                    # 转换为浮点数，选择第一个合理值（不使用max，避免误选其他区域的数字）
                                     valid_numbers = []
                                     for num_str in all_numbers:
                                         try:
                                             num = float(num_str)
-                                            if 0.01 <= num <= 100000:
+                                            # 根据字段类型设置合理范围
+                                            if '余额' in element.class_name and 0 <= num <= 100000:
+                                                valid_numbers.append(num)
+                                            elif '积分' in element.class_name and 0 <= num <= 100000:
+                                                valid_numbers.append(num)
+                                            elif '抵扣' in element.class_name and 0 <= num <= 10000:
+                                                valid_numbers.append(num)
+                                            elif '优惠' in element.class_name and 0 <= num <= 10000:
                                                 valid_numbers.append(num)
                                         except ValueError:
                                             continue
                                     
+                                    self._silent_log.log(f"  [整合检测器] 合理的候选值: {valid_numbers}")
+                                    
                                     if valid_numbers:
-                                        value = max(valid_numbers)
+                                        # 使用第一个合理值，而不是最大值
+                                        value = valid_numbers[0]
                                         
                                         # 添加详细调试日志
-                                        self._silent_log.log(f"  [数据映射调试] 元素: {element.class_name}, 值: {value}, 匹配文本: {combined_text}")
+                                        self._silent_log.log(f"  [数据映射调试] 元素: {element.class_name}, 值: {value}, 匹配文本: {combined_text}, 所有候选值: {valid_numbers}")
                                         self._silent_log.log(f"  [数据映射调试] 当前状态 - balance: {result['balance']}, points: {result['points']}, vouchers: {result['vouchers']}, coupons: {result['coupons']}")
                                         
                                         # 根据类别名称分配到对应字段
@@ -278,8 +299,13 @@ class ProfileReader:
                                             result['coupons'] = int(value)
                                             self._silent_log.log(f"  ✓ 优惠券: {result['coupons']}")
                                         else:
-                                            self._silent_log.log(f"  ⚠️ 未匹配到任何字段！元素类别: {element.class_name}")
+                                            self._silent_log.log(f"  ⚠️ 未匹配到任何字段！元素类别: {element.class_name}, 当前字段状态: balance={result['balance']}, points={result['points']}, vouchers={result['vouchers']}, coupons={result['coupons']}")
+                                    else:
+                                        self._silent_log.log(f"  ⚠️ 元素 {element.class_name} 没有合理的候选值")
+                                else:
+                                    self._silent_log.log(f"  ⚠️ 元素 {element.class_name} 的文本中没有提取到数字")
                             else:
+                                self._silent_log.log(f"  ⚠️ 元素 {element.class_name} 没有匹配到任何OCR文本")
                                 # 检测到元素但没有匹配到文本，设置为0避免进入区域OCR降级
                                 if '积分' in element.class_name and result['points'] is None:
                                     result['points'] = 0
@@ -287,6 +313,8 @@ class ProfileReader:
                                 elif '优惠' in element.class_name and result['coupons'] is None:
                                     result['coupons'] = 0
                                     self._silent_log.log(f"  ⚠️ 优惠券区域未识别到文本，设置为0")
+                    else:
+                        self._silent_log.log(f"  ⚠️ OCR结果为空或没有位置信息")
                     
                     # 如果检测到了某个元素但OCR完全失败，也设置为0
                     if 'points' in detected_elements and result['points'] is None:
@@ -1805,6 +1833,114 @@ class ProfileReader:
                 'y2': y2
             })
         
+        # 先尝试检测网格布局（4个关键字在同一行，4个数值在同一行）
+        keywords_info = {
+            'balance': ['余额', '账户余额'],
+            'points': ['积分', '我的积分'],
+            'vouchers': ['抵扣券', '抵扣', '代金券'],
+            'coupons': ['优惠券', '券']
+        }
+        
+        # 查找所有关键字的位置
+        found_keywords = []
+        for field, keyword_list in keywords_info.items():
+            for keyword in keyword_list:
+                for pos in text_positions:
+                    if keyword in pos['text']:
+                        found_keywords.append({
+                            'field': field,
+                            'keyword': keyword,
+                            'pos': pos
+                        })
+                        break
+                if found_keywords and found_keywords[-1]['field'] == field:
+                    break
+        
+        # 检查是否是网格布局：所有关键字的y坐标相近（±10px）
+        if len(found_keywords) >= 3:
+            keyword_y_values = [kw['pos']['center_y'] for kw in found_keywords]
+            y_min, y_max = min(keyword_y_values), max(keyword_y_values)
+            
+            if y_max - y_min < 10:
+                print(f"  [位置提取调试] 检测到网格布局，关键字在同一行 (y={y_min:.0f}-{y_max:.0f})")
+                
+                # 网格布局：按列匹配
+                # 找出所有数值，按y坐标分组
+                number_positions = []
+                for pos in text_positions:
+                    match = re.search(r'(\d+\.?\d*)', pos['text'].strip())
+                    if match:
+                        try:
+                            value = float(match.group(1))
+                            number_positions.append({
+                                'value': value,
+                                'text': pos['text'],
+                                'x': pos['center_x'],
+                                'y': pos['center_y']
+                            })
+                        except ValueError:
+                            pass
+                
+                # 找出在关键字上方的数值行（y < keyword_y - 10）
+                keyword_y = keyword_y_values[0]
+                above_numbers = [n for n in number_positions if n['y'] < keyword_y - 10]
+                
+                print(f"  [位置提取调试] 关键字y坐标: {keyword_y:.0f}, 找到 {len(above_numbers)} 个上方数值")
+                
+                if above_numbers:
+                    # 找出最接近关键字的那一行数值
+                    # 按y坐标分组（±5px为同一行）
+                    y_groups = {}
+                    for num in above_numbers:
+                        # 找到最接近的组
+                        found_group = False
+                        for group_y in y_groups:
+                            if abs(num['y'] - group_y) < 5:
+                                y_groups[group_y].append(num)
+                                found_group = True
+                                break
+                        if not found_group:
+                            y_groups[num['y']] = [num]
+                    
+                    # 选择最接近关键字的组（y坐标最大的组）
+                    closest_y = max(y_groups.keys())
+                    closest_numbers = y_groups[closest_y]
+                    
+                    print(f"  [位置提取调试] 找到最接近的数值行 (y={closest_y:.0f}), 包含 {len(closest_numbers)} 个数值")
+                    
+                    if len(closest_numbers) >= 3:
+                        print(f"  [位置提取调试] 使用网格布局匹配")
+                        
+                        # 按列匹配：为每个关键字找到x坐标最接近的数值
+                        for kw in found_keywords:
+                            field = kw['field']
+                            kw_x = kw['pos']['center_x']
+                            
+                            # 找到x坐标最接近的数值
+                            best_match = None
+                            best_distance = float('inf')
+                            
+                            for num in closest_numbers:
+                                distance = abs(num['x'] - kw_x)
+                                if distance < best_distance:
+                                    best_distance = distance
+                                    best_match = num
+                            
+                            if best_match:
+                                result[field] = best_match['value']
+                                print(f"  [位置提取调试]   ✓ {field} = {best_match['value']} (文本: '{best_match['text']}', x偏差: {best_distance:.0f}px)")
+                        
+                        print(f"  [位置提取调试] 网格布局提取完成:")
+                        print(f"    - balance: {result['balance']}")
+                        print(f"    - points: {result['points']}")
+                        print(f"    - vouchers: {result['vouchers']}")
+                        print(f"    - coupons: {result['coupons']}")
+                        
+                        return result
+        
+        # 如果不是网格布局，使用原来的逻辑
+        print(f"  [位置提取调试] 未检测到网格布局，使用逐个匹配")
+        
         # 查找关键字并提取附近的数字
         keywords = {
             'balance': ['余额', '账户余额'],
@@ -1826,9 +1962,9 @@ class ProfileReader:
                         break
                 
                 if keyword_pos:
-                    # 在关键字右侧或下方查找数字
-                    # 右侧：x > keyword_x, y 相近（±50px）
-                    # 下方：y > keyword_y, x 相近（±100px）
+                    # 在关键字右侧或上方查找数字
+                    # 右侧：x > keyword_x, y 相近（±20px）
+                    # 上方：y < keyword_y, x 相近（±40px）
                     candidates = []
                     
                     for pos in text_positions:
@@ -1845,38 +1981,46 @@ class ProfileReader:
                         except ValueError:
                             continue
                         
-                        # 检查位置关系
-                        # 右侧：x > keyword_x + 20, |y - keyword_y| < 50
-                        is_right = (pos['center_x'] > keyword_pos['center_x'] + 20 and 
-                                   abs(pos['center_y'] - keyword_pos['center_y']) < 50)
+                        # 检查位置关系 - 使用更严格的垂直对齐要求
+                        # 右侧：x > keyword_x + 20, y 几乎相同（±20px，更严格）
+                        y_diff = abs(pos['center_y'] - keyword_pos['center_y'])
+                        is_right = (pos['center_x'] > keyword_pos['center_x'] + 20 and y_diff < 20)
                         
-                        # 下方：y > keyword_y + 10, |x - keyword_x| < 100
-                        is_below = (pos['center_y'] > keyword_pos['center_y'] + 10 and 
-                                   abs(pos['center_x'] - keyword_pos['center_x']) < 100)
+                        # 上方：y < keyword_y - 10, x 几乎相同（±40px，稍微放宽）
+                        x_diff = abs(pos['center_x'] - keyword_pos['center_x'])
+                        is_above = (pos['center_y'] < keyword_pos['center_y'] - 10 and x_diff < 40)
                         
-                        if is_right or is_below:
-                            # 计算距离（优先右侧）
+                        if is_right or is_above:
+                            # 计算综合得分：对齐程度 + 距离
+                            # 对齐程度越好，得分越低（越优先）
                             if is_right:
-                                distance = abs(pos['center_x'] - keyword_pos['center_x'])
+                                # 右侧：优先考虑垂直对齐程度，然后是水平距离
+                                alignment_score = y_diff * 10  # 垂直偏差的权重
+                                distance_score = abs(pos['center_x'] - keyword_pos['center_x'])
+                                score = alignment_score + distance_score
                                 direction = "右侧"
                             else:
-                                distance = abs(pos['center_y'] - keyword_pos['center_y']) + 1000  # 下方的距离加权
-                                direction = "下方"
+                                # 上方：优先考虑水平对齐程度，然后是垂直距离
+                                alignment_score = x_diff * 10  # 水平偏差的权重
+                                distance_score = abs(pos['center_y'] - keyword_pos['center_y'])
+                                score = alignment_score + distance_score
+                                direction = "上方"
                             
-                            print(f"  [位置提取调试]   候选值: {value} (文本: '{pos['text']}', 方向: {direction}, 距离: {distance:.0f})")
+                            print(f"  [位置提取调试]   候选值: {value} (文本: '{pos['text']}', 方向: {direction}, 对齐偏差: {y_diff if is_right else x_diff:.0f}px, 得分: {score:.0f})")
                             
                             candidates.append({
                                 'value': value,
-                                'distance': distance,
-                                'text': pos['text']
+                                'score': score,
+                                'text': pos['text'],
+                                'direction': direction
                             })
                     
-                    # 选择最近的候选
+                    # 选择得分最低的候选（对齐最好且距离最近）
                     if candidates:
-                        candidates.sort(key=lambda x: x['distance'])
+                        candidates.sort(key=lambda x: x['score'])
                         selected = candidates[0]
                         result[field] = selected['value']
-                        print(f"  [位置提取调试]   ✓ 选择: {field} = {selected['value']} (文本: '{selected['text']}')")
+                        print(f"  [位置提取调试]   ✓ 选择: {field} = {selected['value']} (文本: '{selected['text']}', 方向: {selected['direction']})")
                         break  # 找到就跳出keyword循环
                     else:
                         print(f"  [位置提取调试]   ✗ 未找到候选值")

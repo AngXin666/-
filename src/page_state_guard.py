@@ -7,14 +7,14 @@ import asyncio
 from typing import Optional, Callable, Any, List, Union
 from functools import wraps
 
-from .page_detector_hybrid import PageDetectorHybrid, PageState
+from .page_detector import PageState
 from .adb_bridge import ADBBridge
 
 
 class PageStateGuard:
     """页面状态守卫 - 在操作前后验证页面状态"""
     
-    def __init__(self, adb: ADBBridge, detector: Union['PageDetectorHybrid', 'PageDetectorIntegrated']):
+    def __init__(self, adb: ADBBridge, detector: 'PageDetectorIntegrated'):
         """初始化页面状态守卫
         
         Args:
@@ -50,19 +50,9 @@ class PageStateGuard:
             await asyncio.sleep(5)
             print(f"  [{operation_name}] ✓ 应用已重新启动")
         
-        # 使用优先级模板加速检测
-        from .template_priority_config import get_priority_templates
-        priority_templates = get_priority_templates('guard_general')
-        
         for attempt in range(max_retries):
-            # 优先使用模板匹配（快速）
-            if priority_templates:
-                page_result = await self.detector.detect_page_with_priority(
-                    device_id, priority_templates, use_cache=True
-                )
-            else:
-                # 降级到普通检测
-                page_result = await self.detector.detect_page(device_id, use_ocr=True)
+            # 使用整合检测器检测页面
+            page_result = await self.detector.detect_page(device_id, use_ocr=True)
             
             # 检查返回值是否有效
             if not page_result or not page_result.state:
@@ -89,13 +79,8 @@ class PageStateGuard:
                       f"期望: {expected_state.value}，等待后重试...")
                 await asyncio.sleep(2)
         
-        # 最后一次检查（使用优先级模板）
-        if priority_templates:
-            page_result = await self.detector.detect_page_with_priority(
-                device_id, priority_templates, use_cache=False
-            )
-        else:
-            page_result = await self.detector.detect_page(device_id, use_ocr=True)
+        # 最后一次检查
+        page_result = await self.detector.detect_page(device_id, use_ocr=True)
         if not page_result or not page_result.state:
             print(f"  [{operation_name}] ❌ 页面状态验证失败: 无法检测页面")
         else:
@@ -121,16 +106,8 @@ class PageStateGuard:
             print(f"  [{operation_name}] ❌ 应用不在前台运行（可能已退出或在其他应用）")
             return PageState.LAUNCHER  # 返回桌面状态
         
-        # 使用优先级模板加速检测
-        from .template_priority_config import get_priority_templates
-        priority_templates = get_priority_templates(scenario)
-        
-        if priority_templates:
-            page_result = await self.detector.detect_page_with_priority(
-                device_id, priority_templates, use_cache=True
-            )
-        else:
-            page_result = await self.detector.detect_page(device_id, use_ocr=True)
+        # 使用整合检测器检测页面（页面分类器 + YOLO）
+        page_result = await self.detector.detect_page(device_id, use_ocr=True)
         
         if not page_result or not page_result.state:
             print(f"  [{operation_name}] ⚠️ 无法检测页面状态，返回 UNKNOWN")
@@ -200,6 +177,13 @@ class PageStateGuard:
             await asyncio.sleep(1)
             return True
         
+        # 6.5. 如果是温馨提示弹窗，按返回键关闭
+        if current_state == PageState.WARMTIP:
+            print(f"  [{operation_name}] ⚠️ 检测到温馨提示弹窗，按返回键关闭...")
+            await self.adb.press_back(device_id)
+            await asyncio.sleep(1)
+            return True
+        
         # 7. 如果是签到页面，按返回键返回首页
         if current_state == PageState.CHECKIN:
             print(f"  [{operation_name}] ⚠️ 检测到签到页面，按返回键返回首页...")
@@ -207,18 +191,31 @@ class PageStateGuard:
             await asyncio.sleep(2)
             return True
         
-        # 8. 如果是未知页面，获取详细信息判断如何处理
+        # 8. 如果是文章页，按返回键返回
+        if current_state == PageState.ARTICLE:
+            print(f"  [{operation_name}] ⚠️ 检测到文章页，按返回键返回...")
+            await self.adb.press_back(device_id)
+            await asyncio.sleep(2)
+            return True
+        
+        # 9. 如果是搜索页，按返回键返回
+        if current_state == PageState.SEARCH:
+            print(f"  [{operation_name}] ⚠️ 检测到搜索页，按返回键返回...")
+            await self.adb.press_back(device_id)
+            await asyncio.sleep(2)
+            return True
+        
+        # 10. 如果是分类页，按返回键返回
+        if current_state == PageState.CATEGORY:
+            print(f"  [{operation_name}] ⚠️ 检测到分类页，按返回键返回...")
+            await self.adb.press_back(device_id)
+            await asyncio.sleep(2)
+            return True
+        
+        # 11. 如果是未知页面，获取详细信息判断如何处理
         if current_state == PageState.UNKNOWN:
-            # 获取页面详细信息（使用异常处理专用模板）
-            from .template_priority_config import get_priority_templates
-            exception_templates = get_priority_templates('guard_exception')
-            
-            if exception_templates:
-                page_result = await self.detector.detect_page_with_priority(
-                    device_id, exception_templates, use_cache=False
-                )
-            else:
-                page_result = await self.detector.detect_page(device_id, use_ocr=True)
+            # 获取页面详细信息
+            page_result = await self.detector.detect_page(device_id, use_ocr=True)
             if page_result and page_result.details:
                 details = page_result.details
                 print(f"  [{operation_name}] ⚠️ 检测到未知页面: {details}")
@@ -249,7 +246,7 @@ class PageStateGuard:
                 await asyncio.sleep(2)
                 return True
         
-        # 9. 其他未知状态
+        # 12. 其他未知状态
         print(f"  [{operation_name}] ⚠️ 未处理的页面状态: {current_state.value}")
         return False
     
@@ -323,17 +320,9 @@ class PageStateGuard:
                     continue
                 return False
             
-            # 2. 验证是否到达目标页面（使用导航验证专用模板）
+            # 2. 验证是否到达目标页面
             await asyncio.sleep(1)
-            from .template_priority_config import get_priority_templates
-            nav_templates = get_priority_templates('navigation')
-            
-            if nav_templates:
-                page_result = await self.detector.detect_page_with_priority(
-                    device_id, nav_templates, use_cache=False
-                )
-            else:
-                page_result = await self.detector.detect_page(device_id, use_ocr=True)
+            page_result = await self.detector.detect_page(device_id, use_ocr=True)
             
             # 检查返回值是否有效
             if not page_result or not page_result.state:
@@ -368,16 +357,8 @@ class PageStateGuard:
         Returns:
             bool: 是否成功
         """
-        # 1. 检查当前页面（使用导航验证专用模板）
-        from .template_priority_config import get_priority_templates
-        nav_templates = get_priority_templates('navigation')
-        
-        if nav_templates:
-            page_result = await self.detector.detect_page_with_priority(
-                device_id, nav_templates, use_cache=True
-            )
-        else:
-            page_result = await self.detector.detect_page(device_id, use_ocr=True)
+        # 1. 检查当前页面
+        page_result = await self.detector.detect_page(device_id, use_ocr=True)
         
         # 检查返回值是否有效
         if page_result is None or page_result.state is None:
@@ -393,13 +374,8 @@ class PageStateGuard:
         if page_result.state in [PageState.POPUP, PageState.AD]:
             await self._handle_unexpected_page(device_id, page_result.state, target_state, operation_name)
             await asyncio.sleep(1)
-            # 再次检查（使用导航验证专用模板）
-            if nav_templates:
-                page_result = await self.detector.detect_page_with_priority(
-                    device_id, nav_templates, use_cache=False
-                )
-            else:
-                page_result = await self.detector.detect_page(device_id, use_ocr=True)
+            # 再次检查
+            page_result = await self.detector.detect_page(device_id, use_ocr=True)
             if page_result and page_result.state == target_state:
                 return True
         

@@ -1,0 +1,162 @@
+{
+  "version": "1.0.0",
+  "description": "页面类型到PageState的映射配置",
+  "mappings": {
+    "个人页_已登录": {
+      "state": "PROFILE_LOGGED",
+      "state_value": "profile_logged",
+      "chinese_name": "个人页（已登录）",
+      "description": "用户已登录的个人页面"
+    },
+    "个人页_未登录": {
+      "state": "PROFILE",
+      "state_value": "profile",
+      "chinese_name": "个人页（未登录）",
+      "description": "用户未登录的个人页面"
+    },
+    "个人页广告": {
+      "state": "PROFILE_AD",
+      "state_value": "profile_ad",
+      "chinese_name": "个人页广告",
+      "description": "个人页面的广告弹窗"
+    },
+    "交易流水": {
+      "state": "TRANSACTION_HISTORY",
+      "state_value": "transaction_history",
+      "chinese_name": "交易流水",
+      "description": "交易记录页面"
+    },
+    "优惠劵": {
+      "state": "COUPON",
+      "state_value": "coupon",
+      "chinese_name": "优惠劵页",
+      "description": "优惠券页面"
+    },
+    "分类页": {
+      "state": "CATEGORY",
+      "state_value": "category",
+      "chinese_name": "分类页",
+      "description": "商品分类页面"
+    },
+    "加载页": {
+      "state": "LOADING",
+      "state_value": "loading",
+      "chinese_name": "加载中",
+      "description": "页面加载中状态"
+    },
+    "启动页服务弹窗": {
+      "state": "STARTUP_POPUP",
+      "state_value": "startup_popup",
+      "chinese_name": "启动页服务弹窗",
+      "description": "应用启动时的服务弹窗"
+    },
+    "广告页": {
+      "state": "AD",
+      "state_value": "ad",
+      "chinese_name": "广告页",
+      "description": "广告页面"
+    },
+    "搜索页": {
+      "state": "SEARCH",
+      "state_value": "search",
+      "chinese_name": "搜索页",
+      "description": "搜索页面"
+    },
+    "文章页": {
+      "state": "ARTICLE",
+      "state_value": "article",
+      "chinese_name": "文章页",
+      "description": "文章详情页面"
+    },
+    "模拟器桌面": {
+      "state": "LAUNCHER",
+      "state_value": "launcher",
+      "chinese_name": "Android桌面",
+      "description": "Android系统桌面"
+    },
+    "温馨提示": {
+      "state": "WARMTIP",
+      "state_value": "warmtip",
+      "chinese_name": "温馨提示",
+      "description": "温馨提示弹窗"
+    },
+    "登录页": {
+      "state": "LOGIN",
+      "state_value": "login",
+      "chinese_name": "登录页",
+      "description": "用户登录页面"
+    },
+    "积分页": {
+      "state": "POINTS_PAGE",
+      "state_value": "points_page",
+      "chinese_name": "积分页",
+      "description": "积分页面"
+    },
+    "签到弹窗": {
+      "state": "CHECKIN_POPUP",
+      "state_value": "checkin_popup",
+      "chinese_name": "签到弹窗",
+      "description": "签到成功弹窗"
+    },
+    "签到页": {
+      "state": "CHECKIN",
+      "state_value": "checkin",
+      "chinese_name": "签到页",
+      "description": "每日签到页面"
+    },
+    "设置页": {
+      "state": "SETTINGS",
+      "state_value": "settings",
+      "chinese_name": "设置页",
+      "description": "应用设置页面"
+    },
+    "商品列表": {
+      "state": "PRODUCT_LIST",
+      "state_value": "product_list",
+      "chinese_name": "商品列表",
+      "description": "商品列表页面"
+    },
+    "转账确认弹窗": {
+      "state": "TRANSFER_CONFIRM",
+      "state_value": "transfer_confirm",
+      "chinese_name": "转账确认弹窗",
+      "description": "转账确认弹窗"
+    },
+    "转账页": {
+      "state": "TRANSFER",
+      "state_value": "transfer",
+      "chinese_name": "转账页",
+      "description": "转账页面"
+    },
+    "钱包页": {
+      "state": "WALLET",
+      "state_value": "wallet",
+      "chinese_name": "钱包页",
+      "description": "钱包页面"
+    },
+    "首页": {
+      "state": "HOME",
+      "state_value": "home",
+      "chinese_name": "首页",
+      "description": "应用首页"
+    },
+    "首页公告": {
+      "state": "HOME_NOTICE",
+      "state_value": "home_notice",
+      "chinese_name": "首页公告",
+      "description": "首页公告弹窗"
+    },
+    "首页异常代码弹窗": {
+      "state": "HOME_ERROR_POPUP",
+      "state_value": "home_error_popup",
+      "chinese_name": "首页异常代码弹窗",
+      "description": "首页异常代码弹窗"
+    }
+  },
+  "auto_register": {
+    "enabled": true,
+    "default_state": "UNKNOWN",
+    "default_state_value": "unknown",
+    "description": "未映射的类别自动注册为UNKNOWN状态"
+  }
+}

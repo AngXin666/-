@@ -98,7 +98,7 @@
     "balance": {
       "name": "余额积分检测模型",
       "page_type": "个人页_已登录_余额积分",
-      "model_path": "runs/detect/yolo_runs/balance_detector/train4/weights/best.pt",
+      "model_path": "runs/detect/yolo_runs/balance_detector/train/weights/best.pt",
       "classes": [
         "余额数字",
         "积分数字",
@@ -602,32 +602,6 @@
       },
       "file_size_mb": 5.96,
       "file_hash": "fa3c551114485681",
-      "auto_registered": true,
-      "notes": "自动注册于 2026-01-31 00:01:31"
-    },
-    "checkin": {
-      "name": "签到页检测模型",
-      "page_type": "签到页",
-      "model_path": "yolo_runs/checkin_detector/weights/best.pt",
-      "classes": [
-        "签到按钮"
-      ],
-      "num_classes": 1,
-      "performance": {
-        "mAP50": 0.0,
-        "precision": 0.0,
-        "recall": 0.0,
-        "mAP50-95": 0.0
-      },
-      "training_date": "2026-01-31",
-      "dataset_size": {
-        "original": 0,
-        "augmented": 0,
-        "train": 0,
-        "val": 0
-      },
-      "file_size_mb": 17.48,
-      "file_hash": "0ab19fb92f9b7361",
       "auto_registered": true,
       "notes": "自动注册于 2026-01-31 00:01:31"
     },
@@ -1444,6 +1418,58 @@
       "file_hash": "2ec5b1b5e0c369d2",
       "auto_registered": true,
       "notes": "自动注册于 2026-01-31 00:42:31"
+    },
+    "train4_20260208_022849": {
+      "name": "train4检测模型",
+      "page_type": "train4",
+      "model_path": "runs/detect/yolo_runs/balance_detector/train4/weights/best.pt",
+      "classes": [
+        "按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-02-08",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 5.95,
+      "file_hash": "fc59c3b2fa12f82c",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-02-08 02:28:49"
+    },
+    "checkin": {
+      "name": "签到页检测模型",
+      "page_type": "签到页",
+      "model_path": "yolo_runs/checkin_detector/weights/best.pt",
+      "classes": [
+        "签到按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-02-08",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 17.48,
+      "file_hash": "0ab19fb92f9b7361",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-02-08 02:59:10"
     }
   },
   "usage": {
@@ -1455,5 +1481,5 @@
     }
   },
   "version": "1.0",
-  "last_updated": "2026-01-31"
+  "last_updated": "2026-02-08"
 }

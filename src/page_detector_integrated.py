@@ -38,7 +38,8 @@ except ImportError:
     HAS_YOLO = False
 
 from .adb_bridge import ADBBridge
-from .page_detector import PageState, PageDetectionResult
+from .page_detector import PageDetectionResult
+from .page_state_dynamic import PageState, PageStateType
 
 
 @dataclass
@@ -69,6 +70,7 @@ class PageDetectorIntegrated:
                  classes_path='page_classes.json',
                  yolo_registry_path='yolo_model_registry.json',
                  mapping_path='page_yolo_mapping.json',
+                 state_mapping_path='page_state_mapping.json',
                  log_callback=None):
         """初始化整合检测器
         
@@ -78,6 +80,7 @@ class PageDetectorIntegrated:
             classes_path: 类别列表文件路径
             yolo_registry_path: YOLO模型注册表路径
             mapping_path: 页面-YOLO映射配置路径
+            state_mapping_path: 页面状态映射配置路径
             log_callback: 日志回调函数
         """
         self.adb = adb
@@ -96,39 +99,16 @@ class PageDetectorIntegrated:
         self._yolo_registry = {}
         self._page_yolo_mapping = {}
         
-        # 类别名称到PageState的映射
-        self._class_to_state = {
-            '个人页_已登录': PageState.PROFILE_LOGGED,
-            '个人页_未登录': PageState.PROFILE,
-            '个人页广告': PageState.PROFILE_AD,
-            '交易流水': PageState.TRANSACTION_HISTORY,
-            '优惠劵': PageState.COUPON,
-            '分类页': PageState.CATEGORY,
-            '加载页': PageState.LOADING,
-            '启动页服务弹窗': PageState.STARTUP_POPUP,
-            '广告页': PageState.AD,
-            '搜索页': PageState.SEARCH,
-            '文章页': PageState.ARTICLE,
-            '模拟器桌面': PageState.LAUNCHER,
-            '温馨提示': PageState.WARMTIP,
-            '登录页': PageState.LOGIN,
-            '积分页': PageState.POINTS_PAGE,
-            '签到弹窗': PageState.CHECKIN_POPUP,
-            '签到页': PageState.CHECKIN,
-            '设置页': PageState.SETTINGS,
-            '转账确认弹窗': PageState.TRANSFER_CONFIRM,
-            '转账页': PageState.TRANSFER,
-            '钱包页': PageState.WALLET,
-            '首页': PageState.HOME,
-            '首页公告': PageState.HOME_NOTICE,
-            '首页异常代码弹窗': PageState.HOME_ERROR_POPUP,
-        }
+        # 类别名称到PageState的映射（从配置文件动态加载）
+        self._class_to_state = {}
+        self._state_mapping_config = {}
         
         # 初始化检测缓存
         from .performance.detection_cache import DetectionCache
         self._detection_cache = DetectionCache(ttl=0.5)  # 缓存0.5秒，足够快速检测页面变化
         
         # 加载配置和模型
+        self._load_state_mapping(state_mapping_path)  # 先加载状态映射
         self._load_classifier(classifier_model_path, classes_path)
         self._load_yolo_registry(yolo_registry_path)
         self._load_mapping(mapping_path)
@@ -150,6 +130,14 @@ class PageDetectorIntegrated:
         if level == "info" or self._verbose:
             if self._log_callback:
                 self._log_callback(msg)
+            else:
+                # 如果没有回调函数，使用标准logger
+                from .logger import get_logger
+                logger = get_logger()
+                if level == "info":
+                    logger.info(msg)
+                else:
+                    logger.debug(msg)
     
     def set_verbose(self, verbose: bool):
         """设置是否输出详细日志
@@ -158,6 +146,51 @@ class PageDetectorIntegrated:
             verbose: True=输出详细日志，False=只输出关键信息
         """
         self._verbose = verbose
+    
+    def _load_state_mapping(self, mapping_path: str):
+        """加载页面状态映射配置
+        
+        Args:
+            mapping_path: 映射配置文件路径
+        """
+        # 动态 PageState 会自动从配置文件加载
+        # 这里只需要构建类别名称到 PageState 的映射
+        try:
+            # 尝试在config目录查找
+            if not os.path.exists(mapping_path):
+                alt_mapping_path = os.path.join('config', mapping_path)
+                if os.path.exists(alt_mapping_path):
+                    mapping_path = alt_mapping_path
+            
+            # 强制重新加载 PageState 配置（确保使用最新配置）
+            if os.path.exists(mapping_path):
+                # 先重置加载状态，强制重新加载
+                PageState._loaded = False
+                PageState.load_from_config(Path(mapping_path))
+            
+            # 构建类别名称到 PageState 的映射
+            # 从 PageState 的所有状态中构建映射
+            self._class_to_state = {}
+            
+            # 同时加载配置文件，获取原始类别名称
+            if os.path.exists(mapping_path):
+                with open(mapping_path, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                    mappings = config.get('mappings', {})
+                    
+                    # 使用原始类别名称作为键
+                    for class_name, state_config in mappings.items():
+                        state_name = state_config.get('state', 'UNKNOWN')
+                        state_obj = PageState.get_by_name(state_name)
+                        if state_obj:
+                            self._class_to_state[class_name] = state_obj
+            
+            print(f"[整合检测器] ✓ 已加载 {len(self._class_to_state)} 个页面状态映射")
+            
+        except Exception as e:
+            print(f"[整合检测器] ✗ 加载状态映射失败: {e}")
+            # 使用默认映射
+            self._class_to_state = {}
     
     def _load_classifier(self, model_path: str, classes_path: str):
         """加载页面分类器"""
@@ -376,9 +409,7 @@ class PageDetectorIntegrated:
             print(f"  [_detect_elements] ✗ YOLO库未安装")
             return []
         
-        # 调试信息：输出所有可用的映射键
         print(f"  [_detect_elements] 页面类型: {page_class}")
-        print(f"  [_detect_elements] 映射配置中的所有页面类型: {list(self._page_yolo_mapping.keys())[:10]}...")  # 只显示前10个
         
         # 获取该页面类型对应的YOLO模型
         mapping = self._page_yolo_mapping.get(page_class, {})
@@ -519,6 +550,12 @@ class PageDetectorIntegrated:
         # 映射到PageState
         state = self._class_to_state.get(page_class, PageState.UNKNOWN)
         
+        # 如果映射失败，输出警告日志
+        if state == PageState.UNKNOWN:
+            print(f"[整合检测器] ⚠️ 未找到页面类别映射: '{page_class}'")
+            print(f"[整合检测器] 提示: 请检查 config/page_state_mapping.json 中是否包含此类别")
+            print(f"[整合检测器] 或点击'🔄 注册新模型'按钮自动注册")
+        
         # 2. 使用YOLO检测页面元素（可选）
         elements = []
         yolo_model_used = None
@@ -532,7 +569,11 @@ class PageDetectorIntegrated:
                     yolo_model_used = yolo_models[0].get('model_key')
         
         # 构建结果
-        details = f"页面分类: {page_class} (置信度: {confidence:.2%})"
+        if state == PageState.UNKNOWN:
+            details = f"⚠️ 未映射的页面类别: {page_class} (置信度: {confidence:.2%})"
+        else:
+            details = f"页面分类: {page_class} (置信度: {confidence:.2%})"
+        
         if elements:
             details += f", 检测到 {len(elements)} 个元素"
         

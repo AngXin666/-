@@ -66,21 +66,20 @@ class ProfileInfoManager:
         
         # 检查是否在积分页，如果是则需要返回首页再导航到个人页
         try:
-            from .page_detector_hybrid import PageDetectorHybrid, PageState
+            from .page_detector import PageState
             from .adb_bridge import ADBBridge
+            from .model_manager import ModelManager
             
             # 获取 ADB 实例（从 profile_reader 中获取）
             adb = profile_reader.adb
             
-            # 创建临时的页面检测器
-            detector = PageDetectorHybrid(adb)
+            # 获取整合检测器
+            model_manager = ModelManager.get_instance()
+            detector = model_manager.get_page_detector_integrated()
             
             # 检测当前页面
             print(f"  → [页面检查] 检测当前页面状态...")
-            page_templates = ['积分页.png', '已登陆个人页.png', '未登陆个人页.png']
-            page_result = await detector.detect_page_with_priority(
-                device_id, page_templates, use_cache=False
-            )
+            page_result = await detector.detect_page(device_id, use_ocr=True)
             
             # 如果在积分页，需要返回首页再导航到个人页
             if page_result and page_result.state == PageState.PROFILE_LOGGED:

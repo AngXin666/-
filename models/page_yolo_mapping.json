@@ -4,8 +4,8 @@
       "page_state": "PROFILE_LOGGED",
       "yolo_models": [
         {
-          "model_key": "profile_detailed",
-          "purpose": "检测8个区域（首页按钮、我的按钮、余额、积分、抵扣券、优惠券、昵称、ID）",
+          "model_key": "balance",
+          "purpose": "检测余额、积分、抵扣券、优惠券数字",
           "priority": 1
         }
       ]
@@ -171,9 +171,14 @@
       "page_state": "CHECKIN_POPUP",
       "yolo_models": [
         {
+          "model_key": "签到页",
+          "purpose": "检测签到按钮和签到次数",
+          "priority": 1
+        },
+        {
           "model_key": "签到成功弹窗",
           "purpose": "检测签到成功文本、金额和关闭按钮",
-          "priority": 1
+          "priority": 2
         }
       ]
     },
@@ -413,6 +418,11 @@
           "model_key": "train4",
           "purpose": "检测按钮",
           "priority": 1
+        },
+        {
+          "model_key": "train4_20260208_022849",
+          "purpose": "检测按钮",
+          "priority": 2
         }
       ]
     },
@@ -443,5 +453,5 @@
     "example": "页面分类器识别为'首页' -> 加载homepage YOLO模型 -> 检测'每日签到按钮'和'我的按钮'"
   },
   "version": "1.0",
-  "last_updated": "2026-01-31"
+  "last_updated": "2026-02-08"
 }

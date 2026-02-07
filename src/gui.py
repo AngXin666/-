@@ -1944,7 +1944,7 @@ class AutomationGUI:
                 # 余额（索引9，balance_after）
                 try:
                     balance_str = values[9]
-                    if balance_str and balance_str != "N/A" and balance_str != "-" and balance_str != "待处理":
+                    if balance_str and balance_str != "N/A" and balance_str != "-" and balance_str != "待处理" and balance_str != "None":
                         total_balance += float(balance_str)
                 except (ValueError, IndexError, TypeError) as e:
                     # 记录解析错误，便于调试
@@ -1954,7 +1954,7 @@ class AutomationGUI:
                 # 签到奖励（索引7）
                 try:
                     checkin_reward_str = values[7]
-                    if checkin_reward_str and checkin_reward_str != "N/A" and checkin_reward_str != "-" and checkin_reward_str != "待处理":
+                    if checkin_reward_str and checkin_reward_str != "N/A" and checkin_reward_str != "-" and checkin_reward_str != "待处理" and checkin_reward_str != "None":
                         total_checkin_reward += float(checkin_reward_str)
                 except (ValueError, IndexError, TypeError) as e:
                     # 记录解析错误，便于调试
@@ -2664,6 +2664,9 @@ class AutomationGUI:
         total_vouchers = 0.0
         total_coupons = 0
         
+        # 重置统计显示（从0开始）
+        self.root.after(0, lambda: self._update_stats(unchecked_count, 0, 0, 0.0, 0.0, 0, 0.0, 0))
+        
         # 直接使用已知的溪盟商城包名
         target_app = "com.ry.xmsc"
         
@@ -2860,6 +2863,9 @@ class AutomationGUI:
                             # 删除重复的成功消息，因为 _process_account 已经输出了 "✓ 账号处理完成"
                         else:
                             failed_count += 1
+                            
+                            # 修复：更新result.success为False，确保状态显示正确
+                            result.success = False
                             
                             # 确定失败原因
                             if not result:
@@ -3189,13 +3195,13 @@ class AutomationGUI:
             integrated_detector = model_manager.get_page_detector_integrated()
             
             # 创建AutoLogin，传递integrated_detector
-            # AutoLogin会从ModelManager获取hybrid_detector，不需要手动设置
+            # AutoLogin会从ModelManager获取整合检测器，不需要手动设置
             auto_login = AutoLogin(ui_automation, screen_capture, adb, 
                                   emulator_type=emulator_type_str,
                                   integrated_detector=integrated_detector)
             
             # 不再需要手动设置这些属性，AutoLogin会从ModelManager获取
-            # auto_login.hybrid_detector = ...  # 已在AutoLogin.__init__中从ModelManager获取
+            # auto_login.detector = ...  # 已在AutoLogin.__init__中从ModelManager获取
             auto_login.page_detector = PageDetector(adb)
             
             # XimengAutomation会从ModelManager获取所有模型
@@ -3274,17 +3280,16 @@ class AutomationGUI:
                 
                 # 从ModelManager获取共享的检测器实例
                 model_manager = ModelManager.get_instance()
-                integrated_detector = model_manager.get_page_detector_integrated()
-                hybrid_detector = model_manager.get_page_detector_hybrid()
+                detector = model_manager.get_page_detector_integrated()
                 
-                navigator = Navigator(adb, integrated_detector)
+                navigator = Navigator(adb, detector)
                 
                 # 导航到个人页面
                 nav_success = await navigator.navigate_to_profile(device_id)
                 if nav_success:
                     # 检测页面状态
                     profile_templates = ['已登陆个人页.png', '未登陆个人页.png']
-                    page_result = await hybrid_detector.detect_page_with_priority(
+                    page_result = await detector.detect_page_with_priority(
                         device_id, profile_templates, use_cache=False
                     )
                     
@@ -3309,7 +3314,7 @@ class AutomationGUI:
                                 await asyncio.sleep(1.5)  # 优化：减少等待时间，让启动流程智能检测
                                 
                                 # 清理页面检测缓存
-                                ximeng.hybrid_detector.clear_cache()
+                                ximeng.detector.clear_cache()
                                 
                                 # 重新处理启动流程
                                 file_logger = logging.getLogger(__name__)
@@ -3327,7 +3332,7 @@ class AutomationGUI:
                             else:
                                 log_callback("OK 用户ID验证通过，缓存有效！")
                                 # 清理页面检测缓存，因为当前已在个人页
-                                ximeng.hybrid_detector.clear_cache()
+                                ximeng.detector.clear_cache()
                         else:
                             # 无法获取用户ID，清理后重新登录
                             await adb.stop_app(device_id, target_app)
@@ -3335,7 +3340,7 @@ class AutomationGUI:
                             await auto_login.cache_manager.clear_app_login_data(device_id, target_app)
                             await adb.start_app(device_id, target_app, target_activity)
                             await asyncio.sleep(1.5)  # 优化：减少等待时间
-                            ximeng.hybrid_detector.clear_cache()
+                            ximeng.detector.clear_cache()
                             file_logger = logging.getLogger(__name__)
                             startup_ok = await ximeng.handle_startup_flow_integrated(
                                 device_id, log_callback=log_callback,
@@ -3349,10 +3354,10 @@ class AutomationGUI:
                             has_valid_cache = False
                     else:
                         has_valid_cache = False
-                        ximeng.hybrid_detector.clear_cache()
+                        ximeng.detector.clear_cache()
                 else:
                     has_valid_cache = False
-                    ximeng.hybrid_detector.clear_cache()
+                    ximeng.detector.clear_cache()
             elif has_valid_cache and not enable_profile:
                 # 快速签到模式：跳过ID验证，直接使用缓存
                 log_callback("快速签到模式：跳过用户ID验证，直接使用缓存")
@@ -3744,32 +3749,52 @@ class AutomationGUI:
         self._user_management_window = UserManagementDialog(self.root, self._log)
     
     def _auto_check_new_models(self):
-        """自动检查并注册新模型（启动时调用）"""
+        """自动检查并注册新模型和新页面类型（启动时调用）"""
         try:
             from .auto_model_registry import check_and_register_new_models
+            from .auto_page_type_registry import check_and_register_page_types
             
             # 在后台线程中执行，避免阻塞GUI
             def check_thread():
-                result = check_and_register_new_models(log_callback=None)
+                # 检查YOLO模型
+                yolo_result = check_and_register_new_models(log_callback=None)
                 
-                # 如果发现新模型，在主线程中显示提示
-                if result['new_models_count'] > 0:
-                    self.root.after(0, lambda: self._show_new_models_notification(result))
+                # 检查页面类型
+                page_result = check_and_register_page_types(log_callback=None)
+                
+                # 如果发现新内容，在主线程中显示提示
+                if yolo_result['new_models_count'] > 0 or page_result['new_types_count'] > 0:
+                    self.root.after(0, lambda: self._show_auto_register_notification(yolo_result, page_result))
             
             thread = threading.Thread(target=check_thread, daemon=True)
             thread.start()
             
         except Exception as e:
             # 静默失败，不影响程序启动
-            print(f"自动检测新模型失败: {e}")
+            print(f"自动检测失败: {e}")
     
-    def _show_new_models_notification(self, result: dict):
-        """显示新模型通知"""
-        if result['registered_count'] > 0:
+    def _show_auto_register_notification(self, yolo_result: dict, page_result: dict):
+        """显示自动注册通知"""
+        has_yolo = yolo_result['registered_count'] > 0
+        has_page = page_result['registered_count'] > 0
+        
+        if has_yolo or has_page:
             self._log("")
             self._log("=" * 60)
-            self._log(f"🎉 自动注册了 {result['registered_count']} 个新模型")
-            self._log(f"📦 版本已更新: {result['version']}")
+            self._log("🎉 自动注册完成")
+            self._log("=" * 60)
+            
+            if has_yolo:
+                self._log(f"✅ YOLO模型: {yolo_result['registered_count']} 个")
+                self._log(f"   版本: {yolo_result['version']}")
+            
+            if has_page:
+                self._log(f"✅ 页面类型: {page_result['registered_count']} 个")
+                self._log(f"   新类型: {', '.join(page_result.get('new_types', []))}")
+                self._log("")
+                self._log("💡 提示: 页面类型已自动注册，重启程序即可生效")
+                self._log("   无需手动修改代码！")
+            
             self._log("=" * 60)
             self._log("")
     
@@ -3777,32 +3802,73 @@ class AutomationGUI:
         """手动注册新模型（按钮点击）"""
         try:
             from .auto_model_registry import check_and_register_new_models
+            from .auto_page_type_registry import check_and_register_page_types
             
             self._log("")
             self._log("=" * 60)
-            self._log("🔍 正在扫描新模型...")
+            self._log("🔍 正在扫描新模型和新页面类型...")
             self._log("=" * 60)
             
             # 在后台线程中执行
             def register_thread():
-                result = check_and_register_new_models(
+                # 1. 注册YOLO模型
+                self.root.after(0, lambda: self._log(""))
+                self.root.after(0, lambda: self._log("📦 步骤1: 扫描YOLO模型..."))
+                
+                yolo_result = check_and_register_new_models(
+                    log_callback=lambda msg: self.root.after(0, lambda m=msg: self._log(m))
+                )
+                
+                # 2. 注册页面类型
+                self.root.after(0, lambda: self._log(""))
+                self.root.after(0, lambda: self._log("📦 步骤2: 扫描页面类型..."))
+                
+                page_result = check_and_register_page_types(
                     log_callback=lambda msg: self.root.after(0, lambda m=msg: self._log(m))
                 )
                 
                 # 显示结果
                 self.root.after(0, lambda: self._log(""))
                 self.root.after(0, lambda: self._log("=" * 60))
+                self.root.after(0, lambda: self._log("📊 注册结果汇总"))
+                self.root.after(0, lambda: self._log("=" * 60))
                 
-                if result['new_models_count'] == 0:
-                    self.root.after(0, lambda: self._log("✅ 未发现新模型，所有模型已是最新"))
-                elif result['registered_count'] > 0:
-                    self.root.after(0, lambda: self._log(f"✅ 成功注册 {result['registered_count']} 个新模型"))
-                    self.root.after(0, lambda: self._log(f"📦 版本已更新: {result['version']}"))
+                # YOLO模型结果
+                if yolo_result['new_models_count'] == 0:
+                    self.root.after(0, lambda: self._log("✅ YOLO模型: 未发现新模型"))
+                elif yolo_result['registered_count'] > 0:
+                    self.root.after(0, lambda: self._log(f"✅ YOLO模型: 成功注册 {yolo_result['registered_count']} 个"))
+                    self.root.after(0, lambda: self._log(f"   版本已更新: {yolo_result['version']}"))
+                
+                if yolo_result['errors']:
+                    self.root.after(0, lambda: self._log(f"⚠️ YOLO模型: {len(yolo_result['errors'])} 个注册失败"))
+                
+                # 页面类型结果
+                if page_result['new_types_count'] == 0:
+                    self.root.after(0, lambda: self._log("✅ 页面类型: 未发现新类型"))
+                elif page_result['registered_count'] > 0:
+                    self.root.after(0, lambda: self._log(f"✅ 页面类型: 成功注册 {page_result['registered_count']} 个"))
+                    self.root.after(0, lambda: self._log(f"   新类型: {', '.join(page_result.get('new_types', []))}"))
+                
+                if page_result['errors']:
+                    self.root.after(0, lambda: self._log(f"⚠️ 页面类型: {len(page_result['errors'])} 个注册失败"))
+                
+                # 总结
+                self.root.after(0, lambda: self._log(""))
+                self.root.after(0, lambda: self._log("=" * 60))
+                
+                total_registered = yolo_result['registered_count'] + page_result['registered_count']
+                if total_registered > 0:
+                    self.root.after(0, lambda: self._log(f"🎉 总计注册: {total_registered} 项"))
                     self.root.after(0, lambda: self._log(""))
-                    self.root.after(0, lambda: self._log("💡 提示：新模型将在下次启动程序时生效"))
-                
-                if result['errors']:
-                    self.root.after(0, lambda: self._log(f"⚠️ {len(result['errors'])} 个模型注册失败"))
+                    self.root.after(0, lambda: self._log("💡 提示："))
+                    if yolo_result['registered_count'] > 0:
+                        self.root.after(0, lambda: self._log("  • YOLO模型将在下次启动程序时生效"))
+                    if page_result['registered_count'] > 0:
+                        self.root.after(0, lambda: self._log("  • 页面类型已自动注册，重启程序即可生效"))
+                        self.root.after(0, lambda: self._log("  • 无需手动修改代码！"))
+                else:
+                    self.root.after(0, lambda: self._log("✅ 所有模型和类型都已是最新"))
                 
                 self.root.after(0, lambda: self._log("=" * 60))
                 self.root.after(0, lambda: self._log(""))
@@ -3811,7 +3877,7 @@ class AutomationGUI:
             thread.start()
             
         except Exception as e:
-            self._log(f"❌ 注册新模型失败: {str(e)}")
+            self._log(f"❌ 注册失败: {str(e)}")
             import traceback
             traceback.print_exc()
     

@@ -4,9 +4,9 @@ Ximeng Mall Business Automation Module
 
 代码清理记录：
 - 2026-02-02: 删除废弃的启动流程函数（handle_startup_flow, handle_startup_flow_optimized）
+- 2026-02-08: 删除模板匹配相关代码，统一使用整合检测器（YOLO + 页面分类器）
 - 保留实际使用的函数（handle_startup_flow_integrated）
-- 文件从 3531 行减少到 520 行（减少 85%）
-- 备份文件：ximeng_automation_backup_20260202.py
+- 文件从 3531 行减少到约 2000 行（减少 43%）
 """
 
 import asyncio
@@ -62,12 +62,8 @@ class XimengAutomation:
         from .model_manager import ModelManager
         model_manager = ModelManager.get_instance()
         
-        # 获取共享的检测器实例
-        self.integrated_detector = model_manager.get_page_detector_integrated()
-        self.hybrid_detector = model_manager.get_page_detector_hybrid()
-        
-        # 优先使用整合检测器（深度学习，更快更准确）
-        self.detector = self.integrated_detector
+        # 获取共享的检测器实例（整合检测器：YOLO + 页面分类器）
+        self.detector = model_manager.get_page_detector_integrated()
         
         # 初始化其他组件（使用共享检测器）
         from .navigator import Navigator
@@ -202,7 +198,7 @@ class XimengAutomation:
         concise.step(1, "启动应用")
         
         # 使用已初始化的整合检测器（GPU加速深度学习）
-        detector = self.integrated_detector
+        detector = self.detector
         if file_logger:
             file_logger.debug("使用已初始化的深度学习检测器（GPU加速）")
         
@@ -605,7 +601,7 @@ class XimengAutomation:
                 bool: 是否成功检测并点击
             """
             # 1. 尝试YOLO（直接使用按钮名称，不添加后缀）
-            button_pos = await self.integrated_detector.find_button_yolo(
+            button_pos = await self.detector.find_button_yolo(
                 device_id, 
                 model_name,
                 button_name,  # 直接使用按钮名称
@@ -657,23 +653,16 @@ class XimengAutomation:
         ad_closed_count = 0  # 记录关闭广告的次数
         
         while (asyncio.get_event_loop().time() - start_time) < max_scan_time:
-            # 检测当前页面状态
-            if self.integrated_detector:
-                page_result = await self.integrated_detector.detect_page(
-                    device_id, use_cache=False, detect_elements=False
-                )
-            else:
-                # 降级到混合检测器
-                balance_templates = ['已登陆个人页.png', '未登陆个人页.png', '个人页广告.png']
-                page_result = await self.hybrid_detector.detect_page_with_priority(
-                    device_id, balance_templates, use_cache=False
-                )
+            # 检测当前页面状态（使用整合检测器）
+            page_result = await self.detector.detect_page(
+                device_id, use_cache=False, detect_elements=False
+            )
             
             if not page_result or not page_result.state:
                 await asyncio.sleep(scan_interval)
                 continue
             
-            from .page_detector_hybrid import PageState
+            from .page_detector import PageState
             current_state = page_result.state
             
             # 检测到正常个人页 → 成功
@@ -687,7 +676,7 @@ class XimengAutomation:
                 log(f"  ⚠️ 检测到个人页广告，立即关闭...")
                 
                 # 方法1: 使用YOLO检测关闭按钮
-                close_button_pos = await self.integrated_detector.find_button_yolo(
+                close_button_pos = await self.detector.find_button_yolo(
                     device_id, 
                     '个人页广告',
                     '确认按钮',
@@ -708,8 +697,7 @@ class XimengAutomation:
                 await asyncio.sleep(0.3)
                 
                 # 清除缓存
-                if self.integrated_detector:
-                    self.integrated_detector.clear_cache(device_id)
+                self.detector.clear_cache(device_id)
                 
                 # 继续扫描（可能还有广告，或者已经到达个人页）
                 continue
@@ -865,7 +853,7 @@ class XimengAutomation:
                 
                 # 检测当前页面 - 使用整合检测器（GPU加速深度学习）
                 from .page_detector import PageState
-                page_result = await self.integrated_detector.detect_page(
+                page_result = await self.detector.detect_page(
                     device_id, use_cache=False, detect_elements=False
                 )
                 
@@ -881,12 +869,12 @@ class XimengAutomation:
                     await interruptible_sleep(3)  # 增加等待时间到3秒，让页面充分加载
                     
                     # 清理缓存（页面已改变）
-                    self.hybrid_detector.clear_cache()
+                    self.detector.clear_cache()
                     
                     # 按返回键后检测页面状态（最多重试3次）- 使用整合检测器（GPU加速）
                     for retry in range(3):
                         # 使用整合检测器进行快速检测
-                        page_result = await self.integrated_detector.detect_page(
+                        page_result = await self.detector.detect_page(
                             device_id, use_cache=False, detect_elements=False
                         )
                         
@@ -901,7 +889,7 @@ class XimengAutomation:
                                 log(f"⚠️ 仍在积分页，再按一次返回键...")
                                 await self.adb.press_back(device_id)
                                 await interruptible_sleep(3)
-                                self.hybrid_detector.clear_cache()
+                                self.detector.clear_cache()
                                 # 不break，继续重试检测
                             elif page_result.state == PageState.LAUNCHER:
                                 log(f"❌ 检测到桌面，应用已退出！尝试重启应用...")
@@ -914,11 +902,11 @@ class XimengAutomation:
                                 log(f"✓ 应用已重新启动")
                                 
                                 # 清理缓存（应用已重启）
-                                self.hybrid_detector.clear_cache()
+                                self.detector.clear_cache()
                                 
                                 # 重启后再次检测页面状态 - 使用整合检测器（GPU加速）
                                 log(f"检测应用启动后的页面状态...")
-                                page_result = await self.integrated_detector.detect_page(
+                                page_result = await self.detector.detect_page(
                                     device_id, use_cache=False, detect_elements=False
                                 )
                                 if page_result:
@@ -1006,7 +994,7 @@ class XimengAutomation:
                             # 立即检测页面状态（不等待）- 使用整合检测器（GPU加速）
                             detect_start = time.time()
                             from .page_detector import PageState
-                            page_result = await self.integrated_detector.detect_page(
+                            page_result = await self.detector.detect_page(
                                 device_id, use_cache=True, detect_elements=False
                             )
                             detect_time = time.time() - detect_start
@@ -1057,7 +1045,7 @@ class XimengAutomation:
                                 
                                 # 检查当前页面状态 - 使用整合检测器（GPU加速）
                                 from .page_detector import PageState
-                                page_result = await self.integrated_detector.detect_page(
+                                page_result = await self.detector.detect_page(
                                     device_id, use_cache=True, detect_elements=False
                                 )
                                 

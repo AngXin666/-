@@ -13,6 +13,13 @@ import numpy as np
 import pytesseract
 from PIL import Image
 
+try:
+    from rapidocr import RapidOCR
+    HAS_RAPIDOCR = True
+except ImportError:
+    HAS_RAPIDOCR = False
+    print("[警告] RapidOCR 未安装，OCR文字定位功能将不可用")
+
 from .adb_bridge import ADBBridge
 from .ocr_image_processor import enhance_for_ocr
 
@@ -245,9 +252,11 @@ class ScreenCapture:
         Returns:
             文字中心坐标，未找到返回 None
         """
+        if not HAS_RAPIDOCR:
+            print(f"[OCR错误] RapidOCR 未安装，无法使用文字定位功能")
+            return None
+        
         try:
-            from rapidocr_onnxruntime import RapidOCR
-            from PIL import Image
             from io import BytesIO
             
             # 获取截图
@@ -264,17 +273,25 @@ class ScreenCapture:
             
             # 使用 RapidOCR 识别文字
             ocr = RapidOCR()
-            result, _ = ocr(gray_img)
+            result = ocr(gray_img)
             
-            if not result:
+            # 新版本 rapidocr 返回 RapidOCROutput 对象
+            # 检查是否有识别结果
+            if result is None:
+                return None
+            
+            if result.boxes is None or result.txts is None:
+                return None
+            
+            if len(result.txts) == 0:
                 return None
             
             # 查找目标文字
-            for item in result:
-                text = item[1]  # 识别到的文字
-                box = item[0]   # 文字位置 [[x1,y1], [x2,y2], [x3,y3], [x4,y4]]
-                
+            for i, text in enumerate(result.txts):
                 if target_text in text:
+                    # 获取对应的边界框
+                    box = result.boxes[i]  # [[x1,y1], [x2,y2], [x3,y3], [x4,y4]]
+                    
                     # 计算中心点
                     x_coords = [point[0] for point in box]
                     y_coords = [point[1] for point in box]
@@ -285,6 +302,8 @@ class ScreenCapture:
             return None
         except Exception as e:
             print(f"[OCR错误] {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     async def extract_all_text(self, device_id: str) -> str:

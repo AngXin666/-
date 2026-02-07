@@ -8,7 +8,7 @@ from typing import Optional, Dict, Union
 from datetime import datetime
 
 from .adb_bridge import ADBBridge
-from .page_detector_hybrid import PageDetectorHybrid, PageState
+from .page_detector import PageState
 from .ocr_image_processor import enhance_for_ocr
 from .models.error_types import ErrorType
 from .timeouts_config import TimeoutsConfig
@@ -26,7 +26,7 @@ class BalanceTransfer:
     SUBMIT_BUTTON = (271, 521)  # 提交申请按钮 - 实测有效
     CONFIRM_BUTTON = (271, 615)  # 确认提交按钮 - OCR识别'确认提交'
     
-    def __init__(self, adb: ADBBridge, detector: Union['PageDetectorHybrid', 'PageDetectorIntegrated']):
+    def __init__(self, adb: ADBBridge, detector: 'PageDetectorIntegrated'):
         """初始化转账处理器
         
         Args:
@@ -36,16 +36,10 @@ class BalanceTransfer:
         self.adb = adb
         self.detector = detector
         
-        # 初始化模板匹配器（使用单例，避免重复加载）
-        import os
-        from .template_matcher import get_template_matcher
-        template_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'dist', 'JT')
-        self.template_matcher = get_template_matcher(template_dir) if os.path.exists(template_dir) else None
-        
-        # 初始化YOLO检测器（用于按钮检测）
+        # 初始化检测器
         from .model_manager import ModelManager
         model_manager = ModelManager.get_instance()
-        self.hybrid_detector = model_manager.get_page_detector_hybrid()
+        self.detector = model_manager.get_page_detector_integrated()
         
         # 检查是否有转账相关的YOLO模型
         self.has_wallet_yolo = self._check_yolo_model('钱包页')
@@ -108,7 +102,7 @@ class BalanceTransfer:
         if self.has_wallet_yolo:
             try:
                 log("  [转账] 使用YOLO检测余额按钮...")
-                buttons = await self.hybrid_detector.detect_buttons_yolo(device_id, "钱包页")
+                buttons = await self.detector.detect_buttons_yolo(device_id, "钱包页")
                 
                 if buttons:
                     # 查找"余额数字"按钮
@@ -595,57 +589,6 @@ class BalanceTransfer:
             
         except Exception as e:
             log(f"  [验证] 验证失败: {e}")
-            return False
-    
-    async def _verify_page_by_template(self, device_id: str, template_name: str, 
-                                       log_callback=None, timeout: int = 5) -> bool:
-        """使用模板匹配验证当前页面
-        
-        Args:
-            device_id: 设备ID
-            template_name: 模板名称（如"我的钱包.png"）
-            log_callback: 日志回调函数
-            timeout: 超时时间（秒）
-            
-        Returns:
-            bool: 是否匹配成功
-        """
-        def log(msg):
-            if log_callback:
-                log_callback(msg)
-        
-        try:
-            # 检查模板匹配器是否可用
-            if not self.template_matcher or not self.template_matcher.templates:
-                return False
-            
-            from .screen_capture import ScreenCapture
-            import cv2
-            
-            # 截图
-            screen_capture = ScreenCapture(self.adb)
-            screenshot = await screen_capture.capture(device_id)
-            
-            # 转换为字节流
-            _, screenshot_bytes = cv2.imencode(".png", screenshot)
-            screenshot_bytes = screenshot_bytes.tobytes()
-            
-            # 使用match_with_priority方法（会自动调整尺寸）
-            # 提高阈值到0.85，避免误识别（两个页面相似度都在0.7-0.8之间）
-            match_result = self.template_matcher.match_with_priority(
-                screenshot_bytes, 
-                [template_name], 
-                threshold=0.85
-            )
-            
-            if match_result:
-                log(f"  [验证] ✓ 成功匹配模板 '{template_name}' (相似度: {match_result['similarity']:.2f})")
-                return True
-            else:
-                return False
-                
-        except Exception as e:
-            log(f"  [验证] 模板匹配异常: {e}")
             return False
     
     async def _verify_page_by_ocr(self, device_id: str, keywords: list, 

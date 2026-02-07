@@ -57,6 +57,8 @@ class PageDetectorDL:
         '签到弹窗': PageState.CHECKIN_POPUP,  # 签到弹窗
         '签到页': PageState.CHECKIN,
         '设置页': PageState.SETTINGS,  # 设置页（异常页面）
+        '商品列表': PageState.UNKNOWN,  # 商品列表（异常页面）
+        '转账确认弹窗': PageState.TRANSFER_CONFIRM,  # 转账确认弹窗
         '转账页': PageState.TRANSFER,  # 转账页（转账流程）
         '钱包页': PageState.WALLET,  # 钱包页（转账流程）
         '首页': PageState.HOME,
