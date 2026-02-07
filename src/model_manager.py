@@ -42,9 +42,6 @@
     # 获取页面分类器
     detector = manager.get_page_detector_integrated()
     
-    # 获取YOLO检测器
-    yolo = manager.get_page_detector_hybrid()
-    
     # 获取OCR线程池
     ocr = manager.get_ocr_thread_pool()
     
@@ -84,12 +81,6 @@
           "classes_path": "page_classes.json",
           "device": "auto",
           "quantize": false
-        },
-        "page_detector_hybrid": {
-          "enabled": true,
-          "yolo_registry_path": "yolo_model_registry.json",
-          "mapping_path": "page_yolo_mapping.json",
-          "device": "auto"
         },
         "ocr_thread_pool": {
           "enabled": true,
@@ -297,12 +288,6 @@ class ModelManager:
                     'device': 'auto',
                     'quantize': False
                 },
-                'page_detector_hybrid': {
-                    'enabled': True,
-                    'yolo_registry_path': 'yolo_model_registry.json',
-                    'mapping_path': 'page_yolo_mapping.json',
-                    'device': 'auto'
-                },
                 'ocr_thread_pool': {
                     'enabled': True,
                     'thread_count': 4,
@@ -390,7 +375,6 @@ class ModelManager:
         
         关键模型包括：
         - page_detector_integrated: 页面分类是核心功能
-        - page_detector_hybrid: YOLO检测是核心功能
         
         Args:
             model_name: 模型名称
@@ -399,8 +383,7 @@ class ModelManager:
             bool: 如果是关键模型返回True，否则返回False
         """
         critical_models = [
-            'page_detector_integrated',
-            'page_detector_hybrid'
+            'page_detector_integrated'
         ]
         return model_name in critical_models
     
@@ -615,11 +598,8 @@ class ModelManager:
             raise FileNotFoundError(error_msg)
         
         # 要加载的模型列表
-        # 注意：page_detector_hybrid 已被 page_detector_integrated 替代
-        # 默认只加载整合检测器，混合检测器已废弃
         models_to_load = [
             ('page_detector_integrated', self._load_page_detector_integrated),
-            # ('page_detector_hybrid', self._load_page_detector_hybrid),  # 已废弃，不再加载
             ('ocr_thread_pool', self._load_ocr_thread_pool)
         ]
         
@@ -811,54 +791,6 @@ class ModelManager:
         
         return detector
     
-    def _load_page_detector_hybrid(self, adb_bridge) -> 'PageDetectorHybrid':
-        """加载YOLO检测器
-        
-        加载PageDetectorHybrid模型，包含所有YOLO模型。
-        
-        Args:
-            adb_bridge: ADB桥接器实例
-        
-        Returns:
-            PageDetectorHybrid: YOLO检测器实例
-        
-        Raises:
-            FileNotFoundError: 如果配置文件不存在
-            RuntimeError: 如果模型加载失败
-        """
-        try:
-            from .page_detector_hybrid import PageDetectorHybrid
-        except (ImportError, ValueError):
-            # 如果相对导入失败，尝试从src包导入
-            try:
-                from src.page_detector_hybrid import PageDetectorHybrid
-            except ImportError:
-                # 最后尝试直接导入
-                import page_detector_hybrid
-                PageDetectorHybrid = page_detector_hybrid.PageDetectorHybrid
-        
-        config = self._config['models']['page_detector_hybrid']
-        
-        # 验证配置文件存在（使用models目录）
-        mapping_path = self.models_dir / config['mapping_path']
-        if not mapping_path.exists():
-            raise FileNotFoundError(f"映射文件不存在: {mapping_path}")
-        
-        registry_path = self.models_dir / config.get('yolo_registry_path', 'yolo_model_registry.json')
-        if not registry_path.exists():
-            self._log(f"  [WARNING] YOLO注册表文件不存在: {registry_path}")
-        
-        # 创建实例（不显示文件路径，用户不需要看到）
-        # self._log(f"  - 映射文件: {mapping_path}")
-        # self._log(f"  - 注册表: {registry_path}")
-        
-        detector = PageDetectorHybrid(
-            adb=adb_bridge,
-            log_callback=self._log_callback
-        )
-        
-        return detector
-    
     def _load_ocr_thread_pool(self, adb_bridge) -> 'OCRThreadPool':
         """加载OCR线程池
         
@@ -950,16 +882,6 @@ class ModelManager:
             if not classes_path.exists():
                 missing_files.append(config['classes_path'])
         
-        # 检查YOLO映射文件
-        if self._is_model_enabled('page_detector_hybrid'):
-            config = self._config['models']['page_detector_hybrid']
-            
-            mapping_path = self.models_dir / config['mapping_path']
-            if not mapping_path.exists():
-                missing_files.append(config['mapping_path'])
-            
-            # YOLO注册表是可选的，不检查
-        
         # OCR不需要额外文件
         
         return missing_files
@@ -1021,29 +943,6 @@ class ModelManager:
                     "PageDetectorIntegrated未初始化，请先调用initialize_all_models()"
                 )
             return self._models['page_detector_integrated']
-    
-    def get_page_detector_hybrid(self) -> 'PageDetectorIntegrated':
-        """获取页面检测器（向后兼容方法）
-        
-        注意：PageDetectorHybrid已被PageDetectorIntegrated替代。
-        此方法现在返回整合检测器以保持向后兼容性。
-        
-        Returns:
-            PageDetectorIntegrated: 整合检测器实例
-        
-        Raises:
-            RuntimeError: 如果模型未初始化
-        """
-        import warnings
-        warnings.warn(
-            "get_page_detector_hybrid() 已废弃，请使用 get_page_detector_integrated()。"
-            "混合检测器已被整合检测器替代。",
-            DeprecationWarning,
-            stacklevel=2
-        )
-        
-        # 返回整合检测器（向后兼容）
-        return self.get_page_detector_integrated()
     
     def get_ocr_thread_pool(self) -> 'OCRThreadPool':
         """获取OCR线程池（线程安全）
@@ -1157,11 +1056,8 @@ class ModelManager:
         self._log("")
         
         # 要加载的模型列表
-        # 注意：page_detector_hybrid 已被 page_detector_integrated 替代
-        # 默认只加载整合检测器，混合检测器已废弃
         models_to_load = [
             ('page_detector_integrated', self._load_page_detector_integrated),
-            # ('page_detector_hybrid', self._load_page_detector_hybrid),  # 已废弃，不再加载
             ('ocr_thread_pool', self._load_ocr_thread_pool)
         ]
         

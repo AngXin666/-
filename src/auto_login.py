@@ -76,17 +76,13 @@ class AutoLogin:
         
         model_manager = ModelManager.get_instance()
         
-        # 优先使用整合检测器（深度学习），如果没有则使用混合检测器
+        # 使用整合检测器（YOLO + 页面分类器）
         if integrated_detector:
             self.detector = integrated_detector
-            print("[AutoLogin] 使用整合检测器（深度学习）")
         else:
-            self.detector = model_manager.get_page_detector_hybrid()
-            print("[AutoLogin] 使用混合检测器（模板匹配）")
+            self.detector = model_manager.get_page_detector_integrated()
         
-        # 保持兼容性
-        self.hybrid_detector = self.detector
-        self.integrated_detector = integrated_detector
+        print("[AutoLogin] 使用整合检测器（YOLO + 页面分类器）")
         
         self.guard = PageStateGuard(self.adb, self.detector)
         
@@ -289,14 +285,14 @@ class AutoLogin:
                 log_callback(msg)
         
         try:
-            from .page_detector_hybrid import PageState
+            from .page_detector import PageState
             
             # 如果 use_cache=False，说明已经确定需要正常登录，直接导航到登录页面
             if not use_cache:
                 log("直接执行正常登录流程...")
                 
                 # 检测当前页面
-                page_result = await self.hybrid_detector.detect_page(device_id, use_ocr=True)
+                page_result = await self.detector.detect_page(device_id, use_cache=False)
                 if not page_result or not page_result.state:
                     log("❌ 无法检测当前页面状态")
                     return LoginResult(success=False, error_message="无法检测页面状态")
@@ -474,7 +470,7 @@ class AutoLogin:
                 log_callback(msg)
         
         try:
-            from .page_detector_hybrid import PageState
+            from .page_detector import PageState
             
             # 1. 验证当前在登录页面（使用深度学习检测器）
             log("验证当前页面...")
@@ -691,7 +687,7 @@ class AutoLogin:
                 log_callback(msg)
         
         try:
-            from .page_detector_hybrid import PageState
+            from .page_detector import PageState
             
             # 1. 先用深度学习检测器验证当前页面
             log("检测当前页面...")

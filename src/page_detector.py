@@ -4,7 +4,6 @@ Page State Detection Module - Pixel-based detection (no OCR dependency)
 """
 
 import asyncio
-from enum import Enum
 from typing import Optional, Tuple
 from dataclasses import dataclass
 from io import BytesIO
@@ -16,80 +15,13 @@ except ImportError:
     HAS_PIL = False
 
 from .adb_bridge import ADBBridge
-
-
-class PageState(Enum):
-    """页面状态枚举"""
-    UNKNOWN = "unknown"           # 未知页面
-    LAUNCHER = "launcher"         # Android桌面/启动器
-    AD = "ad"                     # 广告页
-    HOME = "home"                 # 首页/主页
-    PROFILE = "profile"          # 我的页面（未登录）
-    PROFILE_LOGGED = "profile_logged"  # 我的页面（已登录）
-    LOGIN = "login"              # 登录页
-    LOGIN_ERROR = "login_error"  # 登录错误弹窗（手机号不存在/密码错误）
-    LOADING = "loading"          # 加载中
-    POPUP = "popup"              # 通用弹窗
-    CHECKIN = "checkin"          # 每日签到页面
-    CHECKIN_POPUP = "checkin_popup"  # 签到弹窗
-    WARMTIP = "warmtip"          # 温馨提示弹窗
-    STARTUP_POPUP = "startup_popup"  # 启动页服务弹窗
-    HOME_NOTICE = "home_notice"  # 首页公告弹窗
-    HOME_ERROR_POPUP = "home_error_popup"  # 首页异常代码弹窗
-    POINTS_PAGE = "points_page"  # 积分页（登录后跳转）
-    SPLASH = "splash"            # 启动页
-    # 新增页面状态
-    TRANSFER = "transfer"        # 转账页
-    TRANSFER_CONFIRM = "transfer_confirm"  # 转账确认弹窗
-    WALLET = "wallet"            # 钱包页
-    TRANSACTION_HISTORY = "transaction_history"  # 交易流水
-    CATEGORY = "category"        # 分类页
-    SEARCH = "search"            # 搜索页
-    ARTICLE = "article"          # 文章页
-    SETTINGS = "settings"        # 设置页
-    COUPON = "coupon"            # 优惠劵页
-    PROFILE_AD = "profile_ad"    # 个人页广告
-    
-    @property
-    def chinese_name(self) -> str:
-        """获取中文名称"""
-        name_map = {
-            "unknown": "未知页面",
-            "launcher": "Android桌面",
-            "ad": "广告页",
-            "home": "首页",
-            "profile": "个人页（未登录）",
-            "profile_logged": "个人页（已登录）",
-            "login": "登录页",
-            "login_error": "登录错误",
-            "loading": "加载中",
-            "popup": "弹窗",
-            "checkin": "签到页",
-            "checkin_popup": "签到弹窗",
-            "warmtip": "温馨提示",
-            "startup_popup": "启动页服务弹窗",
-            "home_notice": "首页公告",
-            "home_error_popup": "首页异常代码弹窗",
-            "points_page": "积分页",
-            "splash": "启动页",
-            "transfer": "转账页",
-            "transfer_confirm": "转账确认弹窗",
-            "wallet": "钱包页",
-            "transaction_history": "交易流水",
-            "category": "分类页",
-            "search": "搜索页",
-            "article": "文章页",
-            "settings": "设置页",
-            "coupon": "优惠劵页",
-            "profile_ad": "个人页广告",
-        }
-        return name_map.get(self.value, self.value)
+from .page_state_dynamic import PageState, PageStateType, get_chinese_name
 
 
 @dataclass
 class PageDetectionResult:
     """页面检测结果"""
-    state: PageState
+    state: PageStateType
     confidence: float  # 置信度 0-1
     details: str       # 详细信息
     detection_method: str = "template"  # 检测方式 (template/ocr/hybrid)

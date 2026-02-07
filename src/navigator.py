@@ -7,7 +7,7 @@ import asyncio
 import time
 from typing import Optional, Tuple
 from .adb_bridge import ADBBridge
-from .page_detector_hybrid import PageDetectorHybrid, PageState
+from .page_detector import PageState
 from .logger import get_silent_logger
 from .timeouts_config import TimeoutsConfig
 
@@ -40,6 +40,10 @@ class Navigator:
             # 使用传入的检测器（应该是从ModelManager获取的共享实例）
             self.detector = detector
             print(f"[Navigator] 使用传入的检测器: {type(detector).__name__}")
+        
+        # 详细日志已关闭，保持日志整洁
+        # 如需调试YOLO检测问题，可以取消下面的注释
+        # self.detector.set_verbose(True)
         
         # 初始化静默日志记录器
         self._silent_log = get_silent_logger()
@@ -335,11 +339,14 @@ class Navigator:
             
             # 定义辅助函数：YOLO + OCR检测
             async def try_detect_button(button_name: str, model_name: str) -> Optional[Tuple[int, int]]:
-                # 1. 尝试YOLO（直接使用按钮名称，不添加后缀）
+                # 1. 尝试YOLO
+                # 注意：分类页模型的类别名称是 '首页按钮'、'我的按钮'（带"按钮"后缀）
+                # avatar_homepage模型的类别名称是 '首页按钮'、'头像'（带"按钮"后缀）
+                yolo_class_name = f"{button_name}按钮" if model_name == '分类页' else button_name
                 button_pos = await self.detector.find_button_yolo(
                     device_id, 
                     model_name,
-                    button_name,  # 直接使用按钮名称
+                    yolo_class_name,  # 使用正确的类别名称
                     conf_threshold=0.5
                 )
                 if button_pos:
@@ -352,16 +359,16 @@ class Navigator:
             
             # 根据当前页面选择合适的模型
             if current_state in [PageState.PROFILE, PageState.PROFILE_LOGGED]:
-                # 从个人页跳转，使用profile_detailed模型（包含首页按钮和我的按钮）
-                self._silent_log.log(f"[导航到首页] 当前在个人页（{current_state.value}），使用profile_detailed模型")
+                # 从个人页跳转，使用avatar_homepage模型（包含首页按钮）
+                self._silent_log.log(f"[导航到首页] 当前在个人页（{current_state.value}），使用avatar_homepage模型")
                 button_pos = await self.detector.find_button_yolo(
                     device_id, 
-                    'profile_detailed',  # 使用新的8区域模型
-                    '首页',  # 注意：模型中的实际类别名称是"首页"，不是"首页按钮"
+                    'avatar_homepage',  # 使用头像和首页按钮检测模型
+                    '首页按钮',  # 注意：模型中的实际类别名称是"首页按钮"
                     conf_threshold=0.3  # 降低阈值，提高检测率
                 )
                 
-                # profile_detailed模型准确率100%，不需要OCR验证
+                # avatar_homepage模型准确率高，不需要OCR验证
                 if button_pos:
                     self._silent_log.log(f"[导航到首页] 检测到'首页'按钮: {button_pos}")
                     home_button_pos = button_pos
@@ -480,31 +487,43 @@ class Navigator:
             
             # 定义辅助函数：YOLO + OCR检测按钮
             async def try_detect_and_tap(button_name: str, model_name: str = '首页') -> bool:
-                # 1. 尝试YOLO
-                # 注意：profile_detailed模型的类别名称是 '首页'、'我的'（不带"按钮"后缀）
-                # 其他模型的类别名称可能带"按钮"后缀
+                # 1. 尝试YOLO（使用正确的类别名称）
+                # 注意：首页模型的类别名称是 '我的按钮'、'每日签到按钮'（带"按钮"后缀）
+                # avatar_homepage模型的类别名称是 '首页按钮'、'头像'（带"按钮"后缀）
+                yolo_class_name = f"{button_name}按钮" if model_name == '首页' else button_name
                 button_pos = await self.detector.find_button_yolo(
                     device_id, 
                     model_name,
-                    button_name,  # 直接使用按钮名称，不添加后缀
+                    yolo_class_name,  # 使用正确的类别名称
                     conf_threshold=0.5
                 )
                 
                 if button_pos:
-                    self._silent_log.log(f"  YOLO检测到'{button_name}'按钮: {button_pos}")
-                    await self.adb.tap(device_id, button_pos[0], button_pos[1])
-                    return True
+                    # 验证位置是否在底部导航栏区域（y > 850）
+                    if button_pos[1] > 850:
+                        self._silent_log.log(f"  YOLO检测到'{button_name}'按钮: {button_pos}")
+                        await self.adb.tap(device_id, button_pos[0], button_pos[1])
+                        return True
+                    else:
+                        self._silent_log.log(f"  YOLO检测到'{button_name}'按钮: {button_pos}，但不在底部导航栏区域，忽略")
                 
                 # 2. 降级到OCR
                 self._silent_log.log(f"  YOLO未检测到，尝试OCR...")
                 ocr_pos = await self.screen_capture.find_text_location(device_id, button_name)
                 
                 if ocr_pos:
-                    self._silent_log.log(f"  OCR检测到'{button_name}'按钮: {ocr_pos}")
-                    await self.adb.tap(device_id, ocr_pos[0], ocr_pos[1])
-                    return True
+                    # 验证位置是否在底部导航栏区域（y > 850）
+                    if ocr_pos[1] > 850:
+                        self._silent_log.log(f"  OCR检测到'{button_name}'按钮: {ocr_pos}")
+                        await self.adb.tap(device_id, ocr_pos[0], ocr_pos[1])
+                        return True
+                    else:
+                        self._silent_log.log(f"  OCR检测到'{button_name}'按钮: {ocr_pos}，但不在底部导航栏区域，忽略")
                 
-                return False
+                # 3. 使用默认坐标作为最后的降级方案
+                self._silent_log.log(f"  智能检测失败，使用默认坐标: {self.TAB_MY}")
+                await self.adb.tap(device_id, self.TAB_MY[0], self.TAB_MY[1])
+                return True
             
             # 尝试检测并点击"我的"按钮（使用首页模型）
             success = await try_detect_and_tap("我的", "首页")
@@ -512,8 +531,10 @@ class Navigator:
             if not success:
                 self._silent_log.info(f"  未检测到'我的'按钮，可能不在首页，尝试先导航到首页...")
                 
-                # 尝试点击首页按钮（使用首页模型）
-                home_success = await try_detect_and_tap("首页", "首页")
+                # 尝试点击首页按钮（使用分类页模型）
+                # 注意：首页模型没有"首页按钮"类别，只有"我的按钮"和"每日签到按钮"
+                # 所以这里使用分类页模型
+                home_success = await try_detect_and_tap("首页", "分类页")
                 
                 if home_success:
                     self._silent_log.info(f"  已点击首页，等待页面加载...")
@@ -522,10 +543,10 @@ class Navigator:
                     # 再次尝试点击"我的"按钮（此时在首页，使用首页模型）
                     success = await try_detect_and_tap("我的", "首页")
                 
-                # 如果所有智能检测都失败，重试
+                # 如果所有智能检测都失败，已经使用了默认坐标
                 if not success:
-                    self._silent_log.info(f"  ❌ 所有检测方法都失败，重试...")
-                    continue
+                    self._silent_log.info(f"  ❌ 所有检测方法都失败，但已使用默认坐标")
+                    success = True  # 标记为成功，因为已经点击了默认坐标
             
             # 点击"我的"后，等1秒
             await asyncio.sleep(1.0)

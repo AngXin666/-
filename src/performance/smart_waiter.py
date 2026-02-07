@@ -25,7 +25,7 @@ class SmartWaiter:
     async def wait_for_page_change(
         self,
         device_id: str,
-        detector,  # PageDetectorHybrid 或 PageDetectorIntegrated
+        detector,  # PageDetectorIntegrated
         expected_states: List,  # List[PageState]
         max_wait: float = 15.0,  # 超时保护（防止卡死）
         poll_interval: float = 0.1,  # 高频轮询
@@ -43,7 +43,6 @@ class SmartWaiter:
         4. 超时保护：15秒后强制返回（防止卡死）
         
         支持的检测器：
-        - PageDetectorHybrid（混合检测器）
         - PageDetectorIntegrated（整合检测器，GPU加速）
         
         Args:

@@ -1,0 +1,19 @@
+{
+  "version": "1.0.0",
+  "update_date": "2026-02-08",
+  "description": "页面分类器训练完成 - 25个类别",
+  "models": {
+    "page_classifier": {
+      "version": "1.0.0",
+      "file": "page_classifier_pytorch_best.pth",
+      "size_mb": 27.73,
+      "description": "页面分类器（PyTorch）"
+    },
+    "page_classes": {
+      "version": "1.0.0",
+      "file": "page_classes.json",
+      "size_mb": 0.0,
+      "description": "页面类别映射"
+    }
+  }
+}
