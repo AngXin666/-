@@ -184,6 +184,18 @@ class UserManagementDialog:
         ttk.Button(account_button_frame, text="🗑️ 移除选中账号", command=self._remove_owner_from_selected, width=15).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(account_button_frame, text="🔄 刷新", command=self._refresh_current_user_accounts, width=10).pack(side=tk.LEFT, padx=(0, 5))
         
+        # 搜索框（第二行）
+        search_frame = ttk.Frame(left_frame)
+        search_frame.pack(fill=tk.X, pady=(5, 0))
+        
+        ttk.Label(search_frame, text="搜索账号:", width=10).pack(side=tk.LEFT, padx=(0, 5))
+        self.user_mgmt_search_var = tk.StringVar()
+        self.user_mgmt_search_entry = ttk.Entry(search_frame, textvariable=self.user_mgmt_search_var, width=20)
+        self.user_mgmt_search_entry.pack(side=tk.LEFT, padx=(0, 5))
+        self.user_mgmt_search_entry.bind('<Return>', lambda e: self._search_user_accounts())
+        ttk.Button(search_frame, text="🔍 搜索", command=self._search_user_accounts, width=10).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(search_frame, text="🔄 显示全部", command=self._show_all_user_accounts, width=12).pack(side=tk.LEFT, padx=(0, 5))
+        
         # === 右侧：批量添加账号区域 ===
         self._create_batch_add_widgets(right_frame)
     
@@ -328,6 +340,76 @@ class UserManagementDialog:
             new_state = not current_state
             self.account_checked_items[item_id] = new_state
             self.account_tree.item(item_id, text="☑" if new_state else "□")
+    
+    def _search_user_accounts(self):
+        """搜索用户账号（根据手机号或ID）"""
+        search_text = self.user_mgmt_search_var.get().strip()
+        
+        if not search_text:
+            # 如果搜索框为空，显示全部
+            self._show_all_user_accounts()
+            return
+        
+        # 获取选中的管理员
+        user_id, user_name = self._get_selected_user_id()
+        if not user_id:
+            messagebox.showwarning("提示", "请先选择一个管理员", parent=self.dialog)
+            return
+        
+        # 保存所有账号项（如果还没保存）
+        if not hasattr(self, 'all_account_items'):
+            self.all_account_items = {}
+        
+        # 保存当前管理员的所有账号项
+        current_items = list(self.account_tree.get_children())
+        self.all_account_items[user_id] = current_items
+        
+        # 搜索匹配的项目
+        matched_items = []
+        for item in current_items:
+            try:
+                values = self.account_tree.item(item, 'values')
+                if values and len(values) > 2:
+                    phone = str(values[0])  # 手机号在第一列
+                    account_user_id = str(values[2])  # 用户ID在第三列
+                    
+                    # 模糊匹配：手机号或ID包含搜索文本
+                    if search_text in phone or search_text in account_user_id:
+                        matched_items.append(item)
+            except:
+                pass
+        
+        # 先删除所有项
+        for item in current_items:
+            self.account_tree.delete(item)
+        
+        # 只重新插入匹配的项
+        self.account_checked_items = {}
+        for item in matched_items:
+            try:
+                values = self.account_tree.item(item, 'values')
+                if values:
+                    new_item = self.account_tree.insert("", tk.END, text="□", values=values)
+                    self.account_checked_items[new_item] = False
+            except:
+                pass
+        
+        if matched_items:
+            self.log(f"🔍 找到 {len(matched_items)} 个匹配的账户")
+        else:
+            self.log(f"🔍 未找到匹配 '{search_text}' 的账户")
+            messagebox.showinfo("提示", f"未找到匹配 '{search_text}' 的账户", parent=self.dialog)
+    
+    def _show_all_user_accounts(self):
+        """显示当前管理员的所有账号"""
+        # 获取选中的管理员
+        user_id, _ = self._get_selected_user_id()
+        if not user_id:
+            return
+        
+        # 重新刷新账号列表
+        self._refresh_user_accounts(user_id)
+        self.log(f"✓ 已显示全部账号")
     
     def _get_selected_user_id(self):
         """获取选中管理员的完整 user_id

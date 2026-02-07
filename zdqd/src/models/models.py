@@ -106,6 +106,7 @@ class AccountResult:
     checkin_reward: float = 0.0  # 签到总奖励（所有签到的累加）
     checkin_total_times: Optional[int] = None  # 签到总次数
     checkin_rewards_detail: List[float] = field(default_factory=list)  # 签到奖励明细列表
+    checkin_balance_after: Optional[float] = None  # 签到后余额（签到完成后立即获取的余额）
     
     # 财务数据（操作后）
     balance_after: Optional[float] = None  # 余额（最终余额）
@@ -129,14 +130,6 @@ class AccountResult:
     # 转账数据（新增）
     transfer_amount: Optional[float] = None  # 转账金额
     transfer_recipient: Optional[str] = None  # 收款人ID
-    
-    # 计算属性
-    @property
-    def checkin_balance_after(self) -> Optional[float]:
-        """余额 = 余额前 + 签到奖励"""
-        if self.balance_before is not None:
-            return self.balance_before + self.checkin_reward
-        return None
     
     @property
     def balance_change(self) -> Optional[float]:
