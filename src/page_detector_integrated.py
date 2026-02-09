@@ -83,6 +83,11 @@ class PageDetectorIntegrated:
             state_mapping_path: 页面状态映射配置路径
             log_callback: 日志回调函数
         """
+        # 【修复】限制PyTorch线程数，避免多实例并发时资源竞争导致死锁
+        if HAS_TORCH:
+            torch.set_num_threads(2)  # 每个实例最多使用2个线程
+            torch.set_num_interop_threads(1)  # 操作间并行度设为1
+        
         self.adb = adb
         self._log_callback = log_callback
         self._verbose = False  # 默认关闭详细日志，只输出关键信息

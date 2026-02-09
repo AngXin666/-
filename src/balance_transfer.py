@@ -762,32 +762,28 @@ class BalanceTransfer:
             concise.action("进入钱包页面")
             file_logger.info("[转账] 使用智能按钮点击器点击余额按钮")
             
-            # 定义YOLO检测函数（实时检测，不使用缓存的page_result）
-            async def detect_balance_button():
-                # 重新检测页面元素，确保使用最新的页面状态
-                current_page = await self.detector.detect_page(
-                    device_id, 
-                    use_cache=False, 
-                    detect_elements=True
-                )
-                if current_page and current_page.elements:
-                    for element in current_page.elements:
-                        if element.class_name == '余额数字':
-                            return (element.center[0], element.center[1], element.confidence)
-                return None
+            # 【优化】从page_result中查找余额按钮元素（消除重复检测）
+            balance_element = None
+            if page_result.elements:
+                for element in page_result.elements:
+                    if element.class_name == '余额数字':
+                        balance_element = element
+                        file_logger.info(f"[转账] 从page_result找到余额按钮: 位置{element.center}, 置信度{element.confidence:.2f}")
+                        break
             
-            # 定义OCR检测函数
+            # 定义OCR检测函数（降级方案）
             async def detect_balance_button_ocr():
                 return await self._find_balance_button_by_ocr(device_id, log_callback)
             
-            # 使用智能点击器
+            # 使用智能点击器（传入缓存的元素位置）
             success, balance_pos = await self._smart_clicker.click_button(
                 device_id=device_id,
                 button_name="wallet_balance_button",
                 valid_range=(60, 120, 200, 260),  # 余额按钮合理范围（更严格）
                 default_position=self.BALANCE_BUTTON_FALLBACK,
-                yolo_detector=detect_balance_button,
+                yolo_detector=None,  # 不使用YOLO检测（已从page_result获取）
                 ocr_detector=detect_balance_button_ocr,
+                cached_position=(balance_element.center[0], balance_element.center[1]) if balance_element else None,
                 log_callback=lambda msg: file_logger.info(msg)
             )
             
@@ -799,14 +795,15 @@ class BalanceTransfer:
                 return result
             
             file_logger.info(f"[转账] 成功点击余额按钮，位置: {balance_pos}")
-            await asyncio.sleep(TimeoutsConfig.TRANSFER_PAGE_LOAD)
             
-            # 2. 验证是否进入钱包页面
-            file_logger.info("[转账] 步骤2: 验证是否进入钱包页面")
-            page_result = await self.detector.detect_page(
-                device_id, 
-                use_cache=False, 
-                detect_elements=True
+            # 2. 使用SmartWaiter等待钱包页面
+            file_logger.info("[转账] 步骤2: 等待进入钱包页面...")
+            from .performance.smart_waiter import wait_for_page
+            page_result = await wait_for_page(
+                device_id=device_id,
+                detector=self.detector,
+                expected_states=[PageState.WALLET],
+                log_callback=lambda msg: file_logger.info(f"  {msg}")
             )
             
             if not page_result or page_result.state != PageState.WALLET:
@@ -816,63 +813,21 @@ class BalanceTransfer:
                 result['error_type'] = ErrorType.TRANSFER_FAILED
                 return result
             
-            file_logger.info(f"[转账] 成功进入钱包页面")
+            file_logger.info(f"[转账] ✓ 成功进入钱包页面")
             
-            # 使用智能按钮点击器点击转赠按钮
+            # 3. 点击转赠按钮
             concise.action("进入转账页面")
-            file_logger.info("[转账] 使用智能按钮点击器点击转赠按钮")
+            file_logger.info("[转账] 步骤3: 点击转赠按钮")
+            await self.adb.tap(device_id, self.TRANSFER_BUTTON[0], self.TRANSFER_BUTTON[1])
             
-            # 定义YOLO检测函数（实时检测，不使用缓存的page_result）
-            async def detect_transfer_button():
-                # 重新检测页面元素，确保使用最新的页面状态
-                current_page = await self.detector.detect_page(
-                    device_id, 
-                    use_cache=False, 
-                    detect_elements=True
-                )
-                if current_page and current_page.elements:
-                    for element in current_page.elements:
-                        if element.class_name == '转赠按钮':
-                            return (element.center[0], element.center[1], element.confidence)
-                return None
-            
-            # 使用智能点击器
-            success, transfer_button_pos = await self._smart_clicker.click_button(
+            # 4. 使用SmartWaiter等待转账页面
+            file_logger.info("[转账] 步骤4: 等待进入转账页面...")
+            page_result = await wait_for_page(
                 device_id=device_id,
-                button_name="wallet_transfer_button",
-                valid_range=(400, 500, 50, 150),  # 转赠按钮合理范围（右上角）
-                default_position=self.TRANSFER_BUTTON,
-                yolo_detector=detect_transfer_button,
-                log_callback=lambda msg: file_logger.info(msg)
+                detector=self.detector,
+                expected_states=[PageState.TRANSFER],
+                log_callback=lambda msg: file_logger.info(f"  {msg}")
             )
-            
-            if not success:
-                file_logger.error("[转账] 无法点击转赠按钮")
-                concise.error("无法点击转赠按钮")
-                result['message'] = "无法点击转赠按钮"
-                result['error_type'] = ErrorType.TRANSFER_FAILED
-                return result
-            
-            file_logger.info(f"[转账] 成功点击转赠按钮，位置: {transfer_button_pos}")
-            await asyncio.sleep(TimeoutsConfig.TRANSFER_PAGE_LOAD)
-            
-            # 4. 验证是否进入转账页面（带重试机制）
-            file_logger.info("[转账] 步骤4: 验证是否进入转账页面")
-            page_result = await self.detector.detect_page(
-                device_id, 
-                use_cache=False, 
-                detect_elements=True
-            )
-            
-            # 如果第一次检测失败，等待后重试一次
-            if not page_result or page_result.state != PageState.TRANSFER:
-                file_logger.warning(f"[转账] 第一次检测未识别到转账页面，当前页面: {page_result.state.value if page_result else 'unknown'}，等待后重试...")
-                await asyncio.sleep(1.0)  # 额外等待1秒
-                page_result = await self.detector.detect_page(
-                    device_id, 
-                    use_cache=False, 
-                    detect_elements=True
-                )
             
             if not page_result or page_result.state != PageState.TRANSFER:
                 file_logger.error(f"[转账] 未能进入转账页面，当前页面: {page_result.state.value if page_result else 'unknown'}")
@@ -881,126 +836,141 @@ class BalanceTransfer:
                 result['error_type'] = ErrorType.TRANSFER_FAILED
                 return result
             
-            file_logger.info(f"[转账] 成功进入转账页面")
+            file_logger.info(f"[转账] ✓ 成功进入转账页面")
             
-            # 使用智能按钮点击器点击全部转账按钮
-            file_logger.info("[转账] 使用智能按钮点击器点击全部转账按钮")
-            
-            # 定义YOLO检测函数（实时检测，不使用缓存的page_result）
-            async def detect_all_transfer_button():
-                # 重新检测页面元素，确保使用最新的页面状态
-                current_page = await self.detector.detect_page(
-                    device_id, 
-                    use_cache=False, 
-                    detect_elements=True
-                )
-                if current_page and current_page.elements:
-                    for element in current_page.elements:
-                        if element.class_name == '全部转账按钮':
-                            return (element.center[0], element.center[1], element.confidence)
-                return None
-            
-            # 使用智能点击器
-            success, all_transfer_pos = await self._smart_clicker.click_button(
-                device_id=device_id,
-                button_name="transfer_all_button",
-                valid_range=(200, 300, 250, 300),  # 全部转账按钮合理范围
-                default_position=self.ALL_TRANSFER_BUTTON,
-                yolo_detector=detect_all_transfer_button,
-                log_callback=lambda msg: file_logger.info(msg)
+            # 5. 检测转账页面元素（YOLO）
+            file_logger.info("[转账] 步骤5: 检测转账页面元素...")
+            page_result = await self.detector.detect_page(
+                device_id, 
+                use_cache=False, 
+                detect_elements=True  # 启用YOLO元素检测
             )
             
-            if not success:
-                file_logger.error("[转账] 无法点击全部转账按钮")
-                concise.error("无法点击全部转账按钮")
-                result['message'] = "无法点击全部转账按钮"
+            if not page_result or not page_result.elements:
+                file_logger.error("[转账] 未检测到转账页面元素")
+                concise.error("未检测到转账页面元素")
+                result['message'] = "未检测到转账页面元素"
                 result['error_type'] = ErrorType.TRANSFER_FAILED
                 return result
             
-            file_logger.info(f"[转账] 成功点击全部转账按钮，位置: {all_transfer_pos}")
-            await asyncio.sleep(TimeoutsConfig.WAIT_MEDIUM)
+            file_logger.info(f"[转账] ✓ 检测到 {len(page_result.elements)} 个元素")
+            for elem in page_result.elements:
+                file_logger.info(f"  - {elem.class_name} (置信度: {elem.confidence:.2f}, 位置: {elem.center})")
             
-            # 重新检测页面元素（页面内容已变化）
-            file_logger.info("[转账] 重新检测转账页面元素...")
+            # 6. 查找并点击全部转账按钮
+            concise.action("输入转账信息")
+            file_logger.info("[转账] 步骤6: 点击全部转账按钮")
+            
+            all_transfer_element = None
+            for element in page_result.elements:
+                if element.class_name == '全部转账按钮':
+                    all_transfer_element = element
+                    break
+            
+            if all_transfer_element:
+                file_logger.info(f"[转账] ✓ YOLO检测到全部转账按钮: {all_transfer_element.center}")
+                await self.adb.tap(device_id, all_transfer_element.center[0], all_transfer_element.center[1])
+            else:
+                file_logger.warning(f"[转账] 未检测到全部转账按钮，使用默认坐标")
+                await self.adb.tap(device_id, self.ALL_TRANSFER_BUTTON[0], self.ALL_TRANSFER_BUTTON[1])
+            
+            await asyncio.sleep(TimeoutsConfig.WAIT_SHORT)
+            
+            # 7. 重新检测页面元素（点击全部转账后页面内容变化）
+            file_logger.info("[转账] 步骤7: 重新检测转账页面元素...")
             page_result = await self.detector.detect_page(
                 device_id, 
                 use_cache=False, 
                 detect_elements=True
             )
             
-            # 使用智能按钮点击器点击ID输入框
-            concise.action(f"输入收款人ID: {recipient_id}")
-            file_logger.info(f"[转账] 使用智能按钮点击器点击ID输入框")
-            
-            # 定义YOLO检测函数（实时检测，不使用缓存的page_result）
-            async def detect_recipient_input():
-                # 重新检测页面元素，确保使用最新的页面状态
-                current_page = await self.detector.detect_page(
-                    device_id, 
-                    use_cache=False, 
-                    detect_elements=True
-                )
-                if current_page and current_page.elements:
-                    for element in current_page.elements:
-                        if element.class_name == 'ID输入框':
-                            return (element.center[0], element.center[1], element.confidence)
-                return None
-            
-            # 使用智能点击器
-            success, recipient_input_pos = await self._smart_clicker.click_button(
-                device_id=device_id,
-                button_name="transfer_recipient_input",
-                valid_range=(200, 350, 350, 420),  # ID输入框合理范围
-                default_position=self.RECIPIENT_INPUT,
-                yolo_detector=detect_recipient_input,
-                log_callback=lambda msg: file_logger.info(msg)
-            )
-            
-            if not success:
-                file_logger.error("[转账] 无法点击ID输入框")
-                concise.error("无法点击ID输入框")
-                result['message'] = "无法点击ID输入框"
+            if not page_result or not page_result.elements:
+                file_logger.error("[转账] 重新检测失败，未检测到元素")
+                concise.error("重新检测失败")
+                result['message'] = "重新检测失败"
                 result['error_type'] = ErrorType.TRANSFER_FAILED
                 return result
             
-            file_logger.info(f"[转账] 成功点击ID输入框，位置: {recipient_input_pos}")
-            file_logger.info(f"[转账] 输入收款用户ID: {recipient_id}")
+            file_logger.info(f"[转账] ✓ 重新检测到 {len(page_result.elements)} 个元素")
+            for elem in page_result.elements:
+                file_logger.info(f"  - {elem.class_name} (置信度: {elem.confidence:.2f}, 位置: {elem.center})")
+            
+            # 8. 查找并点击ID输入框
+            concise.action(f"输入收款人ID: {recipient_id}")
+            file_logger.info(f"[转账] 步骤8: 输入收款人ID")
+            
+            recipient_input_element = None
+            for element in page_result.elements:
+                if element.class_name == 'ID输入框':
+                    recipient_input_element = element
+                    break
+            
+            if recipient_input_element:
+                file_logger.info(f"[转账] ✓ YOLO检测到ID输入框: {recipient_input_element.center}")
+                await self.adb.tap(device_id, recipient_input_element.center[0], recipient_input_element.center[1])
+            else:
+                file_logger.warning(f"[转账] 未检测到ID输入框，使用默认坐标")
+                await self.adb.tap(device_id, self.RECIPIENT_INPUT[0], self.RECIPIENT_INPUT[1])
+            
             await asyncio.sleep(TimeoutsConfig.WAIT_SHORT)
+            file_logger.info(f"[转账] 输入收款用户ID: {recipient_id}")
             await self.adb.input_text(device_id, recipient_id)
             await asyncio.sleep(TimeoutsConfig.TRANSFER_INPUT_WAIT)
             
-            # 重新检测页面元素（输入后页面可能有变化）
-            file_logger.info("[转账] 重新检测转账页面元素...")
-            page_result = await self.detector.detect_page(
-                device_id, 
-                use_cache=False, 
-                detect_elements=True
-            )
+            # 9. 查找并点击提交按钮
+            file_logger.info("[转账] 步骤9: 点击提交按钮")
+            
+            submit_button_element = None
+            for element in page_result.elements:
+                if element.class_name == '提交按钮':
+                    submit_button_element = element
+                    break
+            
+            if submit_button_element:
+                file_logger.info(f"[转账] ✓ YOLO检测到提交按钮: {submit_button_element.center}")
+                await self.adb.tap(device_id, submit_button_element.center[0], submit_button_element.center[1])
+            else:
+                file_logger.warning(f"[转账] 未检测到提交按钮，使用默认坐标")
+                await self.adb.tap(device_id, self.SUBMIT_BUTTON[0], self.SUBMIT_BUTTON[1])
+            
+            await asyncio.sleep(TimeoutsConfig.WAIT_MEDIUM)
+            
+            # 【关键】输出元素检测结果
+            if page_result:
+                if page_result.elements:
+                    file_logger.info(f"[转账][关键] 检测到 {len(page_result.elements)} 个元素")
+                    for elem in page_result.elements:
+                        file_logger.info(f"  - {elem.class_name} (置信度: {elem.confidence:.2f}, 位置: {elem.center})")
+                else:
+                    file_logger.error("[转账][关键] elements为空！")
+            else:
+                file_logger.error("[转账][关键] page_result为None！")
             
             # 使用智能按钮点击器点击提交按钮
             file_logger.info("[转账] 使用智能按钮点击器点击提交按钮")
             
-            # 定义YOLO检测函数（实时检测，不使用缓存的page_result）
-            async def detect_submit_button():
-                # 重新检测页面元素，确保使用最新的页面状态
-                current_page = await self.detector.detect_page(
-                    device_id, 
-                    use_cache=False, 
-                    detect_elements=True
-                )
-                if current_page and current_page.elements:
-                    for element in current_page.elements:
-                        if element.class_name == '提交按钮':
-                            return (element.center[0], element.center[1], element.confidence)
-                return None
+            # 【优化】从page_result中查找提交按钮元素（消除重复检测）
+            submit_button_element = None
+            if page_result.elements:
+                file_logger.info(f"[转账][关键] 在page_result.elements中查找提交按钮（共{len(page_result.elements)}个元素）")
+                for element in page_result.elements:
+                    if element.class_name == '提交按钮':
+                        submit_button_element = element
+                        file_logger.info(f"[转账][关键] ✓ 找到提交按钮: 位置{element.center}, 置信度{element.confidence:.2f}")
+                        break
+                if not submit_button_element:
+                    file_logger.warning(f"[转账][关键] ✗ 未找到提交按钮元素")
+            else:
+                file_logger.error(f"[转账][关键] page_result.elements为空，无法查找提交按钮！")
             
-            # 使用智能点击器
+            # 使用智能点击器（传入缓存的元素位置）
             success, submit_button_pos = await self._smart_clicker.click_button(
                 device_id=device_id,
                 button_name="transfer_submit_button",
                 valid_range=(200, 350, 500, 550),  # 提交按钮合理范围
                 default_position=self.SUBMIT_BUTTON,
-                yolo_detector=detect_submit_button,
+                yolo_detector=None,  # 不使用YOLO检测（已从page_result获取）
+                cached_position=(submit_button_element.center[0], submit_button_element.center[1]) if submit_button_element else None,
                 log_callback=lambda msg: file_logger.info(msg)
             )
             
@@ -1102,13 +1072,31 @@ class BalanceTransfer:
                 return result
             
             file_logger.info(f"[转账] 成功点击确认按钮，位置: {confirm_button_pos}")
-            file_logger.info(f"[转账] 等待 {TimeoutsConfig.WAIT_EXTRA_LONG} 秒")
-            await asyncio.sleep(TimeoutsConfig.WAIT_EXTRA_LONG)
+            
+            # 【调试】立即检测点击后的页面状态
+            file_logger.info("[转账][调试] 点击确认按钮后，等待1秒...")
+            await asyncio.sleep(1.0)
+            immediate_result = await self.detector.detect_page(device_id, use_cache=False, detect_elements=False)
+            if immediate_result:
+                file_logger.warning(f"[转账][调试] 点击后1秒的页面状态: {immediate_result.state.value} ({immediate_result.state.chinese_name}), 置信度: {immediate_result.confidence:.2%}")
+            
+            # 【优化】使用SmartWaiter等待页面变化（替换固定等待）
+            file_logger.info("[转账] 使用SmartWaiter等待转账完成...")
+            page_result = await wait_for_page(
+                device_id=device_id,
+                detector=self.detector,
+                expected_states=[PageState.WALLET, PageState.PROFILE_LOGGED, PageState.CATEGORY, PageState.UNKNOWN],
+                log_callback=lambda msg: file_logger.info(msg)
+            )
+            
+            if not page_result:
+                # SmartWaiter超时，使用降级等待
+                file_logger.warning("[转账] SmartWaiter超时，使用降级等待...")
+                await asyncio.sleep(3.0)
+                page_result = await self.detector.detect_page(device_id, use_cache=False)
             
             # 9. 验证转账结果
             file_logger.info("[转账] 步骤9: 验证转账结果")
-            
-            page_result = await self.detector.detect_page(device_id, use_cache=False)
             
             # 处理异常页面（如分类页）- 按返回键返回
             max_back_attempts = 3
@@ -1127,12 +1115,28 @@ class BalanceTransfer:
                 if initial_balance is not None:
                     file_logger.info(f"[转账] 返回个人页面验证余额变化")
                     
-                    # 按返回键回到个人页面
+                    # 【优化】使用SmartWaiter等待个人页面（替换固定等待）
+                    file_logger.info("[转账] 按返回键回到个人页面...")
                     await self.adb.press_back(device_id)
-                    await asyncio.sleep(TimeoutsConfig.TRANSFER_PAGE_LOAD)
                     
-                    # 使用整合检测器获取转账后的余额
-                    file_logger.info(f"[转账] 使用整合检测器获取转账后余额")
+                    file_logger.info("[转账] 使用SmartWaiter等待个人页面...")
+                    page_result = await wait_for_page(
+                        device_id=device_id,
+                        detector=self.detector,
+                        expected_states=[PageState.PROFILE_LOGGED],
+                        log_callback=lambda msg: file_logger.info(msg)
+                    )
+                    
+                    if not page_result:
+                        # SmartWaiter超时，使用降级等待
+                        file_logger.warning("[转账] SmartWaiter超时，使用降级等待...")
+                        await asyncio.sleep(1.0)
+                        page_result = await self.detector.detect_page(device_id, use_cache=False, detect_elements=True)
+                    
+                    file_logger.info(f"[转账] ✓ 已在个人页，开始获取转账后余额")
+                    
+                    # 使用整合检测器获取转账后的余额（检测元素）
+                    file_logger.info(f"[转账] 检测页面元素...")
                     page_result = await self.detector.detect_page(
                         device_id, 
                         use_cache=False, 

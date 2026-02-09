@@ -132,7 +132,12 @@ class TransferHistory:
         error_message: str = "",
         owner: str = ""
     ) -> bool:
-        """保存转账记录
+        """保存转账记录（UPSERT逻辑：成功记录覆盖当天的失败记录）
+        
+        逻辑：
+        - 如果当天该账号已有失败记录，成功记录会覆盖它
+        - 如果当天该账号已有成功记录，不覆盖（保留成功记录）
+        - 失败记录不覆盖任何记录（只在没有记录时插入）
         
         Args:
             sender_phone: 发送人手机号
@@ -153,18 +158,80 @@ class TransferHistory:
             conn = sqlite3.connect(str(self.db_path))
             cursor = conn.cursor()
             
+            # 获取今天的日期（用于判断是否当天记录）
+            today = datetime.now().date().isoformat()
+            
+            # 查询当天是否已有该账号的转账记录
             cursor.execute("""
-                INSERT INTO transfer_history (
+                SELECT id, success FROM transfer_history
+                WHERE sender_phone = ? 
+                AND DATE(timestamp) = ?
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, (sender_phone, today))
+            
+            existing = cursor.fetchone()
+            
+            if existing:
+                existing_id, existing_success = existing
+                
+                if success and existing_success == 0:
+                    # 当前是成功记录，且已有失败记录 → 更新为成功
+                    cursor.execute("""
+                        UPDATE transfer_history SET
+                            sender_user_id = ?,
+                            sender_name = ?,
+                            recipient_phone = ?,
+                            recipient_name = ?,
+                            amount = ?,
+                            strategy = ?,
+                            success = 1,
+                            error_message = ?,
+                            timestamp = ?,
+                            owner = ?
+                        WHERE id = ?
+                    """, (
+                        sender_user_id, sender_name,
+                        recipient_phone, recipient_name, amount,
+                        strategy, "", datetime.now().isoformat(), owner,
+                        existing_id
+                    ))
+                    print(f"[转账历史] 成功记录覆盖当天失败记录: {sender_phone}")
+                elif success and existing_success == 1:
+                    # 当前是成功记录，已有成功记录 → 不覆盖，保留原记录
+                    print(f"[转账历史] 当天已有成功记录，跳过: {sender_phone}")
+                    conn.close()
+                    return True
+                elif not success:
+                    # 当前是失败记录 → 不覆盖任何记录，直接插入
+                    cursor.execute("""
+                        INSERT INTO transfer_history (
+                            sender_phone, sender_user_id, sender_name,
+                            recipient_phone, recipient_name, amount,
+                            strategy, success, error_message, timestamp, owner
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        sender_phone, sender_user_id, sender_name,
+                        recipient_phone, recipient_name, amount,
+                        strategy, 0, error_message,
+                        datetime.now().isoformat(), owner
+                    ))
+                    print(f"[转账历史] 插入失败记录: {sender_phone}")
+            else:
+                # 当天没有记录 → 直接插入
+                cursor.execute("""
+                    INSERT INTO transfer_history (
+                        sender_phone, sender_user_id, sender_name,
+                        recipient_phone, recipient_name, amount,
+                        strategy, success, error_message, timestamp, owner
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
                     sender_phone, sender_user_id, sender_name,
                     recipient_phone, recipient_name, amount,
-                    strategy, success, error_message, timestamp, owner
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                sender_phone, sender_user_id, sender_name,
-                recipient_phone, recipient_name, amount,
-                strategy, 1 if success else 0, error_message,
-                datetime.now().isoformat(), owner
-            ))
+                    strategy, 1 if success else 0, error_message,
+                    datetime.now().isoformat(), owner
+                ))
+                print(f"[转账历史] 插入新记录: {sender_phone} ({'成功' if success else '失败'})")
             
             conn.commit()
             conn.close()
