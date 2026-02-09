@@ -2636,28 +2636,33 @@ class AutomationGUI:
         if self.stop_event.is_set():
             return
         
-        # 统计未勾选账号数（需要处理的账号数）
-        # 只统计当前显示的（未被detach的）未勾选账号
+        # 统计未勾选账号数（需要处理的账号数）和勾选账号数（视为已成功）
+        # 只统计当前显示的（未被detach的）账号
         unchecked_phones = set()
+        checked_count = 0  # 勾选的账号数量（视为已成功）
         with self.stats_lock:
             # 获取当前显示的项目（未被detach的）
             visible_items = self.results_tree.get_children()
             for item_id in visible_items:
-                # 只统计未勾选的账户
-                if not self.checked_items.get(item_id, False):
-                    values = self.results_tree.item(item_id, 'values')
-                    if values and len(values) > 0:
-                        unchecked_phones.add(values[0])
+                values = self.results_tree.item(item_id, 'values')
+                if values and len(values) > 0:
+                    phone = values[0]
+                    if self.checked_items.get(item_id, False):
+                        # 勾选的账号，视为已成功
+                        checked_count += 1
+                    else:
+                        # 未勾选的账号，需要处理
+                        unchecked_phones.add(phone)
         
         unchecked_count = len(unchecked_phones)
         
-        # 简化日志：只显示需要处理的账号数
-        self.root.after(0, lambda c=unchecked_count: 
-                       self._log(f"需要处理 {c} 个账号"))
+        # 日志输出统计信息
+        self.root.after(0, lambda t=total, c=checked_count, u=unchecked_count: 
+                       self._log(f"账号统计: 总计 {t} 个，勾选跳过 {c} 个，待处理 {u} 个"))
         
         # 如果没有未勾选的账号，直接返回
         if unchecked_count == 0:
-            self.root.after(0, lambda: self._log("没有需要处理的账号（所有账号都已完成）"))
+            self.root.after(0, lambda: self._log("没有需要处理的账号（所有账号都已勾选跳过）"))
             return
         
         # 批量启动模拟器实例（支持多开）
@@ -2667,7 +2672,8 @@ class AutomationGUI:
         
         if auto_launch:
             self.root.after(0, lambda w=max_workers: self._log(f"准备启动 {w} 个实例"))
-        self.root.after(0, lambda: self._update_progress(0, unchecked_count, f"正在检测模拟器实例... (待处理: {unchecked_count})"))
+        self.root.after(0, lambda t=total, u=unchecked_count: 
+                       self._update_progress(0, t, f"正在检测模拟器实例... (待处理: {u})"))
         
         # 检测正在运行的模拟器实例
         running_instances = await controller.get_running_instances()
@@ -2726,8 +2732,8 @@ class AutomationGUI:
             return
         
         # 处理账号
-        processed = 0
-        success_count = 0
+        processed = 0  # 实际处理的账号数（不包括勾选跳过的）
+        success_count = checked_count  # 初始成功数 = 勾选跳过的账号数
         failed_count = 0
         total_draw = 0.0
         total_checkin_reward = 0.0
@@ -2736,8 +2742,8 @@ class AutomationGUI:
         total_vouchers = 0.0
         total_coupons = 0
         
-        # 重置统计显示（从0开始）
-        self.root.after(0, lambda: self._update_stats(unchecked_count, 0, 0, 0.0, 0.0, 0, 0.0, 0))
+        # 重置统计显示（成功数从勾选数量开始）
+        self.root.after(0, lambda: self._update_stats(total, checked_count, 0, 0.0, 0.0, 0, 0.0, 0))
         
         # 直接使用已知的溪盟商城包名
         target_app = "com.ry.xmsc"
@@ -2755,8 +2761,8 @@ class AutomationGUI:
         account_queue = queue.Queue()
         
         # 统计变量（线程安全）
-        processed = 0
-        success_count = 0
+        processed = 0  # 实际处理的账号数（不包括勾选跳过的）
+        success_count = checked_count  # 初始成功数 = 勾选跳过的账号数
         failed_count = 0
         total_checkin_reward = 0.0
         total_balance = 0.0
@@ -2958,11 +2964,12 @@ class AutomationGUI:
                                            tp=current_tp, tv=current_tv, tc=current_tc:
                                            self._update_stats(total, s, f, tcr, tb, tp, tv, tc))
                         
-                        # 更新进度（显示实际处理的账号进度，成功/失败数从表格统计）
-                        # 从表格统计成功/失败数，确保与统计区域一致
-                        table_success, table_failed = self._get_success_failed_from_table()
-                        self.root.after(0, lambda p=current_processed, t=queued_count, s=table_success, f=table_failed: 
-                                       self._update_progress(p, t, f"进度: {p}/{t} | 成功: {s} | 失败: {f}"))
+                        # 更新进度（显示实际处理的账号进度）
+                        # 进度 = 实际处理数 / 总账号数
+                        # 成功 = 勾选跳过数 + 执行成功数
+                        # 失败 = 执行失败数
+                        self.root.after(0, lambda p=current_processed, t=total, s=current_success, f=current_failed: 
+                                       self._update_progress(p, total, f"进度: {p}/{t} | 成功: {s} | 失败: {f}"))
                 
                 except Exception as e:
                     # 捕获所有异常,确保实例不会因为单个账号的异常而停止
@@ -3013,11 +3020,12 @@ class AutomationGUI:
                                    tp=current_tp, tv=current_tv, tc=current_tc:
                                    self._update_stats(total, s, f, tcr, tb, tp, tv, tc))
                     
-                    # 更新进度（显示实际处理的账号进度，成功/失败数从表格统计）
-                    # 从表格统计成功/失败数，确保与统计区域一致
-                    table_success, table_failed = self._get_success_failed_from_table()
-                    self.root.after(0, lambda p=current_processed, t=queued_count, s=table_success, f=table_failed: 
-                                   self._update_progress(p, t, f"进度: {p}/{t} | 成功: {s} | 失败: {f}"))
+                    # 更新进度（显示实际处理的账号进度）
+                    # 进度 = 实际处理数 / 总账号数
+                    # 成功 = 勾选跳过数 + 执行成功数
+                    # 失败 = 执行失败数
+                    self.root.after(0, lambda p=current_processed, t=total, s=current_success, f=current_failed: 
+                                   self._update_progress(p, total, f"进度: {p}/{t} | 成功: {s} | 失败: {f}"))
                     
                     # 继续处理下一个账号,不要停止实例
                     instance_log_callback(f"继续处理下一个账号...")
