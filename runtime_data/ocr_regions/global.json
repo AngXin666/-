@@ -7,46 +7,6 @@
         "width": 375,
         "height": 22,
         "confidence": 0.9,
-        "timestamp": "2026-02-09T18:30:59.398599"
-      },
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
-        "timestamp": "2026-02-09T18:31:02.739182"
-      },
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
-        "timestamp": "2026-02-09T18:31:07.634757"
-      },
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
-        "timestamp": "2026-02-09T18:31:38.496609"
-      },
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
-        "timestamp": "2026-02-09T18:31:42.664628"
-      },
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
         "timestamp": "2026-02-09T18:31:45.848785"
       },
       {
@@ -4000,53 +3960,53 @@
         "height": 22,
         "confidence": 0.9,
         "timestamp": "2026-02-10T02:46:14.864648"
+      },
+      {
+        "x": 84,
+        "y": 148,
+        "width": 375,
+        "height": 21,
+        "confidence": 0.9,
+        "timestamp": "2026-02-10T02:46:54.192141"
+      },
+      {
+        "x": 83,
+        "y": 272,
+        "width": 376,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-10T02:47:12.404842"
+      },
+      {
+        "x": 83,
+        "y": 272,
+        "width": 377,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-10T02:47:28.028132"
+      },
+      {
+        "x": 83,
+        "y": 272,
+        "width": 377,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-10T02:47:33.279714"
+      },
+      {
+        "x": 83,
+        "y": 272,
+        "width": 377,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-10T02:47:48.810299"
       }
     ],
-    "total_count": 539,
-    "last_updated": "2026-02-10T02:46:14.864648"
+    "total_count": 544,
+    "last_updated": "2026-02-10T02:47:48.810299"
   },
   "checkin_remaining_times": {
     "regions": [
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
-        "timestamp": "2026-02-09T18:30:19.687760"
-      },
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
-        "timestamp": "2026-02-09T18:30:24.437784"
-      },
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
-        "timestamp": "2026-02-09T18:30:27.981939"
-      },
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
-        "timestamp": "2026-02-09T18:30:59.412225"
-      },
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
-        "timestamp": "2026-02-09T18:31:02.752808"
-      },
       {
         "x": 84,
         "y": 258,
@@ -8006,9 +7966,49 @@
         "height": 22,
         "confidence": 0.9,
         "timestamp": "2026-02-10T02:46:14.950933"
+      },
+      {
+        "x": 84,
+        "y": 148,
+        "width": 375,
+        "height": 21,
+        "confidence": 0.9,
+        "timestamp": "2026-02-10T02:46:54.215502"
+      },
+      {
+        "x": 83,
+        "y": 272,
+        "width": 376,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-10T02:47:12.445352"
+      },
+      {
+        "x": 83,
+        "y": 272,
+        "width": 377,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-10T02:47:28.141124"
+      },
+      {
+        "x": 83,
+        "y": 272,
+        "width": 377,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-10T02:47:33.319625"
+      },
+      {
+        "x": 83,
+        "y": 272,
+        "width": 377,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-10T02:47:48.825401"
       }
     ],
-    "total_count": 536,
-    "last_updated": "2026-02-10T02:46:14.950933"
+    "total_count": 541,
+    "last_updated": "2026-02-10T02:47:48.825401"
   }
 }
