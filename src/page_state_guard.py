@@ -68,8 +68,8 @@ class PageStateGuard:
                     print(f"  [{operation_name}] ✓ 页面状态验证成功（第{attempt+1}次尝试）")
                 return True
             
-            # 处理异常页面
-            if await self._handle_unexpected_page(device_id, page_result.state, expected_state, operation_name):
+            # 处理异常页面（传递重试次数）
+            if await self._handle_unexpected_page(device_id, page_result.state, expected_state, operation_name, retry_count=attempt):
                 # 异常处理成功，继续验证
                 await asyncio.sleep(1)
                 continue
@@ -116,18 +116,71 @@ class PageStateGuard:
         return page_result.state
     
     async def _handle_unexpected_page(self, device_id: str, current_state: PageState, 
-                                      expected_state: PageState, operation_name: str) -> bool:
-        """处理意外的页面状态
+                                      expected_state: PageState, operation_name: str,
+                                      retry_count: int = 0) -> bool:
+        """处理非预期的页面状态
+        
+        根据页面类型采用不同的返回策略：
+        - 分类页：直接点击首页按钮
+        - 积分页/交易流水/商品列表/设置/搜索/文章/优惠券：优先点击返回按钮（YOLO），失败则按返回键
         
         Args:
             device_id: 设备ID
             current_state: 当前页面状态
             expected_state: 期望的页面状态
             operation_name: 操作名称
+            retry_count: 重试次数（用于判断是否应该重启应用）
             
         Returns:
             bool: 是否成功处理
         """
+        # 检查重试次数，如果超过5次，重启应用
+        if retry_count >= 5:
+            print(f"  [{operation_name}] ❌ 页面处理失败（已重试{retry_count}次），重启应用...")
+            # 重启应用
+            await self.adb.stop_app(device_id, "com.xmwl.shop")
+            await asyncio.sleep(1)
+            await self.adb.start_app(device_id, "com.xmwl.shop")
+            await asyncio.sleep(5)
+            print(f"  [{operation_name}] ✓ 应用已重启")
+            return True
+        
+        if retry_count > 0:
+            print(f"  [{operation_name}] ⚠️ 第{retry_count + 1}次尝试处理页面...")
+        
+        # 辅助方法：优先点击返回按钮（YOLO），失败则按返回键
+        async def try_click_back_button(page_name: str, model_name: str = None) -> bool:
+            """尝试点击返回按钮，失败则按返回键
+            
+            Args:
+                page_name: 页面名称（用于日志）
+                model_name: YOLO模型名称（如果有专用模型）
+            
+            Returns:
+                bool: 是否成功处理
+            """
+            print(f"  [{operation_name}] ⚠️ 检测到{page_name}，尝试点击返回按钮...")
+            
+            # 如果有专用模型，使用YOLO检测返回按钮
+            if model_name:
+                back_button_pos = await self.detector.find_button_yolo(
+                    device_id, 
+                    model_name,
+                    '返回按钮',
+                    conf_threshold=0.5
+                )
+                if back_button_pos:
+                    print(f"  [{operation_name}] → YOLO检测到返回按钮: {back_button_pos}")
+                    await self.adb.tap(device_id, back_button_pos[0], back_button_pos[1])
+                    await asyncio.sleep(2)
+                    return True
+            
+            # 降级：按返回键
+            print(f"  [{operation_name}] → 使用返回键")
+            await self.adb.press_back(device_id)
+            await asyncio.sleep(2)
+            return True
+        
         # 1. 如果退出到桌面，强制停止后重新启动应用
         if current_state == PageState.LAUNCHER:
             print(f"  [{operation_name}] ❌ 检测到应用已退出到桌面！")
@@ -149,7 +202,12 @@ class PageStateGuard:
                 return True
             else:
                 print(f"  [{operation_name}] ❌ 弹窗关闭失败")
-                return False
+                # 注意：不要直接返回False，因为可能是误判
+                # 继续尝试其他处理方式
+                print(f"  [{operation_name}] → 尝试按返回键...")
+                await self.adb.press_back(device_id)
+                await asyncio.sleep(2)
+                return True
         
         # 3. 如果是登录页，记录并返回失败（需要上层处理）
         if current_state == PageState.LOGIN:
@@ -184,35 +242,60 @@ class PageStateGuard:
             await asyncio.sleep(1)
             return True
         
-        # 7. 如果是签到页面，按返回键返回首页
-        if current_state == PageState.CHECKIN:
-            print(f"  [{operation_name}] ⚠️ 检测到签到页面，按返回键返回首页...")
-            await self.adb.press_back(device_id)
-            await asyncio.sleep(2)
+        # 6.6. 如果是首页异常代码弹窗，点击确认按钮
+        if current_state == PageState.HOME_ERROR_POPUP:
+            print(f"  [{operation_name}] ⚠️ 检测到首页异常代码弹窗，点击确认按钮...")
+            success = await self.detector.click_element(device_id, "确认按钮")
+            if not success:
+                # 使用固定坐标 (根据标注数据，确认按钮中心约在 265, 637)
+                await self.adb.tap(device_id, 265, 637)
+                print(f"  [{operation_name}] → 使用固定坐标点击确认按钮")
+            await asyncio.sleep(1)
             return True
         
-        # 8. 如果是文章页，按返回键返回
+        # 7. 如果是文章页，可能有多级，需要多次返回
         if current_state == PageState.ARTICLE:
-            print(f"  [{operation_name}] ⚠️ 检测到文章页，按返回键返回...")
-            await self.adb.press_back(device_id)
-            await asyncio.sleep(2)
-            return True
+            return await try_click_back_button("文章页")
         
-        # 9. 如果是搜索页，按返回键返回
+        # 8. 如果是搜索页，优先点击返回按钮
         if current_state == PageState.SEARCH:
-            print(f"  [{operation_name}] ⚠️ 检测到搜索页，按返回键返回...")
-            await self.adb.press_back(device_id)
-            await asyncio.sleep(2)
-            return True
+            return await try_click_back_button("搜索页")
         
-        # 10. 如果是分类页，按返回键返回
+        # 9. 如果是积分页，优先点击返回按钮
+        if current_state == PageState.POINTS_PAGE:
+            return await try_click_back_button("积分页", "积分页")
+        
+        # 10. 如果是设置页，优先点击返回按钮
+        if current_state == PageState.SETTINGS:
+            return await try_click_back_button("设置页")
+        
+        # 11. 如果是交易流水页，优先点击返回按钮
+        if current_state == PageState.TRANSACTION_HISTORY:
+            return await try_click_back_button("交易流水页")
+        
+        # 12. 如果是优惠券页，优先点击返回按钮
+        if current_state == PageState.COUPON:
+            return await try_click_back_button("优惠券页")
+        
+        # 13. 如果是分类页，点击首页按钮
         if current_state == PageState.CATEGORY:
-            print(f"  [{operation_name}] ⚠️ 检测到分类页，按返回键返回...")
-            await self.adb.press_back(device_id)
+            print(f"  [{operation_name}] ⚠️ 检测到分类页，点击首页按钮...")
+            # 使用YOLO检测首页按钮
+            home_button_pos = await self.detector.find_button_yolo(
+                device_id, 
+                '分类页',
+                '首页按钮',
+                conf_threshold=0.5
+            )
+            if home_button_pos:
+                await self.adb.tap(device_id, home_button_pos[0], home_button_pos[1])
+            else:
+                # 降级：使用默认坐标
+                await self.adb.tap(device_id, 90, 920)  # 首页按钮默认坐标
             await asyncio.sleep(2)
             return True
         
-        # 11. 如果是未知页面，获取详细信息判断如何处理
+        # 14. 如果是未知页面，获取详细信息判断如何处理
         if current_state == PageState.UNKNOWN:
             # 获取页面详细信息
             page_result = await self.detector.detect_page(device_id, use_ocr=True)
@@ -246,7 +329,7 @@ class PageStateGuard:
                 await asyncio.sleep(2)
                 return True
         
-        # 12. 其他未知状态
+        # 15. 其他未知状态
         print(f"  [{operation_name}] ⚠️ 未处理的页面状态: {current_state.value}")
         return False
     
@@ -372,7 +455,7 @@ class PageStateGuard:
         
         # 3. 处理异常页面
         if page_result.state in [PageState.POPUP, PageState.AD]:
-            await self._handle_unexpected_page(device_id, page_result.state, target_state, operation_name)
+            await self._handle_unexpected_page(device_id, page_result.state, target_state, operation_name, retry_count=0)
             await asyncio.sleep(1)
             # 再次检查
             page_result = await self.detector.detect_page(device_id, use_ocr=True)

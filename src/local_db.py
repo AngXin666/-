@@ -837,6 +837,12 @@ class LocalDatabase:
                             
                             if should_update:
                                 update_fields.append(field)
+                                # 对浮点数字段进行精度控制（保留2位小数）
+                                float_fields = ['balance_before', 'balance_after', 'vouchers', 
+                                               'checkin_reward', 'checkin_balance_after', 
+                                               'transfer_amount', 'duration']
+                                if field in float_fields and actual_value is not None and isinstance(actual_value, (int, float)):
+                                    actual_value = round(float(actual_value), 2)
                                 values.append(actual_value)
                         
                         if update_fields:
@@ -852,10 +858,23 @@ class LocalDatabase:
                         else:
                             print(f"[数据库] 跳过更新: {record.get('phone')} - {record.get('run_date')} (所有字段都是None)")
                     else:
-                        # 插入新记录 - 使用字典映射
+                        # 插入新记录 - 使用字典映射，并对浮点数进行精度控制
                         fields_str = ', '.join(self.HISTORY_RECORD_FIELDS)
                         placeholders = ', '.join(['?'] * len(self.HISTORY_RECORD_FIELDS))
-                        values = [record.get(field) for field in self.HISTORY_RECORD_FIELDS]
+                        
+                        # 定义需要精度控制的浮点数字段
+                        float_fields = ['balance_before', 'balance_after', 'vouchers', 
+                                       'checkin_reward', 'checkin_balance_after', 
+                                       'transfer_amount', 'duration']
+                        
+                        # 处理值：对浮点数字段进行精度控制
+                        values = []
+                        for field in self.HISTORY_RECORD_FIELDS:
+                            value = record.get(field)
+                            # 对浮点数字段进行精度控制（保留2位小数）
+                            if field in float_fields and value is not None and isinstance(value, (int, float)):
+                                value = round(float(value), 2)
+                            values.append(value)
                         
                         sql = f"""
                             INSERT INTO history_records ({fields_str})

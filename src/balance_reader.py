@@ -8,6 +8,11 @@ from typing import Optional
 from dataclasses import dataclass
 from io import BytesIO
 
+# 在导入 RapidOCR 之前设置日志级别
+import logging
+for logger_name in ['rapidocr', 'RapidOCR', 'ppocr', 'onnxruntime']:
+    logging.getLogger(logger_name).setLevel(logging.ERROR)
+
 try:
     from rapidocr import RapidOCR
     HAS_OCR = True

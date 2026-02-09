@@ -16,6 +16,9 @@ class ErrorType(Enum):
     LOGIN_PHONE_NOT_EXIST = "login_phone_not_exist"
     LOGIN_PASSWORD_ERROR = "login_password_error"
     
+    # 缓存相关错误
+    CACHE_USER_ID_MISMATCH = "cache_user_id_mismatch"
+    
     # 导航相关错误
     CANNOT_REACH_PROFILE = "cannot_reach_profile"
     CANNOT_READ_PROFILE = "cannot_read_profile"
@@ -52,6 +55,9 @@ class ErrorType(Enum):
             # 登录相关错误
             ErrorType.LOGIN_PHONE_NOT_EXIST: "登录失败:手机号不存在",
             ErrorType.LOGIN_PASSWORD_ERROR: "登录失败:密码错误",
+            
+            # 缓存相关错误
+            ErrorType.CACHE_USER_ID_MISMATCH: "缓存失败:用户ID不匹配",
             
             # 导航相关错误
             ErrorType.CANNOT_REACH_PROFILE: "失败:无法到达个人页",

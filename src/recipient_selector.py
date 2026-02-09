@@ -68,12 +68,10 @@ class RecipientSelector:
             
         Returns:
             选中的收款人手机号，如果没有可用收款人返回None
-            
-        Raises:
-            ValueError: 如果收款人列表为空
         """
         if not recipients:
-            raise ValueError("收款人列表不能为空")
+            # 收款人列表为空，返回None而不是抛出异常
+            return None
         
         # 过滤掉发送人自己
         filtered_recipients = [r for r in recipients if r != sender_phone]

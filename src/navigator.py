@@ -48,6 +48,13 @@ class Navigator:
         # 初始化静默日志记录器
         self._silent_log = get_silent_logger()
         
+        # 初始化智能按钮点击器
+        from .smart_button_clicker import SmartButtonClicker
+        from .model_manager import ModelManager
+        model_manager = ModelManager.get_instance()
+        ocr_pool = model_manager.get_ocr_thread_pool()
+        self._smart_clicker = SmartButtonClicker(adb, self.detector, ocr_pool)
+        
         # 初始化页面状态守卫
         from .page_state_guard import PageStateGuard
         self.guard = PageStateGuard(adb, self.detector)
@@ -317,6 +324,44 @@ class Navigator:
                     self._silent_log.info(f"[导航到首页] ⚠️ 等待返回首页超时")
                 continue
             
+            # 如果在个人页的子页面（设置页、交易流水页、优惠券页、积分页），按返回键返回个人页，再点击首页
+            pages_from_profile = [
+                PageState.SETTINGS,           # 设置页
+                PageState.TRANSACTION_HISTORY,# 交易流水页
+                PageState.COUPON,             # 优惠券页
+                PageState.POINTS_PAGE,        # 积分页
+            ]
+            
+            if current_state in pages_from_profile:
+                self._silent_log.info(f"[导航到首页] 当前在{current_state.value}（个人页子页面），先返回个人页...")
+                
+                # 优先点击返回按钮（YOLO），失败则按返回键
+                back_button_pos = await self.detector.find_button_yolo(
+                    device_id, 
+                    current_state.value if current_state != PageState.POINTS_PAGE else '积分页',
+                    '返回按钮',
+                    conf_threshold=0.5
+                )
+                if back_button_pos:
+                    self._silent_log.info(f"  YOLO检测到返回按钮: {back_button_pos}")
+                    await self.adb.tap(device_id, back_button_pos[0], back_button_pos[1])
+                else:
+                    # 降级：按返回键
+                    self._silent_log.info(f"  使用返回键")
+                    await self.adb.press_back(device_id)
+                
+                await asyncio.sleep(1)
+                self.detector.clear_cache(device_id)
+                
+                # 检查是否已经回到个人页
+                page_result = await self.detector.detect_page(device_id, use_cache=False, detect_elements=False)
+                if page_result and page_result.state in [PageState.PROFILE, PageState.PROFILE_LOGGED]:
+                    self._silent_log.info(f"  ✓ 已返回到个人页，继续点击首页按钮...")
+                    # 继续执行后面的点击首页按钮逻辑
+                else:
+                    self._silent_log.info(f"  ⚠️ 返回后页面状态: {page_result.state.value if page_result else 'unknown'}，重试...")
+                    continue
+            
             # 如果在首页公告弹窗，点击弹窗外上方空白区域关闭
             if current_state == PageState.HOME_NOTICE:
                 self._silent_log.info(f"[导航到首页] 检测到首页公告弹窗，点击弹窗外上方空白区域关闭...")
@@ -328,7 +373,7 @@ class Navigator:
             
             # 使用守卫处理异常页面
             if current_state in [PageState.POPUP, PageState.UNKNOWN]:
-                handled = await self.guard._handle_unexpected_page(device_id, current_state, PageState.HOME, "导航到首页")
+                handled = await self.guard._handle_unexpected_page(device_id, current_state, PageState.HOME, "导航到首页", retry_count=attempt)
                 if handled:
                     await asyncio.sleep(1)
                     continue
@@ -446,35 +491,87 @@ class Navigator:
                     self._silent_log.info(f"[导航到我的页面] ✓ 已在我的页面")
                     return True
                 
-                # 如果在积分页，需要按2次返回键到个人页（登录后常见情况）
-                if current_state == PageState.POINTS_PAGE:
-                    self._silent_log.info(f"[导航到我的页面] 当前在积分页，按2次返回键返回个人页...")
+                # 第1类：需要返回首页的页面（说明不在个人页区域）
+                pages_need_go_home = [
+                    PageState.ARTICLE,   # 文章页
+                    PageState.SEARCH,    # 搜索页
+                    PageState.CATEGORY,  # 分类页
+                ]
+                
+                # 第2类：需要返回个人页的页面（说明在个人页区域的子页面）
+                pages_need_go_back = [
+                    PageState.SETTINGS,           # 设置页
+                    PageState.TRANSACTION_HISTORY,# 交易流水页
+                    PageState.COUPON,             # 优惠券页
+                    PageState.POINTS_PAGE,        # 积分页
+                ]
+                
+                # 处理第1类：返回首页
+                if current_state in pages_need_go_home:
+                    self._silent_log.info(f"[导航到我的页面] 检测到{current_state.value}，需要先返回首页...")
                     
-                    # 第1次返回键
-                    await self.adb.press_back(device_id)
-                    await asyncio.sleep(0.5)
+                    # 点击首页按钮
+                    if current_state == PageState.CATEGORY:
+                        # 分类页：使用YOLO检测首页按钮
+                        home_button_pos = await self.detector.find_button_yolo(
+                            device_id, 
+                            '分类页',
+                            '首页按钮',
+                            conf_threshold=0.5
+                        )
+                        if home_button_pos:
+                            await self.adb.tap(device_id, home_button_pos[0], home_button_pos[1])
+                        else:
+                            # 降级：使用默认坐标
+                            await self.adb.tap(device_id, self.TAB_HOME[0], self.TAB_HOME[1])
+                    else:
+                        # 其他页面：优先点击返回按钮，失败则按返回键
+                        back_button_pos = await self.detector.find_button_yolo(
+                            device_id, 
+                            current_state.value,
+                            '返回按钮',
+                            conf_threshold=0.5
+                        )
+                        if back_button_pos:
+                            await self.adb.tap(device_id, back_button_pos[0], back_button_pos[1])
+                        else:
+                            # 降级：按返回键
+                            await self.adb.press_back(device_id)
                     
-                    # 第2次返回键
-                    await self.adb.press_back(device_id)
-                    await asyncio.sleep(0.5)
-                    
-                    # 清除缓存并检测页面状态
+                    await asyncio.sleep(1)
                     self.detector.clear_cache(device_id)
-                    page_result = await self.detector.detect_page(device_id, use_cache=False, detect_elements=False)
+                    continue
+                
+                # 处理第2类：返回个人页
+                if current_state in pages_need_go_back:
+                    self._silent_log.info(f"[导航到我的页面] 检测到{current_state.value}，按返回键返回个人页...")
                     
+                    # 优先点击返回按钮（YOLO），失败则按返回键
+                    back_button_pos = await self.detector.find_button_yolo(
+                        device_id, 
+                        current_state.value if current_state != PageState.POINTS_PAGE else '积分页',
+                        '返回按钮',
+                        conf_threshold=0.5
+                    )
+                    if back_button_pos:
+                        self._silent_log.info(f"  YOLO检测到返回按钮: {back_button_pos}")
+                        await self.adb.tap(device_id, back_button_pos[0], back_button_pos[1])
+                    else:
+                        # 降级：按返回键
+                        self._silent_log.info(f"  使用返回键")
+                        await self.adb.press_back(device_id)
+                    
+                    await asyncio.sleep(1)
+                    self.detector.clear_cache(device_id)
+                    
+                    # 检查是否已经回到个人页
+                    page_result = await self.detector.detect_page(device_id, use_cache=False, detect_elements=False)
                     if page_result and page_result.state in [PageState.PROFILE, PageState.PROFILE_LOGGED]:
                         self._silent_log.info(f"[导航到我的页面] ✓ 已返回到个人页")
                         return True
                     else:
                         self._silent_log.info(f"[导航到我的页面] ⚠️ 返回后页面状态: {page_result.state.value if page_result else 'unknown'}，重试...")
                         continue
-                
-                # 如果在签到页面，先返回首页
-                if current_state == PageState.CHECKIN:
-                    self._silent_log.info(f"[导航到我的页面] 当前在签到页面，先返回首页...")
-                    await self.adb.press_back(device_id)
-                    await asyncio.sleep(1)
-                    continue
             
             # 确保在首页
             if page_result and page_result.state not in [PageState.HOME]:
@@ -1134,7 +1231,7 @@ class Navigator:
             # 3. 使用守卫处理异常页面
             if current_state == PageState.POPUP:
                 print(f"[导航] 检测到弹窗,尝试处理...")
-                handled = await self.guard._handle_unexpected_page(device_id, current_state, "导航到抽奖页面")
+                handled = await self.guard._handle_unexpected_page(device_id, current_state, PageState.UNKNOWN, "导航到抽奖页面", retry_count=attempt)
                 if handled:
                     await asyncio.sleep(2)
                     continue
