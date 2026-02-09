@@ -1442,6 +1442,12 @@ class AutomationGUI:
         self.root.after(100, self._check_log_scroll_position)
         return None
     
+    def _on_log_scrollbar_release(self, event):
+        """用户释放滚动条时检查是否在底部，决定是否自动滚动"""
+        # 立即检查滚动位置
+        self._check_log_scroll_position()
+        return None
+    
     def _check_log_scroll_position(self):
         """检查日志文本框是否滚动到底部"""
         try:
