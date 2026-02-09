@@ -41,6 +41,11 @@ class BalanceTransfer:
         model_manager = ModelManager.get_instance()
         self.detector = model_manager.get_page_detector_integrated()
         
+        # 初始化智能按钮点击器
+        from .smart_button_clicker import SmartButtonClicker
+        ocr_pool = model_manager.get_ocr_thread_pool()
+        self._smart_clicker = SmartButtonClicker(adb, self.detector, ocr_pool)
+        
         # 检查是否有转账相关的YOLO模型
         self.has_wallet_yolo = self._check_yolo_model('钱包页')
         self.has_transfer_yolo = self._check_yolo_model('transfer')
@@ -753,26 +758,47 @@ class BalanceTransfer:
             file_logger.info(f"[转账] 当前在个人页面（已登录）")
             concise.action("满足条件，开始转账")
             
-            # 查找余额按钮
-            balance_pos = None
-            if page_result.elements:
-                for element in page_result.elements:
-                    if element.class_name == '余额数字':
-                        balance_pos = element.center
-                        file_logger.info(f"[转账] 检测到余额按钮，位置: {balance_pos}, 置信度: {element.confidence:.2f}")
-                        break
-            
-            if not balance_pos:
-                file_logger.info("[转账] 整合检测未找到余额按钮，使用OCR备用方案")
-                balance_pos = await self._find_balance_button_by_ocr(device_id, log_callback)
-            
-            if not balance_pos:
-                file_logger.info("[转账] OCR也未找到余额按钮，使用固定坐标")
-                balance_pos = self.BALANCE_BUTTON_FALLBACK
-            
+            # 使用智能按钮点击器点击余额按钮
             concise.action("进入钱包页面")
-            file_logger.info(f"[转账] 点击余额按钮 ({balance_pos[0]}, {balance_pos[1]})")
-            await self.adb.tap(device_id, balance_pos[0], balance_pos[1])
+            file_logger.info("[转账] 使用智能按钮点击器点击余额按钮")
+            
+            # 定义YOLO检测函数（实时检测，不使用缓存的page_result）
+            async def detect_balance_button():
+                # 重新检测页面元素，确保使用最新的页面状态
+                current_page = await self.detector.detect_page(
+                    device_id, 
+                    use_cache=False, 
+                    detect_elements=True
+                )
+                if current_page and current_page.elements:
+                    for element in current_page.elements:
+                        if element.class_name == '余额数字':
+                            return (element.center[0], element.center[1], element.confidence)
+                return None
+            
+            # 定义OCR检测函数
+            async def detect_balance_button_ocr():
+                return await self._find_balance_button_by_ocr(device_id, log_callback)
+            
+            # 使用智能点击器
+            success, balance_pos = await self._smart_clicker.click_button(
+                device_id=device_id,
+                button_name="wallet_balance_button",
+                valid_range=(60, 120, 200, 260),  # 余额按钮合理范围（更严格）
+                default_position=self.BALANCE_BUTTON_FALLBACK,
+                yolo_detector=detect_balance_button,
+                ocr_detector=detect_balance_button_ocr,
+                log_callback=lambda msg: file_logger.info(msg)
+            )
+            
+            if not success:
+                file_logger.error("[转账] 无法点击余额按钮")
+                concise.error("无法点击余额按钮")
+                result['message'] = "无法点击余额按钮"
+                result['error_type'] = ErrorType.TRANSFER_FAILED
+                return result
+            
+            file_logger.info(f"[转账] 成功点击余额按钮，位置: {balance_pos}")
             await asyncio.sleep(TimeoutsConfig.TRANSFER_PAGE_LOAD)
             
             # 2. 验证是否进入钱包页面
@@ -792,32 +818,61 @@ class BalanceTransfer:
             
             file_logger.info(f"[转账] 成功进入钱包页面")
             
-            # 3. 点击"转赠"按钮
+            # 使用智能按钮点击器点击转赠按钮
             concise.action("进入转账页面")
-            file_logger.info("[转账] 步骤3: 点击转赠按钮")
+            file_logger.info("[转账] 使用智能按钮点击器点击转赠按钮")
             
-            transfer_button_pos = None
-            if page_result.elements:
-                for element in page_result.elements:
-                    if element.class_name == '转赠按钮':
-                        transfer_button_pos = element.center
-                        file_logger.info(f"[转账] 检测到转赠按钮，位置: {transfer_button_pos}, 置信度: {element.confidence:.2f}")
-                        break
+            # 定义YOLO检测函数（实时检测，不使用缓存的page_result）
+            async def detect_transfer_button():
+                # 重新检测页面元素，确保使用最新的页面状态
+                current_page = await self.detector.detect_page(
+                    device_id, 
+                    use_cache=False, 
+                    detect_elements=True
+                )
+                if current_page and current_page.elements:
+                    for element in current_page.elements:
+                        if element.class_name == '转赠按钮':
+                            return (element.center[0], element.center[1], element.confidence)
+                return None
             
-            if not transfer_button_pos:
-                file_logger.info("[转账] 使用固定坐标点击转赠按钮")
-                transfer_button_pos = self.TRANSFER_BUTTON
+            # 使用智能点击器
+            success, transfer_button_pos = await self._smart_clicker.click_button(
+                device_id=device_id,
+                button_name="wallet_transfer_button",
+                valid_range=(400, 500, 50, 150),  # 转赠按钮合理范围（右上角）
+                default_position=self.TRANSFER_BUTTON,
+                yolo_detector=detect_transfer_button,
+                log_callback=lambda msg: file_logger.info(msg)
+            )
             
-            await self.adb.tap(device_id, transfer_button_pos[0], transfer_button_pos[1])
+            if not success:
+                file_logger.error("[转账] 无法点击转赠按钮")
+                concise.error("无法点击转赠按钮")
+                result['message'] = "无法点击转赠按钮"
+                result['error_type'] = ErrorType.TRANSFER_FAILED
+                return result
+            
+            file_logger.info(f"[转账] 成功点击转赠按钮，位置: {transfer_button_pos}")
             await asyncio.sleep(TimeoutsConfig.TRANSFER_PAGE_LOAD)
             
-            # 4. 验证是否进入转账页面
+            # 4. 验证是否进入转账页面（带重试机制）
             file_logger.info("[转账] 步骤4: 验证是否进入转账页面")
             page_result = await self.detector.detect_page(
                 device_id, 
                 use_cache=False, 
                 detect_elements=True
             )
+            
+            # 如果第一次检测失败，等待后重试一次
+            if not page_result or page_result.state != PageState.TRANSFER:
+                file_logger.warning(f"[转账] 第一次检测未识别到转账页面，当前页面: {page_result.state.value if page_result else 'unknown'}，等待后重试...")
+                await asyncio.sleep(1.0)  # 额外等待1秒
+                page_result = await self.detector.detect_page(
+                    device_id, 
+                    use_cache=False, 
+                    detect_elements=True
+                )
             
             if not page_result or page_result.state != PageState.TRANSFER:
                 file_logger.error(f"[转账] 未能进入转账页面，当前页面: {page_result.state.value if page_result else 'unknown'}")
@@ -828,61 +883,135 @@ class BalanceTransfer:
             
             file_logger.info(f"[转账] 成功进入转账页面")
             
-            # 5. 点击"全部转账"按钮
-            file_logger.info("[转账] 步骤5: 点击全部转账")
+            # 使用智能按钮点击器点击全部转账按钮
+            file_logger.info("[转账] 使用智能按钮点击器点击全部转账按钮")
             
-            all_transfer_pos = None
-            if page_result.elements:
-                for element in page_result.elements:
-                    if element.class_name == '全部转账按钮':
-                        all_transfer_pos = element.center
-                        file_logger.info(f"[转账] 检测到全部转账按钮，位置: {all_transfer_pos}, 置信度: {element.confidence:.2f}")
-                        break
+            # 定义YOLO检测函数（实时检测，不使用缓存的page_result）
+            async def detect_all_transfer_button():
+                # 重新检测页面元素，确保使用最新的页面状态
+                current_page = await self.detector.detect_page(
+                    device_id, 
+                    use_cache=False, 
+                    detect_elements=True
+                )
+                if current_page and current_page.elements:
+                    for element in current_page.elements:
+                        if element.class_name == '全部转账按钮':
+                            return (element.center[0], element.center[1], element.confidence)
+                return None
             
-            if not all_transfer_pos:
-                file_logger.info("[转账] 使用固定坐标点击全部转账按钮")
-                all_transfer_pos = self.ALL_TRANSFER_BUTTON
+            # 使用智能点击器
+            success, all_transfer_pos = await self._smart_clicker.click_button(
+                device_id=device_id,
+                button_name="transfer_all_button",
+                valid_range=(200, 300, 250, 300),  # 全部转账按钮合理范围
+                default_position=self.ALL_TRANSFER_BUTTON,
+                yolo_detector=detect_all_transfer_button,
+                log_callback=lambda msg: file_logger.info(msg)
+            )
             
-            await self.adb.tap(device_id, all_transfer_pos[0], all_transfer_pos[1])
+            if not success:
+                file_logger.error("[转账] 无法点击全部转账按钮")
+                concise.error("无法点击全部转账按钮")
+                result['message'] = "无法点击全部转账按钮"
+                result['error_type'] = ErrorType.TRANSFER_FAILED
+                return result
+            
+            file_logger.info(f"[转账] 成功点击全部转账按钮，位置: {all_transfer_pos}")
             await asyncio.sleep(TimeoutsConfig.WAIT_MEDIUM)
             
-            # 6. 输入收款用户ID
+            # 重新检测页面元素（页面内容已变化）
+            file_logger.info("[转账] 重新检测转账页面元素...")
+            page_result = await self.detector.detect_page(
+                device_id, 
+                use_cache=False, 
+                detect_elements=True
+            )
+            
+            # 使用智能按钮点击器点击ID输入框
             concise.action(f"输入收款人ID: {recipient_id}")
-            file_logger.info(f"[转账] 步骤6: 输入收款用户ID: {recipient_id}")
+            file_logger.info(f"[转账] 使用智能按钮点击器点击ID输入框")
             
-            recipient_input_pos = None
-            if page_result.elements:
-                for element in page_result.elements:
-                    if element.class_name == 'ID输入框':
-                        recipient_input_pos = element.center
-                        file_logger.info(f"[转账] 检测到ID输入框，位置: {recipient_input_pos}, 置信度: {element.confidence:.2f}")
-                        break
+            # 定义YOLO检测函数（实时检测，不使用缓存的page_result）
+            async def detect_recipient_input():
+                # 重新检测页面元素，确保使用最新的页面状态
+                current_page = await self.detector.detect_page(
+                    device_id, 
+                    use_cache=False, 
+                    detect_elements=True
+                )
+                if current_page and current_page.elements:
+                    for element in current_page.elements:
+                        if element.class_name == 'ID输入框':
+                            return (element.center[0], element.center[1], element.confidence)
+                return None
             
-            if not recipient_input_pos:
-                file_logger.info("[转账] 使用固定坐标点击ID输入框")
-                recipient_input_pos = self.RECIPIENT_INPUT
+            # 使用智能点击器
+            success, recipient_input_pos = await self._smart_clicker.click_button(
+                device_id=device_id,
+                button_name="transfer_recipient_input",
+                valid_range=(200, 350, 350, 420),  # ID输入框合理范围
+                default_position=self.RECIPIENT_INPUT,
+                yolo_detector=detect_recipient_input,
+                log_callback=lambda msg: file_logger.info(msg)
+            )
             
-            await self.adb.tap(device_id, recipient_input_pos[0], recipient_input_pos[1])
+            if not success:
+                file_logger.error("[转账] 无法点击ID输入框")
+                concise.error("无法点击ID输入框")
+                result['message'] = "无法点击ID输入框"
+                result['error_type'] = ErrorType.TRANSFER_FAILED
+                return result
+            
+            file_logger.info(f"[转账] 成功点击ID输入框，位置: {recipient_input_pos}")
+            file_logger.info(f"[转账] 输入收款用户ID: {recipient_id}")
             await asyncio.sleep(TimeoutsConfig.WAIT_SHORT)
             await self.adb.input_text(device_id, recipient_id)
             await asyncio.sleep(TimeoutsConfig.TRANSFER_INPUT_WAIT)
             
-            # 7. 点击"提交转账"按钮
-            file_logger.info("[转账] 步骤7: 点击提交转账")
+            # 重新检测页面元素（输入后页面可能有变化）
+            file_logger.info("[转账] 重新检测转账页面元素...")
+            page_result = await self.detector.detect_page(
+                device_id, 
+                use_cache=False, 
+                detect_elements=True
+            )
             
-            submit_button_pos = None
-            if page_result.elements:
-                for element in page_result.elements:
-                    if element.class_name == '提交按钮':
-                        submit_button_pos = element.center
-                        file_logger.info(f"[转账] 检测到提交按钮，位置: {submit_button_pos}, 置信度: {element.confidence:.2f}")
-                        break
+            # 使用智能按钮点击器点击提交按钮
+            file_logger.info("[转账] 使用智能按钮点击器点击提交按钮")
             
-            if not submit_button_pos:
-                file_logger.info("[转账] 使用固定坐标点击提交按钮")
-                submit_button_pos = self.SUBMIT_BUTTON
+            # 定义YOLO检测函数（实时检测，不使用缓存的page_result）
+            async def detect_submit_button():
+                # 重新检测页面元素，确保使用最新的页面状态
+                current_page = await self.detector.detect_page(
+                    device_id, 
+                    use_cache=False, 
+                    detect_elements=True
+                )
+                if current_page and current_page.elements:
+                    for element in current_page.elements:
+                        if element.class_name == '提交按钮':
+                            return (element.center[0], element.center[1], element.confidence)
+                return None
             
-            await self.adb.tap(device_id, submit_button_pos[0], submit_button_pos[1])
+            # 使用智能点击器
+            success, submit_button_pos = await self._smart_clicker.click_button(
+                device_id=device_id,
+                button_name="transfer_submit_button",
+                valid_range=(200, 350, 500, 550),  # 提交按钮合理范围
+                default_position=self.SUBMIT_BUTTON,
+                yolo_detector=detect_submit_button,
+                log_callback=lambda msg: file_logger.info(msg)
+            )
+            
+            if not success:
+                file_logger.error("[转账] 无法点击提交按钮")
+                concise.error("无法点击提交按钮")
+                result['message'] = "无法点击提交按钮"
+                result['error_type'] = ErrorType.TRANSFER_FAILED
+                return result
+            
+            file_logger.info(f"[转账] 成功点击提交按钮，位置: {submit_button_pos}")
             await asyncio.sleep(TimeoutsConfig.TRANSFER_CONFIRM_WAIT)
             
             # 8. 验证确认弹窗并点击确认
@@ -909,53 +1038,62 @@ class BalanceTransfer:
             
             # 提交转账
             concise.action("提交转账")
-            file_logger.info("[转账] 使用OCR检测确认按钮")
+            file_logger.info("[转账] 使用智能按钮点击器点击确认按钮")
             
-            confirm_button_pos = None
-            
-            try:
-                from .screen_capture import ScreenCapture
-                from .ocr_thread_pool import OCRThreadPool
-                from PIL import Image
-                import cv2
-                
-                screen_capture = ScreenCapture(self.adb)
-                
-                # 截图
-                screenshot = await screen_capture.capture(device_id)
-                screenshot_pil = Image.fromarray(cv2.cvtColor(screenshot, cv2.COLOR_BGR2RGB))
-                
-                # 图像预处理
-                gray_screenshot = screenshot_pil.convert('L')
-                enhanced_screenshot = enhance_for_ocr(gray_screenshot)
-                
-                # OCR识别
-                ocr_pool = OCRThreadPool()
-                ocr_result = await ocr_pool.recognize(enhanced_screenshot)
-                
-                if ocr_result and ocr_result.texts:
-                    file_logger.debug(f"[转账] OCR识别到 {len(ocr_result.texts)} 个文本")
+            # 定义OCR检测函数
+            async def detect_confirm_button_ocr():
+                try:
+                    from .screen_capture import ScreenCapture
+                    from .ocr_thread_pool import OCRThreadPool
+                    from PIL import Image
+                    import cv2
                     
-                    # 查找"确认提交"或"确认"文字
-                    for i, text in enumerate(ocr_result.texts):
-                        file_logger.debug(f"[转账] OCR文本[{i}]: {text}")
-                        if "确认提交" in text or "确认" in text or "提交" in text:
-                            if ocr_result.boxes is not None and i < len(ocr_result.boxes):
-                                box = ocr_result.boxes[i]
-                                x_coords = [p[0] for p in box]
-                                y_coords = [p[1] for p in box]
-                                center_x = int(sum(x_coords) / 4)
-                                center_y = int(sum(y_coords) / 4)
-                                confirm_button_pos = (center_x, center_y)
-                                file_logger.info(f"[转账] OCR检测到'{text}'按钮，位置: {confirm_button_pos}")
-                                break
-                else:
-                    file_logger.warning("[转账] OCR未识别到任何文本")
-            except Exception as e:
-                file_logger.error(f"[转账] OCR检测失败: {e}", exc_info=True)
+                    screen_capture = ScreenCapture(self.adb)
+                    
+                    # 截图
+                    screenshot = await screen_capture.capture(device_id)
+                    screenshot_pil = Image.fromarray(cv2.cvtColor(screenshot, cv2.COLOR_BGR2RGB))
+                    
+                    # 图像预处理
+                    gray_screenshot = screenshot_pil.convert('L')
+                    enhanced_screenshot = enhance_for_ocr(gray_screenshot)
+                    
+                    # OCR识别
+                    ocr_pool = OCRThreadPool()
+                    ocr_result = await ocr_pool.recognize(enhanced_screenshot)
+                    
+                    if ocr_result and ocr_result.texts:
+                        file_logger.debug(f"[转账] OCR识别到 {len(ocr_result.texts)} 个文本")
+                        
+                        # 查找"确认提交"或"确认"文字
+                        for i, text in enumerate(ocr_result.texts):
+                            file_logger.debug(f"[转账] OCR文本[{i}]: {text}")
+                            if "确认提交" in text or "确认" in text or "提交" in text:
+                                if ocr_result.boxes is not None and i < len(ocr_result.boxes):
+                                    box = ocr_result.boxes[i]
+                                    x_coords = [p[0] for p in box]
+                                    y_coords = [p[1] for p in box]
+                                    center_x = int(sum(x_coords) / 4)
+                                    center_y = int(sum(y_coords) / 4)
+                                    file_logger.info(f"[转账] OCR检测到'{text}'按钮，位置: ({center_x}, {center_y})")
+                                    return (center_x, center_y)
+                    
+                    return None
+                except Exception as e:
+                    file_logger.error(f"[转账] OCR检测失败: {e}", exc_info=True)
+                    return None
             
-            # 如果OCR失败，返回错误
-            if not confirm_button_pos:
+            # 使用智能点击器
+            success, confirm_button_pos = await self._smart_clicker.click_button(
+                device_id=device_id,
+                button_name="transfer_confirm_button",
+                valid_range=(200, 350, 600, 650),  # 确认按钮合理范围
+                default_position=self.CONFIRM_BUTTON,
+                ocr_detector=detect_confirm_button_ocr,
+                log_callback=lambda msg: file_logger.info(msg)
+            )
+            
+            if not success:
                 file_logger.error("[转账] 未检测到确认按钮，转账失败")
                 concise.error("未检测到确认按钮")
                 result['success'] = False
@@ -963,8 +1101,7 @@ class BalanceTransfer:
                 result['error_type'] = ErrorType.TRANSFER_FAILED
                 return result
             
-            file_logger.info(f"[转账] 点击确认按钮: {confirm_button_pos}")
-            await self.adb.tap(device_id, confirm_button_pos[0], confirm_button_pos[1])
+            file_logger.info(f"[转账] 成功点击确认按钮，位置: {confirm_button_pos}")
             file_logger.info(f"[转账] 等待 {TimeoutsConfig.WAIT_EXTRA_LONG} 秒")
             await asyncio.sleep(TimeoutsConfig.WAIT_EXTRA_LONG)
             
@@ -1089,38 +1226,27 @@ class BalanceTransfer:
                             result['error_type'] = ErrorType.TRANSFER_FAILED
                             return result
                     else:
-                        file_logger.warning(f"[转账] 无法获取转账后余额，但已检测到钱包页面，判断为成功")
+                        # 无法获取转账后余额，转账失败
+                        file_logger.error(f"[转账] 无法获取转账后余额，转账失败")
+                        concise.error("无法获取转账后余额")
+                        result['success'] = False
+                        result['message'] = "转账失败：无法获取转账后余额"
+                        result['error_type'] = ErrorType.TRANSFER_FAILED
+                        return result
                 
-                # 没有初始余额或无法获取转账后余额，但已在钱包页面，判断为成功
-                file_logger.info(f"[转账] 检测到钱包页面，判断为转账成功")
-                
-                # 添加简洁日志：转账成功
-                concise.success("转账成功")
-                
-                # 显示转账详细信息（分隔线后）
-                if gui_logger:
-                    gui_logger.info("=" * 60)
-                    if transfer_amount:
-                        gui_logger.info(f"  → 转账金额: {transfer_amount:.2f}元")
-                    if recipient_name:
-                        gui_logger.info(f"  → 收款人: {recipient_name}")
-                    else:
-                        gui_logger.info(f"  → 收款人ID: {recipient_id}")
-                
-                # 添加到转账链条
-                transfer_chain.append(recipient_id)
-                
-                result['success'] = True
-                result['message'] = "转账成功"
-                result['chain'] = transfer_chain
-                if transfer_amount:
-                    result['amount'] = float(transfer_amount)
-                
+                # 没有初始余额，无法判断转账是否成功
+                file_logger.error(f"[转账] 没有转账前余额，无法判断转账是否成功")
+                concise.error("缺少转账前余额")
+                result['success'] = False
+                result['message'] = "转账失败：缺少转账前余额"
+                result['error_type'] = ErrorType.TRANSFER_FAILED
                 return result
             else:
-                file_logger.warning(f"[转账] 未检测到钱包页面，当前页面: {page_result.state.value if page_result else 'unknown'}")
-                concise.error("无法确认转账结果")
-                result['message'] = "无法确认转账结果"
+                # 不在钱包页面，转账失败
+                file_logger.error(f"[转账] 未检测到钱包页面，当前页面: {page_result.state.value if page_result else 'unknown'}")
+                concise.error("转账失败")
+                result['success'] = False
+                result['message'] = "转账失败：未检测到钱包页面"
                 result['error_type'] = ErrorType.TRANSFER_FAILED
                 return result
             

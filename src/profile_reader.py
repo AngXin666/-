@@ -14,6 +14,11 @@ try:
 except ImportError:
     HAS_PIL = False
 
+# 在导入 RapidOCR 之前设置日志级别
+import logging
+for logger_name in ['rapidocr', 'RapidOCR', 'ppocr', 'onnxruntime']:
+    logging.getLogger(logger_name).setLevel(logging.ERROR)
+
 try:
     from rapidocr import RapidOCR
     HAS_OCR = True
@@ -78,6 +83,10 @@ class ProfileReader:
         
         # 初始化静默日志记录器
         self._silent_log = get_silent_logger()
+        
+        # 初始化OCR区域学习器（延迟初始化，在使用时根据device_id创建）
+        from .ocr_region_learner import OCRRegionLearner
+        self._region_learner = None
     
     async def get_profile_info(self, device_id: str) -> Dict[str, any]:
         """获取个人信息（积分、抵扣券、总抽奖次数等）
@@ -188,6 +197,10 @@ class ProfileReader:
             self._silent_log.log(f"  [调试] _get_dynamic_data_only 开始执行")
             self._silent_log.log(f"  [调试] _integrated_detector 是否存在: {self._integrated_detector is not None}")
             
+            # 创建设备专属的OCR区域学习器
+            from .ocr_region_learner import OCRRegionLearner
+            learner = OCRRegionLearner(device_id=device_id)
+            
             if self._integrated_detector:
                 detection_result = await self._integrated_detector.detect_page(
                     device_id, 
@@ -232,17 +245,22 @@ class ProfileReader:
                             
                             # 查找与元素位置重叠的OCR文本
                             matched_texts = []
+                            matched_boxes = []  # 保存匹配的OCR文本框
                             for i, (text, box) in enumerate(zip(full_ocr_result.texts, full_ocr_result.boxes)):
-                                # 计算OCR文本框的中心点
-                                box_flat = box.flatten().tolist() if hasattr(box, 'flatten') else box
-                                ocr_x1, ocr_y1 = box_flat[0], box_flat[1]
-                                ocr_x2, ocr_y2 = box_flat[4], box_flat[5]
+                                # 计算OCR文本框的边界（使用所有点的最小/最大值）
+                                x_coords = [p[0] for p in box]
+                                y_coords = [p[1] for p in box]
+                                ocr_x1 = min(x_coords)
+                                ocr_y1 = min(y_coords)
+                                ocr_x2 = max(x_coords)
+                                ocr_y2 = max(y_coords)
                                 ocr_center_x = (ocr_x1 + ocr_x2) / 2
                                 ocr_center_y = (ocr_y1 + ocr_y2) / 2
                                 
                                 # 检查OCR文本框是否在YOLO元素框内
                                 if x1 <= ocr_center_x <= x2 and y1 <= ocr_center_y <= y2:
                                     matched_texts.append(text)
+                                    matched_boxes.append((ocr_x1, ocr_y1, ocr_x2, ocr_y2))
                                     self._silent_log.log(f"  [整合检测器]   匹配到文本: '{text}' (中心点: {ocr_center_x:.0f}, {ocr_center_y:.0f})")
                             
                             self._silent_log.log(f"  [整合检测器] 元素 {element.class_name} 匹配到 {len(matched_texts)} 个文本: {matched_texts}")
@@ -259,18 +277,36 @@ class ProfileReader:
                                 if all_numbers:
                                     # 转换为浮点数，选择第一个合理值（不使用max，避免误选其他区域的数字）
                                     valid_numbers = []
-                                    for num_str in all_numbers:
+                                    valid_number_indices = []  # 保存有效数字在matched_texts中的索引
+                                    for idx, num_str in enumerate(all_numbers):
                                         try:
                                             num = float(num_str)
                                             # 根据字段类型设置合理范围
                                             if '余额' in element.class_name and 0 <= num <= 100000:
                                                 valid_numbers.append(num)
+                                                # 找到这个数字在哪个matched_text中
+                                                for text_idx, text in enumerate(matched_texts):
+                                                    if num_str in text:
+                                                        valid_number_indices.append(text_idx)
+                                                        break
                                             elif '积分' in element.class_name and 0 <= num <= 100000:
                                                 valid_numbers.append(num)
+                                                for text_idx, text in enumerate(matched_texts):
+                                                    if num_str in text:
+                                                        valid_number_indices.append(text_idx)
+                                                        break
                                             elif '抵扣' in element.class_name and 0 <= num <= 10000:
                                                 valid_numbers.append(num)
+                                                for text_idx, text in enumerate(matched_texts):
+                                                    if num_str in text:
+                                                        valid_number_indices.append(text_idx)
+                                                        break
                                             elif '优惠' in element.class_name and 0 <= num <= 10000:
                                                 valid_numbers.append(num)
+                                                for text_idx, text in enumerate(matched_texts):
+                                                    if num_str in text:
+                                                        valid_number_indices.append(text_idx)
+                                                        break
                                         except ValueError:
                                             continue
                                     
@@ -280,24 +316,46 @@ class ProfileReader:
                                         # 使用第一个合理值，而不是最大值
                                         value = valid_numbers[0]
                                         
+                                        # 获取包含这个数字的OCR文本框位置
+                                        ocr_box = None
+                                        if valid_number_indices:
+                                            text_idx = valid_number_indices[0]
+                                            if text_idx < len(matched_boxes):
+                                                ocr_x1, ocr_y1, ocr_x2, ocr_y2 = matched_boxes[text_idx]
+                                                ocr_box = (int(ocr_x1), int(ocr_y1), int(ocr_x2 - ocr_x1), int(ocr_y2 - ocr_y1))
+                                        
                                         # 添加详细调试日志
                                         self._silent_log.log(f"  [数据映射调试] 元素: {element.class_name}, 值: {value}, 匹配文本: {combined_text}, 所有候选值: {valid_numbers}")
                                         self._silent_log.log(f"  [数据映射调试] 当前状态 - balance: {result['balance']}, points: {result['points']}, vouchers: {result['vouchers']}, coupons: {result['coupons']}")
+                                        if ocr_box:
+                                            self._silent_log.log(f"  [数据映射调试] OCR文本框位置: {ocr_box}")
                                         
                                         # 根据类别名称分配到对应字段
                                         if '余额' in element.class_name and result['balance'] is None:
                                             result['balance'] = value
                                             use_yolo_fallback = False
                                             self._silent_log.log(f"  ✓ 余额: {result['balance']:.2f} 元")
+                                            # 不再记录OCR区域学习数据
+                                            # if ocr_box:
+                                            #     learner.record_success("profile_balance", ocr_box, element.confidence)
                                         elif '积分' in element.class_name and result['points'] is None:
                                             result['points'] = int(value)
                                             self._silent_log.log(f"  ✓ 积分: {result['points']}")
+                                            # 不再记录OCR区域学习数据
+                                            # if ocr_box:
+                                            #     learner.record_success("profile_points", ocr_box, element.confidence)
                                         elif '抵扣' in element.class_name and result['vouchers'] is None:
                                             result['vouchers'] = value
                                             self._silent_log.log(f"  ✓ 抵扣券: {result['vouchers']}")
+                                            # 不再记录OCR区域学习数据
+                                            # if ocr_box:
+                                            #     learner.record_success("profile_vouchers", ocr_box, element.confidence)
                                         elif '优惠' in element.class_name and result['coupons'] is None:
                                             result['coupons'] = int(value)
                                             self._silent_log.log(f"  ✓ 优惠券: {result['coupons']}")
+                                            # 不再记录OCR区域学习数据
+                                            # if ocr_box:
+                                            #     learner.record_success("profile_coupons", ocr_box, element.confidence)
                                         else:
                                             self._silent_log.log(f"  ⚠️ 未匹配到任何字段！元素类别: {element.class_name}, 当前字段状态: balance={result['balance']}, points={result['points']}, vouchers={result['vouchers']}, coupons={result['coupons']}")
                                     else:
@@ -505,12 +563,12 @@ class ProfileReader:
                             elif field_type == 'user_id':
                                 for text in ocr_result.texts:
                                     text = text.strip()
-                                    if 'ID' in text or 'id' in text:
-                                        match = re.search(r'(\d{6,})', text)
-                                        if match:
-                                            result['user_id'] = match.group(1)
-                                            print(f"  ✓ 用户ID: {result['user_id']}")
-                                            break
+                                    # 修复：不要求文本中必须包含"ID"，直接提取6位以上的数字
+                                    match = re.search(r'(\d{6,})', text)
+                                    if match:
+                                        result['user_id'] = match.group(1)
+                                        print(f"  ✓ 用户ID: {result['user_id']}")
+                                        break
             
             # 如果YOLO检测失败，降级到全屏OCR
             if result['nickname'] is None or result['user_id'] is None:
@@ -782,7 +840,18 @@ class ProfileReader:
                                 if x1 <= ocr_center_x <= x2 and y1 <= ocr_center_y <= y2:
                                     matched_texts.append(text)
                             
+                            print(f"  [匹配调试] 元素: {element.class_name}, 位置: ({x1}, {y1}, {x2}, {y2}), 匹配到 {len(matched_texts)} 个文本: {matched_texts}")
+                            
                             if not matched_texts:
+                                # 检测到元素但没有匹配到OCR文本
+                                print(f"  ⚠️ 元素 {element.class_name} 没有匹配到任何OCR文本")
+                                # 对于积分和优惠券，如果检测到区域但没有文本，设置为0
+                                if '积分' in element.class_name and result['points'] is None:
+                                    result['points'] = 0
+                                    print(f"  [降级] 积分区域未识别到文本，设置为0")
+                                elif '优惠' in element.class_name and result['coupons'] is None:
+                                    result['coupons'] = 0
+                                    print(f"  [降级] 优惠券区域未识别到文本，设置为0")
                                 continue
                             
                             # 处理昵称
@@ -800,12 +869,13 @@ class ProfileReader:
                             elif 'ID' in element.class_name and result['user_id'] is None:
                                 for text in matched_texts:
                                     text = text.strip()
-                                    if 'ID' in text or 'id' in text:
-                                        match = re.search(r'(\d{6,})', text)
-                                        if match:
-                                            result['user_id'] = match.group(1)
-                                            print(f"  ✓ 用户ID: {result['user_id']}")
-                                            break
+                                    # 修复：不要求文本中必须包含"ID"，因为OCR可能只识别到数字部分
+                                    # 直接尝试提取6位以上的数字
+                                    match = re.search(r'(\d{6,})', text)
+                                    if match:
+                                        result['user_id'] = match.group(1)
+                                        print(f"  ✓ 用户ID: {result['user_id']}")
+                                        break
                             
                             # 处理余额、积分、抵扣券、优惠券
                             else:
@@ -873,6 +943,16 @@ class ProfileReader:
                                             print(f"  ✓ 优惠券: {result['coupons']}")
                                         else:
                                             print(f"  ⚠️ 未匹配到任何字段！元素类别: {element.class_name}")
+                                else:
+                                    # 匹配到文本但没有数字
+                                    print(f"  ⚠️ 元素 {element.class_name} 匹配到文本但没有数字: {combined_text}")
+                                    # 对于积分和优惠券，如果匹配到区域但没有数字，设置为0
+                                    if '积分' in element.class_name and result['points'] is None:
+                                        result['points'] = 0
+                                        print(f"  [降级] 积分区域没有数字，设置为0")
+                                    elif '优惠' in element.class_name and result['coupons'] is None:
+                                        result['coupons'] = 0
+                                        print(f"  [降级] 优惠券区域没有数字，设置为0")
                 
                 # 如果整合检测器成功检测到元素，则不需要降级到YOLO
                 if detection_result.elements:
@@ -957,12 +1037,12 @@ class ProfileReader:
                         elif field_type == 'user_id':
                             for text in ocr_result.texts:
                                 text = text.strip()
-                                if 'ID' in text or 'id' in text:
-                                    match = re.search(r'(\d{6,})', text)
-                                    if match:
-                                        result['user_id'] = match.group(1)
-                                        print(f"  ✓ 用户ID: {result['user_id']}")
-                                        break
+                                # 修复：不要求文本中必须包含"ID"，直接提取6位以上的数字
+                                match = re.search(r'(\d{6,})', text)
+                                if match:
+                                    result['user_id'] = match.group(1)
+                                    print(f"  ✓ 用户ID: {result['user_id']}")
+                                    break
                         
                         # 处理余额、积分、抵扣券、优惠券
                         else:
@@ -2198,6 +2278,12 @@ class ProfileReader:
                 # 跳过纯数字
                 if text.isdigit():
                     print(f"    - 跳过：纯数字")
+                    continue
+                
+                # 跳过数字+空格组合（如"1 0"、"10"等）
+                text_no_space = text.replace(" ", "").replace("\t", "")
+                if text_no_space.isdigit() and len(text_no_space) <= 3:
+                    print(f"    - 跳过：数字组合 '{text}'")
                     continue
                 
                 # 跳过时间格式

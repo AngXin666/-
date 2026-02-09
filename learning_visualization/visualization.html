@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>学习器数据可视化</title>
+    <style>
+        body {
+            font-family: 'Microsoft YaHei', Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        h1 {
+            color: #333;
+            border-bottom: 3px solid #4CAF50;
+            padding-bottom: 10px;
+        }
+        h2 {
+            color: #555;
+            margin-top: 30px;
+            border-bottom: 2px solid #2196F3;
+            padding-bottom: 8px;
+        }
+        .item {
+            background: white;
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .item h3 {
+            color: #2196F3;
+            margin-top: 0;
+        }
+        .canvas-container {
+            margin: 20px 0;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            overflow: hidden;
+            background: #fff;
+        }
+        canvas {
+            display: block;
+            margin: 0 auto;
+        }
+        .info {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin: 10px 0;
+        }
+        .info-item {
+            background: #f9f9f9;
+            padding: 8px;
+            border-radius: 4px;
+            border-left: 3px solid #4CAF50;
+        }
+        .label {
+            font-weight: bold;
+            color: #666;
+        }
+        .value {
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎯 学习器数据可视化</h1>
+    <p>基于实际运行数据的统计学习结果</p>
+
+    <h2>📍 按钮位置学习数据</h2>
+
+    <div class="item">
+        <h3>home_checkin_button</h3>
+        <div class="canvas-container">
+            <canvas id="btn_home_checkin_button" width="720" height="400"></canvas>
+        </div>
+        <div class="info">
+            <div class="info-item">
+                <span class="label">推荐位置:</span>
+                <span class="value">(473, 546)</span>
+            </div>
+            <div class="info-item">
+                <span class="label">样本数量:</span>
+                <span class="value">151</span>
+            </div>
+            <div class="info-item">
+                <span class="label">X坐标统计:</span>
+                <span class="value">均值=474.1, 标准差=1.56</span>
+            </div>
+            <div class="info-item">
+                <span class="label">Y坐标统计:</span>
+                <span class="value">均值=545.6, 标准差=1.41</span>
+            </div>
+        </div>
+    </div>
+    <script>
+        (function() {
+            const canvas = document.getElementById('btn_home_checkin_button');
+            const ctx = canvas.getContext('2d');
+            
+            // 绘制背景
+            ctx.fillStyle = '#f0f0f0';
+            ctx.fillRect(0, 0, 720, 400);
+            
+            // 绘制合理范围
+            ctx.fillStyle = 'rgba(76, 175, 80, 0.1)';
+            ctx.fillRect(422, 494, 
+                        104, 103);
+            ctx.strokeStyle = 'rgba(76, 175, 80, 0.5)';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(422, 494, 
+                          104, 103);
+            
+            // 绘制推荐位置
+            ctx.fillStyle = '#F44336';
+            ctx.beginPath();
+            ctx.arc(473, 546, 8, 0, 2 * Math.PI);
+            ctx.fill();
+            
+            // 绘制标签
+            ctx.fillStyle = '#333';
+            ctx.font = '14px Arial';
+            ctx.fillText('推荐位置: (473, 546)', 473 + 15, 546 - 10);
+            
+            // 绘制坐标轴
+            ctx.strokeStyle = '#999';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.lineTo(0, 400);
+            ctx.moveTo(0, 400);
+            ctx.lineTo(720, 400);
+            ctx.stroke();
+        })();
+    </script>
+
+    <div class="item">
+        <h3>wallet_balance_button</h3>
+        <div class="canvas-container">
+            <canvas id="btn_wallet_balance_button" width="720" height="400"></canvas>
+        </div>
+        <div class="info">
+            <div class="info-item">
+                <span class="label">推荐位置:</span>
+                <span class="value">(73, 280)</span>
+            </div>
+            <div class="info-item">
+                <span class="label">样本数量:</span>
+                <span class="value">5</span>
+            </div>
+            <div class="info-item">
+                <span class="label">X坐标统计:</span>
+                <span class="value">均值=73.0, 标准差=0.00</span>
+            </div>
+            <div class="info-item">
+                <span class="label">Y坐标统计:</span>
+                <span class="value">均值=280.0, 标准差=0.00</span>
+            </div>
+        </div>
+    </div>
+    <script>
+        (function() {
+            const canvas = document.getElementById('btn_wallet_balance_button');
+            const ctx = canvas.getContext('2d');
+            
+            // 绘制背景
+            ctx.fillStyle = '#f0f0f0';
+            ctx.fillRect(0, 0, 720, 400);
+            
+            // 绘制合理范围
+            ctx.fillStyle = 'rgba(76, 175, 80, 0.1)';
+            ctx.fillRect(0, 0, 
+                        720, 1280);
+            ctx.strokeStyle = 'rgba(76, 175, 80, 0.5)';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(0, 0, 
+                          720, 1280);
+            
+            // 绘制推荐位置
+            ctx.fillStyle = '#F44336';
+            ctx.beginPath();
+            ctx.arc(73, 280, 8, 0, 2 * Math.PI);
+            ctx.fill();
+            
+            // 绘制标签
+            ctx.fillStyle = '#333';
+            ctx.font = '14px Arial';
+            ctx.fillText('推荐位置: (73, 280)', 73 + 15, 280 - 10);
+            
+            // 绘制坐标轴
+            ctx.strokeStyle = '#999';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.lineTo(0, 400);
+            ctx.moveTo(0, 400);
+            ctx.lineTo(720, 400);
+            ctx.stroke();
+        })();
+    </script>
+
+    <h2>📐 OCR区域学习数据</h2>
+
+    <div class="item">
+        <h3>checkin_total_times</h3>
+        <div class="canvas-container">
+            <canvas id="ocr_checkin_total_times" width="720" height="400"></canvas>
+        </div>
+        <div class="info">
+            <div class="info-item">
+                <span class="label">推荐区域:</span>
+                <span class="value">x=84, y=258, w=375, h=22</span>
+            </div>
+            <div class="info-item">
+                <span class="label">样本数量:</span>
+                <span class="value">181</span>
+            </div>
+            <div class="info-item">
+                <span class="label">位置统计:</span>
+                <span class="value">X均值=85.0, Y均值=258.0</span>
+            </div>
+            <div class="info-item">
+                <span class="label">尺寸统计:</span>
+                <span class="value">W均值=373.0, H均值=22.0</span>
+            </div>
+        </div>
+    </div>
+    <script>
+        (function() {
+            const canvas = document.getElementById('ocr_checkin_total_times');
+            const ctx = canvas.getContext('2d');
+            
+            // 绘制背景
+            ctx.fillStyle = '#f0f0f0';
+            ctx.fillRect(0, 0, 720, 400);
+            
+            // 绘制推荐区域
+            ctx.fillStyle = 'rgba(33, 150, 243, 0.3)';
+            ctx.fillRect(84, 258, 375, 22);
+            ctx.strokeStyle = '#2196F3';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(84, 258, 375, 22);
+            
+            // 绘制标签
+            ctx.fillStyle = '#333';
+            ctx.font = '12px Arial';
+            ctx.fillText('推荐区域', 84 + 5, 258 + 15);
+            ctx.fillText('(84, 258, 375, 22)', 
+                        84 + 5, 258 + 30);
+            
+            // 绘制坐标轴
+            ctx.strokeStyle = '#999';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.lineTo(0, 400);
+            ctx.moveTo(0, 400);
+            ctx.lineTo(720, 400);
+            ctx.stroke();
+        })();
+    </script>
+
+    <div class="item">
+        <h3>checkin_remaining_times</h3>
+        <div class="canvas-container">
+            <canvas id="ocr_checkin_remaining_times" width="720" height="400"></canvas>
+        </div>
+        <div class="info">
+            <div class="info-item">
+                <span class="label">推荐区域:</span>
+                <span class="value">x=84, y=258, w=375, h=22</span>
+            </div>
+            <div class="info-item">
+                <span class="label">样本数量:</span>
+                <span class="value">181</span>
+            </div>
+            <div class="info-item">
+                <span class="label">位置统计:</span>
+                <span class="value">X均值=85.0, Y均值=258.0</span>
+            </div>
+            <div class="info-item">
+                <span class="label">尺寸统计:</span>
+                <span class="value">W均值=373.0, H均值=22.0</span>
+            </div>
+        </div>
+    </div>
+    <script>
+        (function() {
+            const canvas = document.getElementById('ocr_checkin_remaining_times');
+            const ctx = canvas.getContext('2d');
+            
+            // 绘制背景
+            ctx.fillStyle = '#f0f0f0';
+            ctx.fillRect(0, 0, 720, 400);
+            
+            // 绘制推荐区域
+            ctx.fillStyle = 'rgba(33, 150, 243, 0.3)';
+            ctx.fillRect(84, 258, 375, 22);
+            ctx.strokeStyle = '#2196F3';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(84, 258, 375, 22);
+            
+            // 绘制标签
+            ctx.fillStyle = '#333';
+            ctx.font = '12px Arial';
+            ctx.fillText('推荐区域', 84 + 5, 258 + 15);
+            ctx.fillText('(84, 258, 375, 22)', 
+                        84 + 5, 258 + 30);
+            
+            // 绘制坐标轴
+            ctx.strokeStyle = '#999';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.lineTo(0, 400);
+            ctx.moveTo(0, 400);
+            ctx.lineTo(720, 400);
+            ctx.stroke();
+        })();
+    </script>
+
+    <div class="item">
+        <h3>profile_coupons</h3>
+        <div class="canvas-container">
+            <canvas id="ocr_profile_coupons" width="720" height="400"></canvas>
+        </div>
+        <div class="info">
+            <div class="info-item">
+                <span class="label">推荐区域:</span>
+                <span class="value">x=439, y=239, w=70, h=83</span>
+            </div>
+            <div class="info-item">
+                <span class="label">样本数量:</span>
+                <span class="value">90</span>
+            </div>
+            <div class="info-item">
+                <span class="label">位置统计:</span>
+                <span class="value">X均值=452.0, Y均值=246.2</span>
+            </div>
+            <div class="info-item">
+                <span class="label">尺寸统计:</span>
+                <span class="value">W均值=72.1, H均值=85.3</span>
+            </div>
+        </div>
+    </div>
+    <script>
+        (function() {
+            const canvas = document.getElementById('ocr_profile_coupons');
+            const ctx = canvas.getContext('2d');
+            
+            // 绘制背景
+            ctx.fillStyle = '#f0f0f0';
+            ctx.fillRect(0, 0, 720, 400);
+            
+            // 绘制推荐区域
+            ctx.fillStyle = 'rgba(33, 150, 243, 0.3)';
+            ctx.fillRect(439, 239, 70, 83);
+            ctx.strokeStyle = '#2196F3';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(439, 239, 70, 83);
+            
+            // 绘制标签
+            ctx.fillStyle = '#333';
+            ctx.font = '12px Arial';
+            ctx.fillText('推荐区域', 439 + 5, 239 + 15);
+            ctx.fillText('(439, 239, 70, 83)', 
+                        439 + 5, 239 + 30);
+            
+            // 绘制坐标轴
+            ctx.strokeStyle = '#999';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.lineTo(0, 400);
+            ctx.moveTo(0, 400);
+            ctx.lineTo(720, 400);
+            ctx.stroke();
+        })();
+    </script>
+
+    <div class="item">
+        <h3>profile_vouchers</h3>
+        <div class="canvas-container">
+            <canvas id="ocr_profile_vouchers" width="720" height="400"></canvas>
+        </div>
+        <div class="info">
+            <div class="info-item">
+                <span class="label">推荐区域:</span>
+                <span class="value">x=266, y=240, w=77, h=82</span>
+            </div>
+            <div class="info-item">
+                <span class="label">样本数量:</span>
+                <span class="value">179</span>
+            </div>
+            <div class="info-item">
+                <span class="label">位置统计:</span>
+                <span class="value">X均值=270.2, Y均值=243.7</span>
+            </div>
+            <div class="info-item">
+                <span class="label">尺寸统计:</span>
+                <span class="value">W均值=77.7, H均值=83.2</span>
+            </div>
+        </div>
+    </div>
+    <script>
+        (function() {
+            const canvas = document.getElementById('ocr_profile_vouchers');
+            const ctx = canvas.getContext('2d');
+            
+            // 绘制背景
+            ctx.fillStyle = '#f0f0f0';
+            ctx.fillRect(0, 0, 720, 400);
+            
+            // 绘制推荐区域
+            ctx.fillStyle = 'rgba(33, 150, 243, 0.3)';
+            ctx.fillRect(266, 240, 77, 82);
+            ctx.strokeStyle = '#2196F3';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(266, 240, 77, 82);
+            
+            // 绘制标签
+            ctx.fillStyle = '#333';
+            ctx.font = '12px Arial';
+            ctx.fillText('推荐区域', 266 + 5, 240 + 15);
+            ctx.fillText('(266, 240, 77, 82)', 
+                        266 + 5, 240 + 30);
+            
+            // 绘制坐标轴
+            ctx.strokeStyle = '#999';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.lineTo(0, 400);
+            ctx.moveTo(0, 400);
+            ctx.lineTo(720, 400);
+            ctx.stroke();
+        })();
+    </script>
+
+    <div class="item">
+        <h3>profile_points</h3>
+        <div class="canvas-container">
+            <canvas id="ocr_profile_points" width="720" height="400"></canvas>
+        </div>
+        <div class="info">
+            <div class="info-item">
+                <span class="label">推荐区域:</span>
+                <span class="value">x=153, y=241, w=72, h=78</span>
+            </div>
+            <div class="info-item">
+                <span class="label">样本数量:</span>
+                <span class="value">177</span>
+            </div>
+            <div class="info-item">
+                <span class="label">位置统计:</span>
+                <span class="value">X均值=155.4, Y均值=244.7</span>
+            </div>
+            <div class="info-item">
+                <span class="label">尺寸统计:</span>
+                <span class="value">W均值=72.6, H均值=79.2</span>
+            </div>
+        </div>
+    </div>
+    <script>
+        (function() {
+            const canvas = document.getElementById('ocr_profile_points');
+            const ctx = canvas.getContext('2d');
+            
+            // 绘制背景
+            ctx.fillStyle = '#f0f0f0';
+            ctx.fillRect(0, 0, 720, 400);
+            
+            // 绘制推荐区域
+            ctx.fillStyle = 'rgba(33, 150, 243, 0.3)';
+            ctx.fillRect(153, 241, 72, 78);
+            ctx.strokeStyle = '#2196F3';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(153, 241, 72, 78);
+            
+            // 绘制标签
+            ctx.fillStyle = '#333';
+            ctx.font = '12px Arial';
+            ctx.fillText('推荐区域', 153 + 5, 241 + 15);
+            ctx.fillText('(153, 241, 72, 78)', 
+                        153 + 5, 241 + 30);
+            
+            // 绘制坐标轴
+            ctx.strokeStyle = '#999';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.lineTo(0, 400);
+            ctx.moveTo(0, 400);
+            ctx.lineTo(720, 400);
+            ctx.stroke();
+        })();
+    </script>
+
+    <div class="item">
+        <h3>profile_balance</h3>
+        <div class="canvas-container">
+            <canvas id="ocr_profile_balance" width="720" height="400"></canvas>
+        </div>
+        <div class="info">
+            <div class="info-item">
+                <span class="label">推荐区域:</span>
+                <span class="value">x=34, y=241, w=80, h=77</span>
+            </div>
+            <div class="info-item">
+                <span class="label">样本数量:</span>
+                <span class="value">176</span>
+            </div>
+            <div class="info-item">
+                <span class="label">位置统计:</span>
+                <span class="value">X均值=35.3, Y均值=244.9</span>
+            </div>
+            <div class="info-item">
+                <span class="label">尺寸统计:</span>
+                <span class="value">W均值=78.5, H均值=78.0</span>
+            </div>
+        </div>
+    </div>
+    <script>
+        (function() {
+            const canvas = document.getElementById('ocr_profile_balance');
+            const ctx = canvas.getContext('2d');
+            
+            // 绘制背景
+            ctx.fillStyle = '#f0f0f0';
+            ctx.fillRect(0, 0, 720, 400);
+            
+            // 绘制推荐区域
+            ctx.fillStyle = 'rgba(33, 150, 243, 0.3)';
+            ctx.fillRect(34, 241, 80, 77);
+            ctx.strokeStyle = '#2196F3';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(34, 241, 80, 77);
+            
+            // 绘制标签
+            ctx.fillStyle = '#333';
+            ctx.font = '12px Arial';
+            ctx.fillText('推荐区域', 34 + 5, 241 + 15);
+            ctx.fillText('(34, 241, 80, 77)', 
+                        34 + 5, 241 + 30);
+            
+            // 绘制坐标轴
+            ctx.strokeStyle = '#999';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.lineTo(0, 400);
+            ctx.moveTo(0, 400);
+            ctx.lineTo(720, 400);
+            ctx.stroke();
+        })();
+    </script>
+
+</body>
+</html>

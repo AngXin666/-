@@ -185,6 +185,17 @@ class Config:
     log_dir: str = "./logs"
     log_level: str = "INFO"
     debug_mode: bool = False
+    
+    # 流程控制配置
+    workflow_mode: str = "complete"  # 流程模式：complete, quick_checkin, login_only, transfer_only, custom
+    workflow_enable_login: bool = True  # 是否启用登录流程
+    workflow_enable_profile: bool = True  # 是否启用获取资料流程
+    workflow_enable_checkin: bool = True  # 是否启用签到流程
+    workflow_enable_transfer: bool = True  # 是否启用转账流程
+    
+    # 定时运行配置
+    scheduled_run_enabled: bool = False  # 是否启用定时运行
+    scheduled_run_time: str = "08:00"  # 定时运行时间
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
@@ -207,6 +218,15 @@ class Config:
             "log_dir": self.log_dir,
             "log_level": self.log_level,
             "debug_mode": self.debug_mode,
+            # 流程控制配置
+            "workflow_mode": self.workflow_mode,
+            "workflow_enable_login": self.workflow_enable_login,
+            "workflow_enable_profile": self.workflow_enable_profile,
+            "workflow_enable_checkin": self.workflow_enable_checkin,
+            "workflow_enable_transfer": self.workflow_enable_transfer,
+            # 定时运行配置
+            "scheduled_run_enabled": self.scheduled_run_enabled,
+            "scheduled_run_time": self.scheduled_run_time,
         }
 
     @classmethod
@@ -231,6 +251,15 @@ class Config:
             log_dir=data.get("log_dir", "./logs"),
             log_level=data.get("log_level", "INFO"),
             debug_mode=data.get("debug_mode", False),
+            # 流程控制配置
+            workflow_mode=data.get("workflow_mode", "complete"),
+            workflow_enable_login=data.get("workflow_enable_login", True),
+            workflow_enable_profile=data.get("workflow_enable_profile", True),
+            workflow_enable_checkin=data.get("workflow_enable_checkin", True),
+            workflow_enable_transfer=data.get("workflow_enable_transfer", True),
+            # 定时运行配置
+            scheduled_run_enabled=data.get("scheduled_run_enabled", False),
+            scheduled_run_time=data.get("scheduled_run_time", "08:00"),
         )
 
 

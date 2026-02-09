@@ -3,9 +3,27 @@
     "user_id": "user_218909",
     "user_name": "冯灿彬",
     "transfer_recipients": [
-      "17579995995"
+      "1579219"
     ],
-    "description": "账号: 17579995995, 用户ID: 218909",
+    "description": "收款人：吴大宝",
+    "enabled": true
+  },
+  "user_67883": {
+    "user_id": "user_67883",
+    "user_name": "李宇龙",
+    "transfer_recipients": [
+      "67883"
+    ],
+    "description": "收款ID：67883",
+    "enabled": true
+  },
+  "user_1877477": {
+    "user_id": "user_1877477",
+    "user_name": "邹总",
+    "transfer_recipients": [
+      "1877477"
+    ],
+    "description": "用户ID: 1877477",
     "enabled": true
   }
 }

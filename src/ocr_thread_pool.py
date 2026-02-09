@@ -11,6 +11,19 @@ from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+# 在导入 RapidOCR 之前设置日志级别（避免显示 INFO 日志）
+import logging
+import os
+
+# 设置环境变量，隐藏 RapidOCR 的详细日志
+os.environ.setdefault('RAPIDOCR_LOG_LEVEL', 'ERROR')
+
+# 配置 RapidOCR 相关的日志记录器
+for logger_name in ['rapidocr', 'RapidOCR', 'ppocr', 'onnxruntime', 'Navigator', 'RapidOCRv2']:
+    logger = logging.getLogger(logger_name)
+    logger.setLevel(logging.ERROR)
+    logger.propagate = False
+
 try:
     from rapidocr import RapidOCR
     HAS_OCR = True
@@ -60,8 +73,6 @@ class OCRThreadPool:
         # OCR 实例（单例）
         self._ocr = None
         if HAS_OCR:
-            import logging
-            logging.getLogger("rapidocr").setLevel(logging.WARNING)
             self._ocr = RapidOCR()
         
         # 线程池配置（增加到8个线程以提升并行度）

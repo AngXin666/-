@@ -120,6 +120,8 @@ class UserManagementDialog:
         self.user_tree.bind("<<TreeviewSelect>>", self._on_user_selected)
         # 绑定双击事件（编辑管理员）
         self.user_tree.bind("<Double-Button-1>", lambda e: self._edit_user())
+        # 绑定右键菜单
+        self.user_tree.bind("<Button-3>", self._show_user_context_menu)
         
         # === 用户操作按钮 ===
         user_button_frame = ttk.Frame(left_frame)
@@ -147,7 +149,7 @@ class UserManagementDialog:
             "phone": ("手机号", 120),
             "nickname": ("昵称", 150),
             "user_id": ("用户ID", 100),
-            "status": ("最新状态", 100),
+            "status": ("收款ID", 100),
             "owner": ("当前管理员", 100)
         }
         
@@ -157,6 +159,8 @@ class UserManagementDialog:
         
         # 绑定点击事件（用于切换勾选状态）
         self.account_tree.bind("<Button-1>", self._on_account_tree_click)
+        # 绑定右键菜单
+        self.account_tree.bind("<Button-3>", self._show_account_context_menu)
         
         # 初始化勾选状态
         self.account_checked_items = {}  # {item_id: True/False}
@@ -211,8 +215,22 @@ class UserManagementDialog:
             status = "启用" if user.enabled else "禁用"
             tag = "enabled" if user.enabled else "disabled"
             
-            # 显示多个收款人（逗号分隔，最多显示3个）
-            recipients_display = ", ".join(user.transfer_recipients[:3])
+            # 转换收款人手机号为用户ID显示
+            from .local_db import LocalDatabase
+            db = LocalDatabase()
+            
+            recipient_ids = []
+            for phone in user.transfer_recipients[:3]:
+                # 从数据库查询该手机号的用户ID
+                summary = db.get_account_summary(phone)
+                if summary:
+                    user_id = summary.get('user_id', phone)
+                    recipient_ids.append(user_id if user_id else phone)
+                else:
+                    recipient_ids.append(phone)
+            
+            # 显示多个收款人ID（逗号分隔，最多显示3个）
+            recipients_display = ", ".join(recipient_ids)
             if len(user.transfer_recipients) > 3:
                 recipients_display += f" 等{len(user.transfer_recipients)}个"
             
@@ -271,6 +289,34 @@ class UserManagementDialog:
             # 没有分配的账号
             return
         
+        # 获取该管理员的收款ID（按优先级）
+        user = self.user_manager.get_user(user_id)
+        recipient_id = '-'
+        
+        if user:
+            # 优先级1：管理员设置的收款人（如果有多个，显示所有，用逗号分隔）
+            if user.transfer_recipients and len(user.transfer_recipients) > 0:
+                recipient_id = ', '.join(user.transfer_recipients)
+            else:
+                # 优先级2：管理员自己的ID（去掉 user_ 前缀）
+                if user_id.startswith('user_'):
+                    recipient_id = user_id.replace('user_', '')
+                else:
+                    recipient_id = user_id
+        
+        # 优先级3：如果以上都没有，使用系统转账配置
+        if recipient_id == '-':
+            try:
+                from .transfer_config import get_transfer_config
+                transfer_config = get_transfer_config()
+                # 获取系统配置的1级收款账号（如果有多个，显示所有）
+                if transfer_config.level_recipients.get(1):
+                    recipient_id = ', '.join(transfer_config.level_recipients[1])
+                elif transfer_config.recipient_ids:
+                    recipient_id = ', '.join(transfer_config.recipient_ids)
+            except Exception as e:
+                print(f"获取系统转账配置失败: {e}")
+        
         # 从数据库加载账号信息
         from .local_db import LocalDatabase
         db = LocalDatabase()
@@ -284,22 +330,20 @@ class UserManagementDialog:
                 nickname = summary.get('nickname', '-') or '-'
                 account_user_id = summary.get('user_id', '-') or '-'
                 
-                # 获取最新记录以获取状态和管理员
+                # 获取最新记录以获取管理员
                 records = db.get_history_records(phone, limit=1)
                 if records:
-                    last_status = records[0].get('状态', '未处理')
                     owner_name = records[0].get('owner', '-') or '-'
                 else:
-                    last_status = '未处理'
                     owner_name = '-'
             else:
                 # 数据库中没有记录，显示基本信息
                 nickname = '-'
                 account_user_id = '-'
-                last_status = '未处理'
                 owner_name = '-'
             
-            values = (phone, nickname, account_user_id, last_status, owner_name)
+            # 使用该管理员的收款ID替代最新状态
+            values = (phone, nickname, account_user_id, recipient_id, owner_name)
             item_id = self.account_tree.insert("", tk.END, text="□", values=values)
             self.account_checked_items[item_id] = False
     
@@ -356,16 +400,11 @@ class UserManagementDialog:
             messagebox.showwarning("提示", "请先选择一个管理员", parent=self.dialog)
             return
         
-        # 保存所有账号项（如果还没保存）
-        if not hasattr(self, 'all_account_items'):
-            self.all_account_items = {}
-        
-        # 保存当前管理员的所有账号项
+        # 获取当前所有账号项
         current_items = list(self.account_tree.get_children())
-        self.all_account_items[user_id] = current_items
         
-        # 搜索匹配的项目
-        matched_items = []
+        # 先保存所有项目的数据
+        items_data = []
         for item in current_items:
             try:
                 values = self.account_tree.item(item, 'values')
@@ -375,27 +414,22 @@ class UserManagementDialog:
                     
                     # 模糊匹配：手机号或ID包含搜索文本
                     if search_text in phone or search_text in account_user_id:
-                        matched_items.append(item)
+                        items_data.append(values)
             except:
                 pass
         
-        # 先删除所有项
+        # 删除所有项
         for item in current_items:
             self.account_tree.delete(item)
         
-        # 只重新插入匹配的项
+        # 重新插入匹配的项
         self.account_checked_items = {}
-        for item in matched_items:
-            try:
-                values = self.account_tree.item(item, 'values')
-                if values:
-                    new_item = self.account_tree.insert("", tk.END, text="□", values=values)
-                    self.account_checked_items[new_item] = False
-            except:
-                pass
+        for values in items_data:
+            new_item = self.account_tree.insert("", tk.END, text="□", values=values)
+            self.account_checked_items[new_item] = False
         
-        if matched_items:
-            self.log(f"🔍 找到 {len(matched_items)} 个匹配的账户")
+        if items_data:
+            self.log(f"🔍 找到 {len(items_data)} 个匹配的账户")
         else:
             self.log(f"🔍 未找到匹配 '{search_text}' 的账户")
             messagebox.showinfo("提示", f"未找到匹配 '{search_text}' 的账户", parent=self.dialog)
@@ -599,31 +633,11 @@ class UserManagementDialog:
         self._refresh_user_accounts(user_id)
     
     def _add_user(self):
-        """添加管理员（从数据库未分配账号中选择）"""
-        # 从数据库获取所有账号
-        from .local_db import LocalDatabase
-        db = LocalDatabase()
-        all_summaries = db.get_all_accounts_summary(limit=10000)
-        
-        # 获取已分配的账号
-        assigned_phones = set()
-        for uid in self.user_manager.users.keys():
-            assigned_phones.update(self.user_manager.get_user_accounts(uid))
-        
-        # 筛选未分配的账号
-        unassigned_accounts = [s for s in all_summaries if s['phone'] not in assigned_phones]
-        
-        if not unassigned_accounts:
-            messagebox.showinfo("提示", "数据库中没有未分配的账号")
-            self.dialog.lift()
-            self.dialog.focus_force()
-            return
-        
-        # 打开选择账号作为管理员对话框
-        SelectAccountAsOwnerDialog(
+        """添加管理员（手动输入用户ID和管理员名字）"""
+        # 打开手动输入对话框
+        AddOwnerManualDialog(
             self.dialog, 
             self.user_manager, 
-            unassigned_accounts, 
             self._refresh_user_list,
             self.log
         )
@@ -782,15 +796,34 @@ class UserManagementDialog:
         self.batch_accounts_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.config(command=self.batch_accounts_text.yview)
         
+        # 绑定右键菜单
+        self.batch_accounts_text.bind("<Button-3>", self._show_batch_text_context_menu)
+        
         # 统计信息
-        self.batch_stats_var = tk.StringVar(value="待添加: 0 个账号")
+        self.batch_stats_var = tk.StringVar(value="点击下方按钮加载账号")
         ttk.Label(parent_frame, textvariable=self.batch_stats_var, foreground="gray").pack(pady=(0, 10))
         
         # 绑定文本变化事件
         self.batch_accounts_text.bind('<KeyRelease>', self._on_batch_text_changed)
         
-        # 加载已有账号到文本框
-        self._load_existing_accounts_to_batch()
+        # 不再默认加载账号
+        # self._load_existing_accounts_to_batch()
+        
+        # 加载和搜索按钮区域
+        load_search_frame = ttk.Frame(parent_frame)
+        load_search_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # 加载按钮
+        ttk.Button(load_search_frame, text="📋 已分配", command=self._load_assigned_accounts, width=12).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(load_search_frame, text="📋 未分配", command=self._load_unassigned_accounts, width=12).pack(side=tk.LEFT, padx=(0, 5))
+        
+        # 搜索框
+        ttk.Label(load_search_frame, text="搜索:", width=6).pack(side=tk.LEFT, padx=(10, 5))
+        self.batch_search_var = tk.StringVar()
+        self.batch_search_entry = ttk.Entry(load_search_frame, textvariable=self.batch_search_var, width=15)
+        self.batch_search_entry.pack(side=tk.LEFT, padx=(0, 5))
+        self.batch_search_entry.bind('<Return>', lambda e: self._search_batch_accounts())
+        ttk.Button(load_search_frame, text="🔍", command=self._search_batch_accounts, width=5).pack(side=tk.LEFT)
         
         # 按钮区域
         button_frame = ttk.Frame(parent_frame)
@@ -820,6 +853,309 @@ class UserManagementDialog:
         # 简单统计行数
         lines = [line.strip() for line in text.split('\n') if line.strip() and not line.strip().startswith('#')]
         self.batch_stats_var.set(f"当前: {len(lines)} 行")
+    
+    def _show_user_context_menu(self, event):
+        """显示管理员列表的右键菜单"""
+        # 选中右键点击的项
+        item = self.user_tree.identify_row(event.y)
+        if not item:
+            return
+        
+        self.user_tree.selection_set(item)
+        
+        # 获取该项的数据
+        values = self.user_tree.item(item, 'values')
+        if not values:
+            return
+        
+        user_id = values[0]  # 用户ID
+        user_name = values[1]  # 用户名称
+        
+        # 创建右键菜单
+        context_menu = tk.Menu(self.user_tree, tearoff=0)
+        context_menu.add_command(label=f"📋 复制用户ID: {user_id}", command=lambda: self._copy_to_clipboard(user_id))
+        context_menu.add_command(label=f"📋 复制用户名称: {user_name}", command=lambda: self._copy_to_clipboard(user_name))
+        
+        # 显示菜单
+        context_menu.post(event.x_root, event.y_root)
+    
+    def _show_account_context_menu(self, event):
+        """显示账号列表的右键菜单"""
+        # 选中右键点击的项
+        item = self.account_tree.identify_row(event.y)
+        if not item:
+            return
+        
+        self.account_tree.selection_set(item)
+        
+        # 获取该项的数据
+        values = self.account_tree.item(item, 'values')
+        if not values or len(values) < 3:
+            return
+        
+        phone = values[0]  # 手机号
+        nickname = values[1]  # 昵称
+        user_id = values[2]  # 用户ID
+        
+        # 创建右键菜单
+        context_menu = tk.Menu(self.account_tree, tearoff=0)
+        
+        # 复制功能
+        context_menu.add_command(label=f"📋 复制手机号: {phone}", command=lambda: self._copy_to_clipboard(phone))
+        if nickname and nickname != '-':
+            context_menu.add_command(label=f"📋 复制昵称: {nickname}", command=lambda: self._copy_to_clipboard(nickname))
+        if user_id and user_id != '-':
+            context_menu.add_command(label=f"📋 复制用户ID: {user_id}", command=lambda: self._copy_to_clipboard(user_id))
+        
+        context_menu.add_separator()
+        
+        # 快速分配管理员功能
+        # 获取所有启用的管理员
+        enabled_users = [u for u in self.user_manager.get_all_users() if u.enabled]
+        
+        if enabled_users:
+            # 创建"分配给"子菜单
+            assign_menu = tk.Menu(context_menu, tearoff=0)
+            for user in enabled_users:
+                assign_menu.add_command(
+                    label=f"{user.user_name} (ID: {user.user_id.replace('user_', '')})",
+                    command=lambda p=phone, uid=user.user_id: self._quick_assign_owner(p, uid)
+                )
+            context_menu.add_cascade(label="👤 分配给管理员", menu=assign_menu)
+        
+        # 取消分配功能
+        context_menu.add_command(
+            label="🗑️ 取消分配",
+            command=lambda: self._quick_unassign_owner(phone)
+        )
+        
+        # 显示菜单
+        context_menu.post(event.x_root, event.y_root)
+    
+    def _quick_assign_owner(self, phone: str, user_id: str):
+        """快速分配管理员"""
+        try:
+            # 获取管理员信息
+            user = self.user_manager.get_user(user_id)
+            if not user:
+                messagebox.showerror("错误", "管理员不存在", parent=self.dialog)
+                return
+            
+            # 分配管理员
+            if self.user_manager.assign_account(phone, user_id):
+                # 同步更新数据库
+                from .local_db import LocalDatabase
+                db = LocalDatabase()
+                db.batch_update_account_owner([phone], user.user_name)
+                
+                self.log(f"✓ 已将账号 {phone} 分配给管理员: {user.user_name}")
+                
+                # 刷新显示
+                self._refresh_user_list()
+                
+                # 如果当前选中的管理员就是目标管理员，刷新账号列表
+                current_user_id, _ = self._get_selected_user_id()
+                if current_user_id == user_id:
+                    self._refresh_user_accounts(user_id)
+            else:
+                messagebox.showerror("错误", "分配失败", parent=self.dialog)
+        except Exception as e:
+            self.log(f"❌ 快速分配失败: {e}")
+            messagebox.showerror("错误", f"分配失败: {e}", parent=self.dialog)
+    
+    def _quick_unassign_owner(self, phone: str):
+        """快速取消分配管理员"""
+        try:
+            # 确认取消分配
+            result = messagebox.askyesno(
+                "确认取消分配",
+                f"确定要取消账号 {phone} 的管理员分配吗？",
+                parent=self.dialog
+            )
+            
+            if not result:
+                return
+            
+            # 取消分配
+            if self.user_manager.unassign_account(phone):
+                # 同步更新数据库
+                from .local_db import LocalDatabase
+                db = LocalDatabase()
+                db.batch_update_account_owner([phone], None)
+                
+                self.log(f"✓ 已取消账号 {phone} 的管理员分配")
+                
+                # 刷新显示
+                self._refresh_user_list()
+                
+                # 刷新当前管理员的账号列表
+                current_user_id, _ = self._get_selected_user_id()
+                if current_user_id:
+                    self._refresh_user_accounts(current_user_id)
+            else:
+                messagebox.showerror("错误", "取消分配失败", parent=self.dialog)
+        except Exception as e:
+            self.log(f"❌ 快速取消分配失败: {e}")
+            messagebox.showerror("错误", f"取消分配失败: {e}", parent=self.dialog)
+    
+    def _copy_to_clipboard(self, text):
+        """复制文本到剪贴板"""
+        self.dialog.clipboard_clear()
+        self.dialog.clipboard_append(text)
+        self.log(f"✓ 已复制到剪贴板: {text}")
+    
+    def _show_batch_text_context_menu(self, event):
+        """显示批量添加文本框的右键菜单"""
+        # 获取鼠标点击位置的行号
+        index = self.batch_accounts_text.index(f"@{event.x},{event.y}")
+        line_num = int(index.split('.')[0])
+        
+        # 获取该行的文本
+        line_text = self.batch_accounts_text.get(f"{line_num}.0", f"{line_num}.end").strip()
+        
+        if not line_text or line_text.startswith('#'):
+            return
+        
+        # 解析该行，提取手机号和用户ID
+        phone = None
+        user_id = None
+        owner_name = None
+        
+        # 格式1：手机号----ID------管理员名字（已分配）
+        # 格式2：手机号----ID（未分配）
+        # 格式3：手机号----密码（新增账号）
+        # 格式4：手机号（仅手机号）
+        
+        if '----' in line_text:
+            parts = line_text.split('----')
+            phone = parts[0].strip()
+            
+            if len(parts) >= 2:
+                second_part = parts[1].strip()
+                
+                # 检查第二部分是否包含 "------"（管理员名字分隔符）
+                if '------' in second_part:
+                    # 格式1：手机号----ID------管理员名字
+                    id_and_owner = second_part.split('------')
+                    user_id = id_and_owner[0].strip()
+                    if len(id_and_owner) >= 2:
+                        owner_name = id_and_owner[1].strip()
+                else:
+                    # 格式2或3：手机号----ID 或 手机号----密码
+                    # 如果第二部分是纯数字，则是用户ID，否则是密码
+                    if second_part.isdigit():
+                        user_id = second_part
+                    # 如果不是纯数字，则是密码，不显示用户ID
+        elif line_text.isdigit() and len(line_text) == 11:
+            # 格式4：仅手机号
+            phone = line_text
+        
+        # 验证手机号格式
+        if not phone or not phone.isdigit() or len(phone) != 11:
+            return
+        
+        # 创建右键菜单
+        context_menu = tk.Menu(self.batch_accounts_text, tearoff=0)
+        
+        # 复制功能
+        context_menu.add_command(label=f"📋 复制手机号: {phone}", command=lambda: self._copy_to_clipboard(phone))
+        if user_id:
+            context_menu.add_command(label=f"📋 复制用户ID: {user_id}", command=lambda: self._copy_to_clipboard(user_id))
+        if owner_name:
+            context_menu.add_command(label=f"📋 复制管理员: {owner_name}", command=lambda: self._copy_to_clipboard(owner_name))
+        
+        context_menu.add_separator()
+        
+        # 快速分配管理员功能
+        # 获取所有启用的管理员
+        enabled_users = [u for u in self.user_manager.get_all_users() if u.enabled]
+        
+        if enabled_users:
+            # 创建"分配给"子菜单
+            assign_menu = tk.Menu(context_menu, tearoff=0)
+            for user in enabled_users:
+                assign_menu.add_command(
+                    label=f"{user.user_name} (ID: {user.user_id.replace('user_', '')})",
+                    command=lambda p=phone, uid=user.user_id, ln=line_num: self._quick_assign_owner_from_batch(p, uid, ln)
+                )
+            context_menu.add_cascade(label="👤 分配给管理员", menu=assign_menu)
+        
+        # 取消分配功能
+        context_menu.add_command(
+            label="🗑️ 取消分配",
+            command=lambda: self._quick_unassign_owner_from_batch(phone, line_num)
+        )
+        
+        # 显示菜单
+        context_menu.post(event.x_root, event.y_root)
+    
+    def _quick_assign_owner_from_batch(self, phone: str, user_id: str, line_num: int):
+        """从批量文本框快速分配管理员"""
+        try:
+            # 获取管理员信息
+            user = self.user_manager.get_user(user_id)
+            if not user:
+                messagebox.showerror("错误", "管理员不存在", parent=self.dialog)
+                return
+            
+            # 分配管理员
+            if self.user_manager.assign_account(phone, user_id):
+                # 同步更新数据库
+                from .local_db import LocalDatabase
+                db = LocalDatabase()
+                db.batch_update_account_owner([phone], user.user_name)
+                
+                self.log(f"✓ 已将账号 {phone} 分配给管理员: {user.user_name}")
+                
+                # 刷新显示
+                self._refresh_user_list()
+                
+                # 如果当前显示的是已分配列表，刷新显示
+                current_text = self.batch_accounts_text.get("1.0", tk.END).strip()
+                if current_text and '------' in current_text:
+                    # 当前显示的是已分配列表，重新加载
+                    self._load_assigned_accounts()
+            else:
+                messagebox.showerror("错误", "分配失败", parent=self.dialog)
+        except Exception as e:
+            self.log(f"❌ 快速分配失败: {e}")
+            messagebox.showerror("错误", f"分配失败: {e}", parent=self.dialog)
+    
+    def _quick_unassign_owner_from_batch(self, phone: str, line_num: int):
+        """从批量文本框快速取消分配管理员"""
+        try:
+            # 确认取消分配
+            result = messagebox.askyesno(
+                "确认取消分配",
+                f"确定要取消账号 {phone} 的管理员分配吗？",
+                parent=self.dialog
+            )
+            
+            if not result:
+                return
+            
+            # 取消分配
+            if self.user_manager.unassign_account(phone):
+                # 同步更新数据库
+                from .local_db import LocalDatabase
+                db = LocalDatabase()
+                db.batch_update_account_owner([phone], None)
+                
+                self.log(f"✓ 已取消账号 {phone} 的管理员分配")
+                
+                # 刷新显示
+                self._refresh_user_list()
+                
+                # 如果当前显示的是已分配列表，刷新显示
+                current_text = self.batch_accounts_text.get("1.0", tk.END).strip()
+                if current_text and '------' in current_text:
+                    # 当前显示的是已分配列表，重新加载
+                    self._load_assigned_accounts()
+            else:
+                messagebox.showerror("错误", "取消分配失败", parent=self.dialog)
+        except Exception as e:
+            self.log(f"❌ 快速取消分配失败: {e}")
+            messagebox.showerror("错误", f"取消分配失败: {e}", parent=self.dialog)
     
     def _load_existing_accounts_to_batch(self):
         """加载已有账号到批量添加文本框（只显示手机号）"""
@@ -860,6 +1196,171 @@ class UserManagementDialog:
         except Exception as e:
             # 如果加载失败，不影响使用（可能是新文件）
             print(f"[批量添加] 加载已有账号失败: {e}")
+    
+    def _load_assigned_accounts(self):
+        """加载已分配管理员的账号（按管理员分组，账号少的在上）"""
+        try:
+            # 清空文本框
+            self.batch_accounts_text.delete("1.0", tk.END)
+            
+            # 从数据库获取所有账号
+            from .local_db import LocalDatabase
+            db = LocalDatabase()
+            all_summaries = db.get_all_accounts_summary(limit=10000)
+            
+            # 按管理员分组账号
+            owner_accounts = {}  # {owner_name: [(phone, user_id), ...]}
+            
+            for summary in all_summaries:
+                phone = summary.get('phone', '')
+                user_id = summary.get('user_id', '') or ''
+                
+                # 检查是否是管理员角色（user_id 以 "user_" 开头的是管理员）
+                is_owner = user_id and user_id.startswith('user_')
+                
+                # 检查是否分配了管理员
+                has_owner = phone in self.user_manager.account_mapping
+                
+                # 只显示已分配管理员且不是管理员角色的账号
+                if has_owner and not is_owner:
+                    # 获取管理员名字
+                    owner_user_id = self.user_manager.account_mapping.get(phone)
+                    owner_user = self.user_manager.get_user(owner_user_id)
+                    owner_name = owner_user.user_name if owner_user else '未知'
+                    
+                    # 按管理员分组
+                    if owner_name not in owner_accounts:
+                        owner_accounts[owner_name] = []
+                    owner_accounts[owner_name].append((phone, user_id))
+            
+            if owner_accounts:
+                # 按账号数量排序（少的在上，多的在下）
+                sorted_owners = sorted(owner_accounts.items(), key=lambda x: len(x[1]))
+                
+                # 生成显示文本
+                all_lines = []
+                for owner_name, accounts in sorted_owners:
+                    # 对每个管理员的账号按字节长度排序（短的在前，长的在后）
+                    sorted_accounts = sorted(accounts, key=lambda x: len(f"{x[0]}----{x[1]}------{owner_name}".encode('utf-8')))
+                    
+                    # 为每个管理员的账号生成行
+                    for phone, user_id in sorted_accounts:
+                        line = f"{phone}----{user_id}------{owner_name}"
+                        all_lines.append(line)
+                
+                # 显示账号
+                text = '\n'.join(all_lines)
+                self.batch_accounts_text.insert("1.0", text)
+                
+                # 更新统计
+                total_accounts = len(all_lines)
+                total_owners = len(owner_accounts)
+                self.batch_stats_var.set(f"已分配: {total_accounts} 个账号 ({total_owners} 个管理员)")
+                
+                self.log(f"✓ 已加载 {total_accounts} 个已分配的账号 ({total_owners} 个管理员)")
+            else:
+                self.batch_stats_var.set("没有已分配的账号")
+                self.log("⚠️ 没有已分配的账号")
+                
+        except Exception as e:
+            self.log(f"❌ 加载已分配账号失败: {e}")
+            messagebox.showerror("错误", f"加载已分配账号失败: {e}", parent=self.dialog)
+    
+    def _load_unassigned_accounts(self):
+        """加载未分配管理员的账号"""
+        try:
+            # 清空文本框
+            self.batch_accounts_text.delete("1.0", tk.END)
+            
+            # 从数据库获取所有账号
+            from .local_db import LocalDatabase
+            db = LocalDatabase()
+            all_summaries = db.get_all_accounts_summary(limit=10000)
+            
+            # 筛选出未分配管理员的账号（不是管理员角色的账号）
+            unassigned_lines = []
+            for summary in all_summaries:
+                phone = summary.get('phone', '')
+                user_id = summary.get('user_id', '') or ''
+                
+                # 检查是否是管理员角色（user_id 以 "user_" 开头的是管理员）
+                is_owner = user_id and user_id.startswith('user_')
+                
+                # 检查是否分配了管理员
+                has_owner = phone in self.user_manager.account_mapping
+                
+                # 只显示未分配管理员且不是管理员角色的账号
+                if not has_owner and not is_owner:
+                    # 格式：手机号----用户ID
+                    line = f"{phone}----{user_id}"
+                    unassigned_lines.append(line)
+            
+            if unassigned_lines:
+                # 显示账号
+                text = '\n'.join(unassigned_lines)
+                self.batch_accounts_text.insert("1.0", text)
+                
+                # 更新统计
+                self.batch_stats_var.set(f"未分配: {len(unassigned_lines)} 个账号")
+                
+                self.log(f"✓ 已加载 {len(unassigned_lines)} 个未分配的账号")
+            else:
+                self.batch_stats_var.set("没有未分配的账号")
+                self.log("⚠️ 没有未分配的账号")
+                
+        except Exception as e:
+            self.log(f"❌ 加载未分配账号失败: {e}")
+            messagebox.showerror("错误", f"加载未分配账号失败: {e}", parent=self.dialog)
+    
+    def _search_batch_accounts(self):
+        """搜索所有不是管理员的用户（普通账号）"""
+        search_text = self.batch_search_var.get().strip()
+        
+        if not search_text:
+            messagebox.showwarning("提示", "请输入搜索内容", parent=self.dialog)
+            return
+        
+        try:
+            # 清空文本框
+            self.batch_accounts_text.delete("1.0", tk.END)
+            
+            # 从数据库获取所有账号
+            from .local_db import LocalDatabase
+            db = LocalDatabase()
+            all_summaries = db.get_all_accounts_summary(limit=10000)
+            
+            # 筛选出匹配的普通账号（不是管理员角色）
+            matched_phones = []
+            for summary in all_summaries:
+                phone = summary.get('phone', '')
+                user_id = summary.get('user_id', '')
+                
+                # 检查是否是管理员角色（user_id 以 "user_" 开头的是管理员）
+                is_owner = user_id and user_id.startswith('user_')
+                
+                # 只搜索普通账号（不是管理员角色）
+                if not is_owner:
+                    # 模糊匹配：手机号或用户ID包含搜索文本
+                    if search_text in phone or search_text in user_id:
+                        matched_phones.append(phone)
+            
+            if matched_phones:
+                # 显示手机号
+                text = '\n'.join(matched_phones)
+                self.batch_accounts_text.insert("1.0", text)
+                
+                # 更新统计
+                self.batch_stats_var.set(f"搜索结果: {len(matched_phones)} 个账号")
+                
+                self.log(f"🔍 找到 {len(matched_phones)} 个匹配的账号")
+            else:
+                self.batch_stats_var.set(f"未找到匹配 '{search_text}' 的账号")
+                self.log(f"🔍 未找到匹配 '{search_text}' 的账号")
+                messagebox.showinfo("提示", f"未找到匹配 '{search_text}' 的账号", parent=self.dialog)
+                
+        except Exception as e:
+            self.log(f"❌ 搜索账号失败: {e}")
+            messagebox.showerror("错误", f"搜索账号失败: {e}", parent=self.dialog)
     
     def _batch_add_accounts_action(self):
         """批量添加账号到账号文件的实际操作"""
@@ -1506,6 +2007,176 @@ class UserManagementDialog:
         UnassignedAccountsDialog(self.dialog, self.user_manager, unassigned_phones, self._refresh_user_list, self.log)
 
 
+class AddOwnerManualDialog:
+    """手动输入用户ID和管理员名字添加管理员对话框"""
+    
+    def __init__(self, parent, user_manager: UserManager, callback: Callable, log_callback: Callable):
+        """初始化手动添加管理员对话框
+        
+        Args:
+            parent: 父窗口
+            user_manager: 用户管理器
+            callback: 完成后的回调函数
+            log_callback: 日志回调函数
+        """
+        self.parent = parent
+        self.user_manager = user_manager
+        self.callback = callback
+        self.log = log_callback
+        
+        # 创建窗口
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("添加管理员")
+        self.dialog.geometry("500x350")
+        self.dialog.resizable(False, False)
+        
+        # 居中显示
+        self._center_window()
+        
+        # 创建界面
+        self._create_widgets()
+    
+    def _center_window(self):
+        """将窗口居中显示"""
+        self.dialog.update_idletasks()
+        width = 500
+        height = 350
+        screen_width = self.dialog.winfo_screenwidth()
+        screen_height = self.dialog.winfo_screenheight()
+        x = (screen_width // 2) - (width // 2)
+        y = (screen_height // 2) - (height // 2)
+        self.dialog.geometry(f'{width}x{height}+{x}+{y}')
+    
+    def _create_widgets(self):
+        """创建界面组件"""
+        main_frame = ttk.Frame(self.dialog, padding="20")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # 标题
+        title_label = ttk.Label(
+            main_frame,
+            text="添加管理员",
+            font=("Microsoft YaHei UI", 12, "bold"),
+            foreground="blue"
+        )
+        title_label.pack(pady=(0, 20))
+        
+        # 说明文字
+        info_label = ttk.Label(
+            main_frame,
+            text="请输入用户ID和管理员名字\n用户ID将作为转账收款账号",
+            font=("Microsoft YaHei UI", 9),
+            foreground="gray"
+        )
+        info_label.pack(pady=(0, 20))
+        
+        # 输入区域
+        input_frame = ttk.Frame(main_frame)
+        input_frame.pack(fill=tk.X, pady=(0, 20))
+        
+        # 用户ID输入
+        user_id_frame = ttk.Frame(input_frame)
+        user_id_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        ttk.Label(user_id_frame, text="用户ID:", width=12, anchor=tk.E).pack(side=tk.LEFT, padx=(0, 10))
+        self.user_id_var = tk.StringVar()
+        user_id_entry = ttk.Entry(user_id_frame, textvariable=self.user_id_var, width=30)
+        user_id_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        user_id_entry.focus()
+        
+        # 提示文字
+        ttk.Label(
+            input_frame,
+            text="💡 提示：用户ID是数字，例如：218909",
+            font=("Microsoft YaHei UI", 8),
+            foreground="gray"
+        ).pack(fill=tk.X, pady=(0, 10))
+        
+        # 管理员名字输入
+        name_frame = ttk.Frame(input_frame)
+        name_frame.pack(fill=tk.X, pady=(0, 15))
+        
+        ttk.Label(name_frame, text="管理员名字:", width=12, anchor=tk.E).pack(side=tk.LEFT, padx=(0, 10))
+        self.name_var = tk.StringVar()
+        name_entry = ttk.Entry(name_frame, textvariable=self.name_var, width=30)
+        name_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        # 提示文字
+        ttk.Label(
+            input_frame,
+            text="💡 提示：管理员名字用于显示，例如：张三",
+            font=("Microsoft YaHei UI", 8),
+            foreground="gray"
+        ).pack(fill=tk.X, pady=(0, 10))
+        
+        # 按钮区域
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill=tk.X, pady=(20, 0))
+        
+        ttk.Button(button_frame, text="添加", command=self._add_owner, width=12).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(button_frame, text="取消", command=self.dialog.destroy, width=12).pack(side=tk.LEFT)
+        
+        # 绑定回车键
+        self.dialog.bind('<Return>', lambda e: self._add_owner())
+    
+    def _add_owner(self):
+        """添加管理员"""
+        # 获取输入
+        user_id_input = self.user_id_var.get().strip()
+        name_input = self.name_var.get().strip()
+        
+        # 验证输入
+        if not user_id_input:
+            messagebox.showwarning("提示", "请输入用户ID", parent=self.dialog)
+            return
+        
+        if not name_input:
+            messagebox.showwarning("提示", "请输入管理员名字", parent=self.dialog)
+            return
+        
+        # 验证用户ID格式（应该是数字）
+        if not user_id_input.isdigit():
+            messagebox.showerror("错误", "用户ID必须是数字", parent=self.dialog)
+            return
+        
+        # 构造完整的用户ID（添加 user_ 前缀）
+        full_user_id = f"user_{user_id_input}"
+        
+        # 检查用户ID是否已存在
+        if self.user_manager.get_user(full_user_id):
+            messagebox.showerror("错误", f"用户ID {user_id_input} 已存在", parent=self.dialog)
+            return
+        
+        # 创建用户对象
+        user = User(
+            user_id=full_user_id,
+            user_name=name_input,
+            transfer_recipients=[user_id_input],  # 用户ID作为转账收款账号
+            description=f"用户ID: {user_id_input}",
+            enabled=True
+        )
+        
+        # 添加用户
+        if self.user_manager.add_user(user):
+            self.log(f"✓ 已添加管理员: {name_input}")
+            self.log(f"  - 用户ID: {user_id_input}")
+            self.log(f"  - 转账收款账号: {user_id_input}")
+            
+            messagebox.showinfo(
+                "成功", 
+                f"已成功添加管理员\n\n管理员: {name_input}\n用户ID: {user_id_input}\n转账收款账号: {user_id_input}",
+                parent=self.dialog
+            )
+            
+            # 刷新父窗口
+            self.callback()
+            
+            # 关闭对话框
+            self.dialog.destroy()
+        else:
+            messagebox.showerror("错误", "添加管理员失败", parent=self.dialog)
+
+
 class SelectAccountAsOwnerDialog:
     """从未分配账号中选择作为管理员对话框"""
     
@@ -1756,7 +2427,7 @@ class UserEditDialog:
         self.recipients_text.pack(fill=tk.BOTH, expand=True)
         
         # 提示文字
-        hint_label = ttk.Label(recipients_frame, text="（每行一个手机号，支持多个收款人）", foreground="gray", font=("Microsoft YaHei UI", 8))
+        hint_label = ttk.Label(recipients_frame, text="（每行一个收款人ID（纯数字），支持多个收款人）", foreground="gray", font=("Microsoft YaHei UI", 8))
         hint_label.pack(anchor=tk.W)
         
         # 备注说明
@@ -1808,36 +2479,36 @@ class UserEditDialog:
             return
         
         if not recipients_text:
-            messagebox.showerror("错误", "请至少输入一个转账收款人手机号")
+            messagebox.showerror("错误", "请至少输入一个转账收款人")
             return
         
-        # 解析收款人列表
+        # 解析收款人列表（仅允许数字）
         transfer_recipients = []
         invalid_lines = []
         
         for line_num, line in enumerate(recipients_text.split('\n'), 1):
-            phone = line.strip()
-            if not phone:
+            recipient = line.strip()
+            if not recipient:
                 continue
             
-            # 验证手机号格式
-            if not phone.isdigit() or len(phone) != 11:
-                invalid_lines.append(f"第{line_num}行：{phone}")
+            # 验证是否为纯数字
+            if not recipient.isdigit():
+                invalid_lines.append(f"第{line_num}行：{recipient}（非数字）")
                 continue
             
-            transfer_recipients.append(phone)
+            transfer_recipients.append(recipient)
         
         if not transfer_recipients:
-            error_msg = "没有有效的收款人手机号"
+            error_msg = "没有有效的收款人ID"
             if invalid_lines:
-                error_msg += "\n\n格式错误的手机号：\n" + "\n".join(invalid_lines[:5])
+                error_msg += "\n\n格式错误：\n" + "\n".join(invalid_lines[:5])
             messagebox.showerror("错误", error_msg)
             return
         
         if invalid_lines:
             result = messagebox.askyesno(
                 "警告",
-                f"发现 {len(invalid_lines)} 个格式错误的手机号：\n\n" + "\n".join(invalid_lines[:5]) +
+                f"发现 {len(invalid_lines)} 个格式错误的收款人ID：\n\n" + "\n".join(invalid_lines[:5]) +
                 (f"\n... 还有 {len(invalid_lines) - 5} 个" if len(invalid_lines) > 5 else "") +
                 f"\n\n是否继续保存 {len(transfer_recipients)} 个有效收款人？"
             )
@@ -1982,8 +2653,14 @@ class QuickAssignOwnerDialog:
         
         user = self.user_list[selection[0]]
         
+        # 调试日志
+        print(f"[分配管理员] 准备为 {len(self.phones)} 个账号分配管理员: {user.user_name}")
+        print(f"[分配管理员] 账号列表: {self.phones[:5]}{'...' if len(self.phones) > 5 else ''}")
+        
         # 批量分配
         count = self.user_manager.batch_assign_accounts(self.phones, user.user_id)
+        
+        print(f"[分配管理员] 实际分配了 {count} 个账号")
         
         messagebox.showinfo("成功", f"已为 {count} 个账号分配管理员: {user.user_name}")
         self.callback()

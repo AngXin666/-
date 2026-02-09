@@ -16,6 +16,11 @@ try:
 except ImportError:
     HAS_PIL = False
 
+# 在导入 RapidOCR 之前设置日志级别
+import logging
+for logger_name in ['rapidocr', 'RapidOCR', 'ppocr', 'onnxruntime']:
+    logging.getLogger(logger_name).setLevel(logging.ERROR)
+
 try:
     from rapidocr import RapidOCR
     HAS_OCR = True
@@ -38,6 +43,10 @@ class DailyCheckin:
     # 签到按钮坐标 (540x960) - 首页的签到入口
     CHECKIN_BUTTON = (477, 598)
     
+    # 首页签到按钮的合理坐标范围 (x_min, x_max, y_min, y_max)
+    # 基于实际观察：按钮通常在屏幕右侧中下部
+    CHECKIN_BUTTON_VALID_RANGE = (400, 540, 500, 650)
+    
     def __init__(self, adb: ADBBridge, detector: 'PageDetectorIntegrated', navigator: Navigator):
         """初始化签到处理器
         
@@ -50,6 +59,16 @@ class DailyCheckin:
         self.detector = detector
         self.navigator = navigator
         self.reader = CheckinPageReader(adb)
+        
+        # 缓存首次成功的签到按钮坐标（用于后续点击）
+        self._cached_home_checkin_button = None
+        
+        # 初始化智能按钮点击器
+        from .smart_button_clicker import SmartButtonClicker
+        from .model_manager import ModelManager
+        model_manager = ModelManager.get_instance()
+        ocr_pool = model_manager.get_ocr_thread_pool() if HAS_OCR else None
+        self._smart_clicker = SmartButtonClicker(adb, detector, ocr_pool)
         
         # 初始化页面状态守卫
         from .page_state_guard import PageStateGuard
@@ -683,6 +702,64 @@ class DailyCheckin:
                 result['screenshots'].append(page_enter_screenshot)
             
             # 6.2 智能等待识别到页面后，立即用深度学习检测页面类型
+            
+            # 检查是否误点到其他页面（文章页、搜索页、分类页）
+            pages_need_return_home = [
+                PageState.ARTICLE,   # 文章页
+                PageState.SEARCH,    # 搜索页
+                PageState.CATEGORY,  # 分类页
+            ]
+            
+            if page_result and page_result.state in pages_need_return_home:
+                log(f"  [签到] ⚠️ 误点到{page_result.state.value}，返回首页重新点击...")
+                
+                # 点击首页按钮或返回按钮
+                if page_result.state == PageState.CATEGORY:
+                    # 分类页：使用YOLO检测首页按钮
+                    home_button_pos = await self.detector.find_button_yolo(
+                        device_id, 
+                        '分类页',
+                        '首页按钮',
+                        conf_threshold=0.5
+                    )
+                    if home_button_pos:
+                        await self.adb.tap(device_id, home_button_pos[0], home_button_pos[1])
+                    else:
+                        # 降级：使用默认坐标
+                        await self.adb.tap(device_id, 90, 920)  # 首页按钮默认坐标
+                else:
+                    # 其他页面：优先点击返回按钮，失败则按返回键
+                    back_button_pos = await self.detector.find_button_yolo(
+                        device_id, 
+                        page_result.state.value,
+                        '返回按钮',
+                        conf_threshold=0.5
+                    )
+                    if back_button_pos:
+                        await self.adb.tap(device_id, back_button_pos[0], back_button_pos[1])
+                    else:
+                        # 降级：按返回键
+                        await self.adb.press_back(device_id)
+                
+                await asyncio.sleep(1)
+                self.detector.clear_cache(device_id)
+                
+                # 验证是否回到首页
+                page_result = await self.detector.detect_page(device_id, use_cache=False, detect_elements=False)
+                if page_result and page_result.state == PageState.HOME:
+                    log(f"  [签到] ✓ 已返回首页，重新点击签到按钮...")
+                    # 重新点击签到按钮
+                    await self.adb.tap(device_id, checkin_button_pos[0], checkin_button_pos[1])
+                    await asyncio.sleep(1)
+                    # 重新检测页面
+                    page_result = await self.detector.detect_page(device_id, use_cache=False, detect_elements=False)
+                else:
+                    log(f"  [签到] ❌ 返回首页失败，当前页面: {page_result.state.value if page_result else 'unknown'}")
+                    result['message'] = "返回首页失败"
+                    result['error_type'] = ErrorType.CANNOT_REACH_CHECKIN
+                    result['error_message'] = result['message']
+                    return result
+            
             if page_result and (page_result.state == PageState.CHECKIN or page_result.state == PageState.CHECKIN_POPUP):
                 log(f"  [签到] ✓ 已进入签到页面（深度学习检测，置信度: {page_result.confidence:.2%}）")
                 
@@ -690,11 +767,25 @@ class DailyCheckin:
                 concise.action("验证当前页面")
                 concise.action("签到页")
                 
-                # 6.3 立即进行 OCR 次数识别（必须的）
+                # 6.3 立即进行 OCR 次数识别（必须的）- 增加重试机制
                 log(f"  [签到] 读取签到次数信息...")
                 concise.action("获取签到次数")
                 
-                initial_info = await self.reader.get_checkin_info(device_id)
+                # 重试机制：最多尝试3次
+                initial_info = None
+                for ocr_attempt in range(3):
+                    if ocr_attempt > 0:
+                        log(f"  [签到] OCR识别失败，第{ocr_attempt + 1}次重试...")
+                        # 等待页面稳定
+                        await asyncio.sleep(0.5)
+                    
+                    initial_info = await self.reader.get_checkin_info(device_id)
+                    
+                    # 检查是否识别成功
+                    if initial_info and (initial_info['total_times'] is not None or initial_info['daily_remaining_times'] is not None):
+                        if ocr_attempt > 0:
+                            log(f"  [签到] ✓ 重试成功！")
+                        break
                 
                 if initial_info and (initial_info['total_times'] is not None or initial_info['daily_remaining_times'] is not None):
                     log(f"  [签到] ✓ OCR 识别成功")
@@ -710,8 +801,15 @@ class DailyCheckin:
                     if initial_info['daily_remaining_times'] is not None:
                         concise.action(f"当日剩余: {initial_info['daily_remaining_times']}")
                 else:
-                    log(f"  [签到] ⚠️ OCR 识别失败，继续执行签到（无法显示次数信息）")
-                    log(f"    - 原始文本: {initial_info.get('raw_text', 'N/A')}")
+                    log(f"  [签到] ⚠️ OCR 识别失败（已重试3次），继续执行签到（无法显示次数信息）")
+                    if initial_info:
+                        log(f"    - 原始文本: {initial_info.get('raw_text', 'N/A')}")
+                    
+                    # 保存失败截图用于调试
+                    fail_screenshot = await self._save_screenshot(device_id, phone, "ocr_failed")
+                    if fail_screenshot:
+                        result['screenshots'].append(fail_screenshot)
+                        log(f"    - 已保存失败截图: {fail_screenshot}")
             else:
                 # 无法确认是否进入签到页面
                 log(f"  [签到] ❌ 无法确认是否进入签到页面")
@@ -850,7 +948,7 @@ class DailyCheckin:
                     if current_state not in [PageState.CHECKIN, PageState.CHECKIN_POPUP]:
                         # 尝试处理异常页面
                         log(f"  [签到] 尝试处理异常页面...")
-                        handled = await self.guard._handle_unexpected_page(device_id, current_state, PageState.CHECKIN, "签到循环中")
+                        handled = await self.guard._handle_unexpected_page(device_id, current_state, PageState.CHECKIN, "签到循环中", retry_count=attempt)
                         if not handled:
                             result['message'] = f"签到循环中页面异常: {current_state.value}"
                             result['error_type'] = ErrorType.CHECKIN_FAILED  # 签到失败
@@ -1387,35 +1485,60 @@ class DailyCheckin:
                             break
             
             # 循环结束后，使用余额对比计算总奖励
-            log(f"  [签到] 签到循环结束，计算总奖励...")
+            log(f"  [签到] 签到循环结束，获取签到后的完整资料...")
             
-            # 获取签到后的余额（增加重试机制）
-            checkin_balance_after = None  # 改名：签到后余额
+            # 获取签到后的完整资料（复用正常流程的方式）
+            checkin_balance_after = None  # 签到后余额
+            final_profile = None  # 签到后的完整资料
             max_retries = 3
             
             for retry in range(max_retries):
                 try:
-                    log(f"  [签到] 尝试获取签到后余额（第{retry+1}/{max_retries}次）...")
+                    log(f"  [签到] 尝试获取签到后资料（第{retry+1}/{max_retries}次）...")
                     
                     # 确保在个人页面
                     await self.navigator.navigate_to_profile(device_id)
                     await asyncio.sleep(TimeoutsConfig.WAIT_MEDIUM)  # 等待页面稳定
                     
+                    # 使用正常流程的方式：get_full_profile_with_retry（带重试机制）
                     from .profile_reader import ProfileReader
                     profile_reader = ProfileReader(self.adb, self.detector)
-                    checkin_balance_after = await profile_reader.get_balance(device_id)
+                    account_str = f"{phone}----{password}" if password else phone
+                    # 改用带重试的方法，和正常流程完全一样
+                    profile_task = profile_reader.get_full_profile_with_retry(device_id, account=account_str, max_retries=3)
                     
-                    if checkin_balance_after is not None:
-                        log(f"  [签到] ✓ 成功获取签到后余额: {checkin_balance_after:.2f} 元")
-                        break
-                    else:
-                        log(f"  [签到] ⚠️ 第{retry+1}次获取余额失败，返回None")
+                    try:
+                        final_profile = await asyncio.wait_for(profile_task, timeout=30.0)  # 增加超时时间，因为内部有重试
+                        
+                        if final_profile and final_profile.get('balance') is not None:
+                            checkin_balance_after = final_profile.get('balance')
+                            
+                            log(f"  [签到] ✓ 成功获取签到后资料:")
+                            log(f"    - 余额: {checkin_balance_after:.2f} 元")
+                            if final_profile.get('nickname'):
+                                log(f"    - 昵称: {final_profile.get('nickname')}")
+                            if final_profile.get('user_id'):
+                                log(f"    - 用户ID: {final_profile.get('user_id')}")
+                            if final_profile.get('points') is not None:
+                                log(f"    - 积分: {final_profile.get('points')}")
+                            if final_profile.get('vouchers') is not None:
+                                log(f"    - 抵扣券: {final_profile.get('vouchers')}")
+                            if final_profile.get('coupons') is not None:
+                                log(f"    - 优惠券: {final_profile.get('coupons')}")
+                            
+                            break
+                        else:
+                            log(f"  [签到] ⚠️ 第{retry+1}次获取资料失败，余额为None")
+                            if retry < max_retries - 1:
+                                await asyncio.sleep(TimeoutsConfig.WAIT_MEDIUM)
+                    except asyncio.TimeoutError:
+                        log(f"  [签到] ⚠️ 第{retry+1}次获取资料超时")
                         if retry < max_retries - 1:
-                            await asyncio.sleep(TimeoutsConfig.WAIT_MEDIUM)  # 等待后重试
+                            await asyncio.sleep(TimeoutsConfig.WAIT_MEDIUM)
                 except Exception as e:
-                    log(f"  [签到] ⚠️ 第{retry+1}次获取余额出错: {e}")
+                    log(f"  [签到] ⚠️ 第{retry+1}次获取资料出错: {e}")
                     if retry < max_retries - 1:
-                        await asyncio.sleep(TimeoutsConfig.WAIT_MEDIUM)  # 等待后重试
+                        await asyncio.sleep(TimeoutsConfig.WAIT_MEDIUM)
             
             # 计算总奖励
             if checkin_balance_after is not None and balance is not None:
@@ -1423,7 +1546,16 @@ class DailyCheckin:
                 total_reward = checkin_balance_after - balance
                 result['reward_amount'] = total_reward
                 result['checkin_count'] = checkin_count
-                result['checkin_balance_after'] = checkin_balance_after  # 返回签到后余额（新增字段）
+                result['checkin_balance_after'] = checkin_balance_after  # 返回签到后余额
+                
+                # 返回签到后的完整资料（供快速签到模式使用）
+                if final_profile:
+                    result['nickname'] = final_profile.get('nickname')
+                    result['user_id'] = final_profile.get('user_id')
+                    result['points'] = final_profile.get('points')
+                    result['vouchers'] = final_profile.get('vouchers')
+                    result['coupons'] = final_profile.get('coupons')
+                    result['balance_before'] = balance  # 签到前余额
                 
                 log(f"  [签到] 签到前余额: {round(balance, 3)} 元")
                 log(f"  [签到] 签到后余额: {round(checkin_balance_after, 3)} 元")
@@ -1434,7 +1566,15 @@ class DailyCheckin:
                 log(f"  [签到]    - 签到后余额: {checkin_balance_after}")
                 result['checkin_count'] = checkin_count
                 result['checkin_balance_after'] = checkin_balance_after  # 即使为None也返回
-                # 即使无法计算奖励，也要保存记录（reward_amount保持为0.0）
+                
+                # 即使无法计算奖励，也返回获取到的资料
+                if final_profile:
+                    result['nickname'] = final_profile.get('nickname')
+                    result['user_id'] = final_profile.get('user_id')
+                    result['points'] = final_profile.get('points')
+                    result['vouchers'] = final_profile.get('vouchers')
+                    result['coupons'] = final_profile.get('coupons')
+                    result['balance_before'] = balance  # 签到前余额
             
             # 6. 设置最终结果
             if result['checkin_count'] > 0:
@@ -1443,6 +1583,31 @@ class DailyCheckin:
                 # 添加简洁日志：签到完成
                 concise.success("签到完成")
             elif result['already_checked']:
+                # 今日已签到：需要获取当前余额作为签到后余额
+                # 这样才能在ximeng_automation中正确计算签到奖励（即使为0）
+                log(f"  [签到] 今日已签到，获取当前余额...")
+                try:
+                    # 导航到个人中心获取余额
+                    from .navigator import Navigator
+                    navigator = Navigator(self.adb, self.detector)
+                    nav_success = await navigator.navigate_to_profile(device_id)
+                    
+                    if nav_success:
+                        # 读取个人资料
+                        from .profile_reader import ProfileReader
+                        profile_reader = ProfileReader(self.adb)
+                        current_profile = await profile_reader.read_profile(device_id)
+                        
+                        if current_profile and current_profile.get('balance') is not None:
+                            result['checkin_balance_after'] = current_profile.get('balance')
+                            log(f"  [签到] ✓ 当前余额: {result['checkin_balance_after']:.2f} 元")
+                        else:
+                            log(f"  [签到] ⚠️ 无法获取当前余额")
+                    else:
+                        log(f"  [签到] ⚠️ 无法导航到个人中心")
+                except Exception as e:
+                    log(f"  [签到] ⚠️ 获取当前余额失败: {e}")
+                
                 result['success'] = True
                 result['message'] = "今日已签到完成（签到次数已用完）"
                 # 添加简洁日志：签到完成
@@ -1522,7 +1687,7 @@ class DailyCheckin:
     async def _find_checkin_button(self, device_id: str) -> Optional[Tuple[int, int]]:
         """使用整合检测器或OCR识别首页的"每日签到"按钮位置
         
-        优先使用整合检测器，如果失败则降级到OCR识别
+        使用智能按钮点击器的学习机制，但只返回坐标不点击
         
         Args:
             device_id: 设备ID
@@ -1534,61 +1699,126 @@ class DailyCheckin:
         from .logger import get_logger
         logger = get_logger()
         
-        # 优先使用整合检测器
+        # 创建设备专属的学习器
+        from .button_position_learner import ButtonPositionLearner
+        learner = ButtonPositionLearner(device_id=device_id)
+        
+        button_name = "home_checkin_button"
+        detected_position = None
+        detection_confidence = 0.0
+        
+        # 步骤1: 优先使用整合检测器（YOLO）
         try:
             logger.info(f"  [签到] 使用整合检测器检测'每日签到'按钮...")
             
-            # 使用整合检测器的元素检测功能（使用缓存）
+            # 使用整合检测器的元素检测功能（不使用缓存，避免旧坐标问题）
             detection_result = await self._detect_page_cached(
                 device_id,
-                use_cache=True,  # 使用缓存（首页签到按钮位置通常不变）
+                use_cache=False,  # 修改：不使用缓存，每次都重新检测
                 detect_elements=True,
                 cache_key="home_checkin_button",
-                ttl=5.0  # 首页按钮位置缓存5秒
+                ttl=0  # 不缓存
             )
             
             if detection_result and detection_result.elements:
                 # 查找签到按钮元素
                 for element in detection_result.elements:
                     if '每日签到' in element.class_name or '签到按钮' in element.class_name:
-                        logger.info(f"  [签到] 整合检测器检测到'{element.class_name}': {element.center} (置信度: {element.confidence:.2%})")
-                        return element.center
+                        detected_position = element.center
+                        detection_confidence = element.confidence
+                        logger.info(f"  [签到] 整合检测器检测到'{element.class_name}': {detected_position} (置信度: {detection_confidence:.2%})")
+                        break
                 
-                logger.info(f"  [签到] 整合检测器未检测到签到按钮，降级到OCR识别...")
+                if detected_position is None:
+                    logger.info(f"  [签到] 整合检测器未检测到签到按钮")
             else:
-                logger.info(f"  [签到] 整合检测器未检测到元素，降级到OCR识别...")
+                logger.info(f"  [签到] 整合检测器未检测到元素")
         except Exception as e:
-            logger.info(f"  [签到] 整合检测器检测失败: {e}，降级到OCR识别...")
+            logger.info(f"  [签到] 整合检测器检测失败: {e}")
         
-        # 降级到OCR识别
-        if not HAS_OCR or not self._ocr_pool:
-            return None
+        # 步骤2: 坐标合理性验证
+        if detected_position:
+            x, y = detected_position
+            x_min, x_max, y_min, y_max = self.CHECKIN_BUTTON_VALID_RANGE
+            
+            # 检查是否在固定合理范围内
+            if x_min <= x <= x_max and y_min <= y <= y_max:
+                logger.info(f"  [签到] ✓ 坐标合理性验证通过: {detected_position}")
+                
+                # 记录成功坐标到学习器
+                learner.record_success(button_name, detected_position, detection_confidence)
+                
+                # 缓存成功坐标
+                self._cached_home_checkin_button = detected_position
+                
+                return detected_position
+            else:
+                logger.info(f"  [签到] ⚠️ 坐标不合理: {detected_position}，超出范围 {self.CHECKIN_BUTTON_VALID_RANGE}")
+                logger.info(f"  [签到] 尝试使用学习器推荐坐标...")
         
-        try:
-            screenshot = await self.adb.screencap(device_id)
-            if not screenshot:
-                return None
+        # 步骤3: 使用学习器推荐坐标
+        learner_position = learner.get_best_position(
+            button_name,
+            min_samples=5,
+            prefer_device=True
+        )
+        
+        if learner_position:
+            logger.info(f"  [签到] ✓ 学习器推荐坐标: {learner_position}")
             
-            image = Image.open(BytesIO(screenshot))
-            
-            # 使用OCR线程池识别（减少超时）
-            ocr_result = await self._ocr_pool.recognize(image, timeout=TimeoutsConfig.OCR_TIMEOUT_SHORT)  # 优化：减少超时 10秒→2秒
-            if not ocr_result or not ocr_result.texts:
-                return None
-            
-            # 查找"每日签到"或"签到"
-            for i, text in enumerate(ocr_result.texts):
-                if "每日签到" in text or (text == "签到" and i < len(ocr_result.boxes)):
-                    box = ocr_result.boxes[i]
-                    x_coords = [p[0] for p in box]
-                    y_coords = [p[1] for p in box]
-                    center_x = int(sum(x_coords) / len(x_coords))
-                    center_y = int(sum(y_coords) / len(y_coords))
-                    logger.info(f"  [签到] OCR找到签到按钮: ({center_x}, {center_y})")
-                    return (center_x, center_y)
-            
-            return None
-            
-        except Exception as e:
-            logger.warning(f"  ⚠️ OCR识别签到按钮失败: {e}")
-            return None
+            # 验证学习器推荐的坐标是否合理
+            x, y = learner_position
+            x_min, x_max, y_min, y_max = self.CHECKIN_BUTTON_VALID_RANGE
+            if x_min <= x <= x_max and y_min <= y <= y_max:
+                logger.info(f"  [签到] ✓ 学习器坐标验证通过")
+                self._cached_home_checkin_button = learner_position
+                return learner_position
+            else:
+                logger.info(f"  [签到] ⚠️ 学习器坐标不合理，继续降级...")
+        else:
+            logger.info(f"  [签到] 学习器无足够数据（需要至少5个样本）")
+        
+        # 步骤4: 使用缓存坐标
+        if self._cached_home_checkin_button:
+            logger.info(f"  [签到] 使用缓存坐标: {self._cached_home_checkin_button}")
+            return self._cached_home_checkin_button
+        
+        # 步骤5: 降级到OCR识别
+        if HAS_OCR and self._ocr_pool:
+            logger.info(f"  [签到] 降级到OCR识别...")
+            try:
+                screenshot = await self.adb.screencap(device_id)
+                if screenshot:
+                    image = Image.open(BytesIO(screenshot))
+                    
+                    # 使用OCR线程池识别（减少超时）
+                    from .timeouts_config import TimeoutsConfig
+                    ocr_result = await self._ocr_pool.recognize(image, timeout=TimeoutsConfig.OCR_TIMEOUT_SHORT)
+                    if ocr_result and ocr_result.texts:
+                        # 查找"每日签到"或"签到"
+                        for i, text in enumerate(ocr_result.texts):
+                            if "每日签到" in text or (text == "签到" and i < len(ocr_result.boxes)):
+                                box = ocr_result.boxes[i]
+                                x_coords = [p[0] for p in box]
+                                y_coords = [p[1] for p in box]
+                                center_x = int(sum(x_coords) / len(x_coords))
+                                center_y = int(sum(y_coords) / len(y_coords))
+                                ocr_position = (center_x, center_y)
+                                logger.info(f"  [签到] OCR找到签到按钮: {ocr_position}")
+                                
+                                # 验证OCR坐标是否合理
+                                x_min, x_max, y_min, y_max = self.CHECKIN_BUTTON_VALID_RANGE
+                                if x_min <= center_x <= x_max and y_min <= center_y <= y_max:
+                                    logger.info(f"  [签到] ✓ OCR坐标验证通过")
+                                    # 记录成功坐标
+                                    learner.record_success(button_name, ocr_position, 1.0)
+                                    self._cached_home_checkin_button = ocr_position
+                                    return ocr_position
+                                else:
+                                    logger.info(f"  [签到] ⚠️ OCR坐标不合理，继续查找...")
+            except Exception as e:
+                logger.warning(f"  ⚠️ OCR识别签到按钮失败: {e}")
+        
+        # 步骤6: 最终降级到固定坐标
+        logger.info(f"  [签到] 使用默认固定坐标: {self.CHECKIN_BUTTON}")
+        return self.CHECKIN_BUTTON

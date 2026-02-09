@@ -4,9 +4,14 @@
       "page_state": "PROFILE_LOGGED",
       "yolo_models": [
         {
+          "model_key": "profile_logged",
+          "purpose": "检测昵称和用户ID",
+          "priority": 1
+        },
+        {
           "model_key": "balance",
           "purpose": "检测余额、积分、抵扣券、优惠券数字",
-          "priority": 1
+          "priority": 2
         }
       ]
     },

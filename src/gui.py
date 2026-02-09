@@ -106,6 +106,11 @@ class AutomationGUI:
         # 统计锁(用于多线程安全地更新统计数据)
         self.stats_lock = threading.Lock()
         
+        # 已保存到数据库的账号集合（防止重复保存）
+        # 格式：{phone: timestamp}，每次运行开始时清空
+        self.saved_accounts = {}
+        self.saved_accounts_lock = threading.Lock()
+        
         # 模拟器实例池管理
         self.instance_pool = []  # 可用的实例编号池 [0, 1, 2, ...]
         self.instance_lock = threading.Lock()  # 实例池访问锁
@@ -502,7 +507,6 @@ class AutomationGUI:
         ttk.Button(button_row, text="全选", command=self._select_all_results, width=8).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(button_row, text="反选", command=self._invert_selection, width=8).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(button_row, text="撤回", command=self._undo_selection, width=8).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(button_row, text="👤 分配管理员", command=self._assign_owner_to_selected, width=12).pack(side=tk.LEFT, padx=(5, 0))
         
         # 快速筛选按钮
         ttk.Button(button_row, text="🔍 执行失败", command=self._filter_failed, width=10).pack(side=tk.LEFT, padx=(10, 5))
@@ -897,22 +901,39 @@ class AutomationGUI:
                 
                 if hist:
                     # 有历史数据，使用历史数据
+                    # 处理空值：None 显示为 0 或 -
+                    def format_value(value, default='-', is_number=False):
+                        """格式化显示值，None显示为默认值"""
+                        # 处理 None 和空字符串
+                        if value is None or value == '' or str(value).lower() == 'none':
+                            return '0' if is_number else default
+                        # 如果是数值类型，格式化显示
+                        if is_number and isinstance(value, (int, float)):
+                            if isinstance(value, float):
+                                return f"{value:.2f}" if value != int(value) else str(int(value))
+                            return str(value)
+                        # 返回字符串，但要确保不是 "None"
+                        str_value = str(value)
+                        if str_value.lower() == 'none':
+                            return '0' if is_number else default
+                        return str_value
+                    
                     values = (
                         phone,
-                        hist.get('昵称', '待处理'),
-                        hist.get('用户ID', '待处理'),
-                        hist.get('余额前(元)', '-'),
-                        hist.get('积分', '-'),
-                        hist.get('抵扣券(张)', '-'),
-                        hist.get('优惠券(张)', '-'),
-                        hist.get('签到奖励(元)', '-'),
-                        hist.get('签到总次数', '-'),
-                        hist.get('余额(元)', '-'),
-                        hist.get('转账金额(元)', '-'),
-                        hist.get('转账收款人', '-'),  # 修复：使用正确的字段名
-                        hist.get('耗时(秒)', '-'),
-                        hist.get('状态', '待处理'),
-                        hist.get('登录方式', '-'),
+                        format_value(hist.get('昵称'), '待处理'),
+                        format_value(hist.get('用户ID'), '待处理'),
+                        format_value(hist.get('余额前(元)'), '0.0', True),
+                        format_value(hist.get('积分'), '0', True),
+                        format_value(hist.get('抵扣券(张)'), '0', True),
+                        format_value(hist.get('优惠券(张)'), '0', True),
+                        format_value(hist.get('签到奖励(元)'), '0.0', True),
+                        format_value(hist.get('签到总次数'), '0', True),
+                        format_value(hist.get('余额(元)'), '0.0', True),
+                        format_value(hist.get('转账金额(元)'), '0.0', True),
+                        format_value(hist.get('转账收款人'), '-'),
+                        format_value(hist.get('耗时(秒)'), '-'),
+                        format_value(hist.get('状态'), '待处理'),
+                        format_value(hist.get('登录方式'), '-'),
                         owner_name  # 管理员（从批量查询结果中获取，放在最后）
                     )
                     
@@ -1570,23 +1591,6 @@ class AutomationGUI:
         
         self._log(f"已撤回到上一个状态(剩余{len(self.selection_history)}个历史记录)")
     
-    def _assign_owner_to_selected(self):
-        """为选中的账号分配管理员"""
-        # 获取选中的账号
-        selected_phones = []
-        for item_id in self.results_tree.get_children():
-            if self.checked_items.get(item_id, False):
-                values = self.results_tree.item(item_id, 'values')
-                if values and len(values) > 0:
-                    selected_phones.append(values[0])  # 手机号在第一列
-        
-        if not selected_phones:
-            messagebox.showwarning("提示", "请先勾选要分配管理员的账号")
-            return
-        
-        # 打开分配对话框
-        from .user_management_gui import QuickAssignOwnerDialog
-        QuickAssignOwnerDialog(self.root, selected_phones, self._refresh_account_list)
     
     def _filter_failed(self):
         """筛选执行失败的账户（只显示失败的账户）"""
@@ -1968,6 +1972,33 @@ class AutomationGUI:
         self.total_balance_var.set(f"总余额: {total_balance:.2f} 元")
         self.total_checkin_reward_var.set(f"总签到奖励: {total_checkin_reward:.2f} 元")
     
+    def _get_success_failed_from_table(self) -> tuple:
+        """从表格中快速获取成功和失败数量（用于进度条显示）
+        
+        Returns:
+            tuple: (成功数, 失败数)
+        """
+        success = 0
+        failed = 0
+        
+        # 遍历表格中的所有行
+        for item_id in self.results_tree.get_children():
+            values = self.results_tree.item(item_id, 'values')
+            if not values or len(values) < 16:
+                continue
+            
+            # 状态列（索引13）
+            status = values[13]
+            is_success = "成功" in status
+            is_failed = "失败" in status or "❌" in status
+            
+            if is_success:
+                success += 1
+            elif is_failed:
+                failed += 1
+        
+        return (success, failed)
+    
     def _format_status(self, account_result: AccountResult) -> str:
         """格式化状态文本
         
@@ -2146,10 +2177,21 @@ class AutomationGUI:
         规则：
         - 只保存成功的记录
         - 失败的记录不更新数据库
+        - 防止同一账号在同一次运行中被重复保存（避免签到奖励累加）
         """
         try:
             # 只保存成功的账号
             if account_result.success:
+                # 检查是否已经保存过（防止重复保存导致签到奖励累加）
+                with self.saved_accounts_lock:
+                    if account_result.phone in self.saved_accounts:
+                        print(f"[历史记录] - 跳过重复保存: {account_result.phone} (已在 {self.saved_accounts[account_result.phone]} 保存)")
+                        return
+                    
+                    # 标记为已保存
+                    from datetime import datetime
+                    self.saved_accounts[account_result.phone] = datetime.now().strftime('%H:%M:%S')
+                
                 db = LocalDatabase()
                 
                 # 获取当前日期
@@ -2167,14 +2209,14 @@ class AutomationGUI:
                     'phone': account_result.phone,
                     'nickname': account_result.nickname if account_result.nickname else '',
                     'user_id': account_result.user_id if account_result.user_id else '',
-                    'balance_before': round(account_result.balance_before, 2) if account_result.balance_before is not None else 0.0,
-                    'points': account_result.points if account_result.points is not None else 0,
-                    'vouchers': round(account_result.vouchers, 2) if account_result.vouchers is not None else 0,
-                    'coupons': account_result.coupons if account_result.coupons is not None else 0,
+                    'balance_before': round(account_result.balance_before, 2) if account_result.balance_before is not None else None,
+                    'points': account_result.points if account_result.points is not None else None,
+                    'vouchers': round(account_result.vouchers, 2) if account_result.vouchers is not None else None,
+                    'coupons': account_result.coupons if account_result.coupons is not None else None,
                     'checkin_reward': round(account_result.checkin_reward, 2) if account_result.checkin_reward else 0.0,
-                    'checkin_total_times': account_result.checkin_total_times if account_result.checkin_total_times is not None else 0,
-                    'checkin_balance_after': round(account_result.balance_after, 2) if account_result.balance_after is not None else 0.0,
-                    'balance_after': round(account_result.balance_after, 2) if account_result.balance_after is not None else 0.0,
+                    'checkin_total_times': account_result.checkin_total_times if account_result.checkin_total_times is not None else None,
+                    'checkin_balance_after': round(account_result.checkin_balance_after, 2) if account_result.checkin_balance_after is not None else None,
+                    'balance_after': round(account_result.balance_after, 2) if account_result.balance_after is not None else None,
                     'duration': round(account_result.duration, 2) if account_result.duration is not None else 0.0,
                     'status': '成功',
                     'login_method': account_result.login_method if account_result.login_method else '',
@@ -2421,6 +2463,11 @@ class AutomationGUI:
         # 重置事件标志
         self.stop_event.clear()
         self.pause_event.clear()
+        
+        # 清空已保存账号集合（新的一次运行）
+        with self.saved_accounts_lock:
+            self.saved_accounts.clear()
+            print("[历史记录] 已清空已保存账号集合（新的一次运行）")
         
         self.is_running = True
         self.is_paused = False
@@ -2813,23 +2860,8 @@ class AutomationGUI:
                     with self.stats_lock:
                         processed += 1
                         
-                        # 判断是否真正成功：
-                        # 1. result.success 为 True
-                        # 2. balance_after 不为 None（最终余额必须获取成功）
-                        # 3. 如果启用了转账，transfer_success 必须为 True
-                        is_really_success = (
-                            result and 
-                            result.success and 
-                            result.balance_after is not None  # 最终余额必须获取成功
-                        )
-                        
-                        # 如果启用了转账，还需要检查转账是否成功
-                        if is_really_success and hasattr(result, 'transfer_success'):
-                            # 如果有转账记录，必须转账成功
-                            if result.transfer_amount is not None and result.transfer_amount > 0:
-                                is_really_success = result.transfer_success
-                        
-                        if is_really_success:
+                        # 直接使用 result.success，不需要额外判断
+                        if result.success:
                             success_count += 1
                             
                             # 累积统计数据
@@ -2864,22 +2896,9 @@ class AutomationGUI:
                         else:
                             failed_count += 1
                             
-                            # 修复：更新result.success为False，确保状态显示正确
-                            result.success = False
-                            
-                            # 确定失败原因
-                            if not result:
-                                error_msg = "处理失败"
-                                error_type = "处理失败"
-                            elif result.balance_after is None:
-                                error_msg = "最终余额获取失败"
-                                error_type = "余额获取失败"
-                            elif hasattr(result, 'transfer_success') and not result.transfer_success:
-                                error_msg = "转账失败"
-                                error_type = "转账失败"
-                            else:
-                                error_msg = result.error_message if result.error_message else "未知错误"
-                                error_type = "未知错误"
+                            # 使用 result.error_message 作为失败原因
+                            error_msg = result.error_message if result.error_message else "未知错误"
+                            error_type = "处理失败"
                             
                             # 记录到失败日志文件
                             try:
@@ -2914,9 +2933,11 @@ class AutomationGUI:
                                            tp=current_tp, tv=current_tv, tc=current_tc:
                                            self._update_stats(total, s, f, tcr, tb, tp, tv, tc))
                         
-                        # 更新进度（只显示实际处理的账号进度）
-                        self.root.after(0, lambda p=current_processed, t=queued_count: 
-                                       self._update_progress(p, t, f"进度: {p}/{t} | 成功: {current_success} | 失败: {current_failed}"))
+                        # 更新进度（显示实际处理的账号进度，成功/失败数从表格统计）
+                        # 从表格统计成功/失败数，确保与统计区域一致
+                        table_success, table_failed = self._get_success_failed_from_table()
+                        self.root.after(0, lambda p=current_processed, t=queued_count, s=table_success, f=table_failed: 
+                                       self._update_progress(p, t, f"进度: {p}/{t} | 成功: {s} | 失败: {f}"))
                 
                 except Exception as e:
                     # 捕获所有异常,确保实例不会因为单个账号的异常而停止
@@ -2967,9 +2988,11 @@ class AutomationGUI:
                                    tp=current_tp, tv=current_tv, tc=current_tc:
                                    self._update_stats(total, s, f, tcr, tb, tp, tv, tc))
                     
-                    # 更新进度（只显示实际处理的账号进度）
-                    self.root.after(0, lambda p=current_processed, t=queued_count: 
-                                   self._update_progress(p, t, f"进度: {p}/{t} | 成功: {current_success} | 失败: {current_failed}"))
+                    # 更新进度（显示实际处理的账号进度，成功/失败数从表格统计）
+                    # 从表格统计成功/失败数，确保与统计区域一致
+                    table_success, table_failed = self._get_success_failed_from_table()
+                    self.root.after(0, lambda p=current_processed, t=queued_count, s=table_success, f=table_failed: 
+                                   self._update_progress(p, t, f"进度: {p}/{t} | 成功: {s} | 失败: {f}"))
                     
                     # 继续处理下一个账号,不要停止实例
                     instance_log_callback(f"继续处理下一个账号...")
@@ -4151,40 +4174,39 @@ class TransferConfigWindow:
         ttk.Checkbutton(config_frame, text="启用自动转账", variable=self.enabled_var,
                        command=self._on_enabled_changed).pack(anchor=tk.W, pady=(0, 5))
         
-        # 转账目标模式选择
-        mode_frame = ttk.Frame(config_frame)
-        mode_frame.pack(fill=tk.X, pady=(0, 10))
+        # 收款人选择策略
+        strategy_frame = ttk.Frame(config_frame)
+        strategy_frame.pack(fill=tk.X, pady=(0, 10))
         
-        ttk.Label(mode_frame, text="转账目标模式:").pack(side=tk.LEFT)
+        ttk.Label(strategy_frame, text="收款人选择策略:").pack(side=tk.LEFT)
         
-        # 获取当前模式
-        current_mode = getattr(self.transfer_config, 'transfer_target_mode', 'manager_recipients')
+        # 获取当前策略
+        current_strategy = getattr(self.transfer_config, 'recipient_selection_strategy', 'rotation')
         
-        # 模式选项
-        mode_options = [
-            ("转给管理员自己", "manager_account"),
-            ("转给管理员的收款人", "manager_recipients"),
-            ("转给系统配置收款人", "system_recipients")
+        # 策略选项
+        strategy_options = [
+            ("轮询（平均分配）", "rotation"),
+            ("随机选择", "random")
         ]
         
-        self.transfer_mode_var = tk.StringVar(value=current_mode)
+        self.recipient_strategy_var = tk.StringVar(value=current_strategy)
         
-        for display_name, mode_value in mode_options:
+        for display_name, strategy_value in strategy_options:
             ttk.Radiobutton(
-                mode_frame,
+                strategy_frame,
                 text=display_name,
-                variable=self.transfer_mode_var,
-                value=mode_value,
-                command=self._on_transfer_mode_changed
+                variable=self.recipient_strategy_var,
+                value=strategy_value,
+                command=self._on_recipient_strategy_changed
             ).pack(side=tk.LEFT, padx=(10, 0))
         
-        # 模式说明
-        mode_info_label = ttk.Label(
+        # 策略说明
+        strategy_info_label = ttk.Label(
             config_frame,
-            text="说明：管理员自己=转给管理员的其他账号 | 管理员的收款人=转给管理员配置的收款人 | 系统配置=转给下方收款账户",
+            text="说明：轮询=按顺序循环选择收款人，确保负载均衡 | 随机=随机选择收款人，增加不可预测性",
             foreground="green"
         )
-        mode_info_label.pack(anchor=tk.W, pady=(0, 5))
+        strategy_info_label.pack(anchor=tk.W, pady=(0, 5))
         
         # 多级转账设置
         multi_level_frame = ttk.Frame(config_frame)
@@ -4454,6 +4476,10 @@ class TransferConfigWindow:
         recipient_count = 0
         processed_ids = set()  # 记录已处理的账号ID
         
+        # 导入用户管理器，用于检查账号是否有收款ID
+        from .user_manager import UserManager
+        user_manager = UserManager()
+        
         # 先处理历史记录中的账号
         for account in self.accounts:
             user_id = account['user_id']
@@ -4495,9 +4521,24 @@ class TransferConfigWindow:
                     is_recipient = True
             
             if not is_recipient:
-                # 待转账号
-                self.transfer_tree.insert("", tk.END, values=values)
-                transfer_count += 1
+                # 检查账号是否有收款ID（通过用户管理）
+                has_recipient_id = False
+                try:
+                    user = user_manager.get_account_user(phone)
+                    if user and user.enabled:
+                        # 检查管理员是否配置了收款人
+                        if user.transfer_recipients and len(user.transfer_recipients) > 0:
+                            has_recipient_id = True
+                        # 或者管理员自己的ID也算有收款ID
+                        elif user.user_id:
+                            has_recipient_id = True
+                except:
+                    pass
+                
+                # 只有没有收款ID的账号才显示在待转账号列表中
+                if not has_recipient_id:
+                    self.transfer_tree.insert("", tk.END, values=values)
+                    transfer_count += 1
         
         # 处理手动添加的收款账号（不在历史记录中的）
         if self.multi_level_enabled_var.get():
@@ -4664,18 +4705,18 @@ class TransferConfigWindow:
         except:
             pass
     
-    def _on_transfer_mode_changed(self):
-        """转账目标模式改变"""
-        mode = self.transfer_mode_var.get()
+    def _on_recipient_strategy_changed(self):
+        """收款人选择策略改变"""
+        strategy = self.recipient_strategy_var.get()
         try:
-            self.transfer_config.set_transfer_target_mode(mode)
-            display_name = self.transfer_config.get_transfer_target_mode_display()
-            self.log(f"转账目标模式已设置为: {display_name}")
-            messagebox.showinfo("成功", f"转账目标模式已设置为: {display_name}")
+            self.transfer_config.recipient_selection_strategy = strategy
+            self.transfer_config.save()
+            strategy_name = "轮询（平均分配）" if strategy == "rotation" else "随机选择"
+            self.log(f"收款人选择策略已设置为: {strategy_name}")
         except Exception as e:
             messagebox.showerror("错误", f"设置失败: {e}")
             # 恢复到之前的值
-            self.transfer_mode_var.set(self.transfer_config.transfer_target_mode)
+            self.recipient_strategy_var.set(self.transfer_config.recipient_selection_strategy)
     
     def _on_multi_level_changed(self):
         """多级转账启用状态改变"""
@@ -5105,6 +5146,9 @@ class HistoryResultsWindow:
         self.tree.tag_configure("failed", foreground="red")
         self.tree.tag_configure("transfer_success", foreground="blue")  # 转账成功：蓝色
         
+        # 绑定右键菜单
+        self.tree.bind("<Button-3>", self._show_main_context_menu)
+        
         # 填充数据
         self._refresh_tree()
         
@@ -5154,19 +5198,34 @@ class HistoryResultsWindow:
             if not owner_name or owner_name == '-':
                 owner_name = "-"
             
+            # 处理None值，确保显示正确
+            def format_value(value, default='N/A'):
+                """格式化显示值，处理None和数值"""
+                if value is None:
+                    return default
+                if isinstance(value, (int, float)):
+                    # 数值类型：如果是整数显示为整数，否则保留2位小数
+                    if isinstance(value, float) and value == int(value):
+                        return str(int(value))
+                    elif isinstance(value, float):
+                        return f"{value:.2f}"
+                    else:
+                        return str(value)
+                return str(value) if value else default
+            
             values = (
-                result.get('昵称', 'N/A'),
-                result.get('用户ID', 'N/A'),
-                result.get('手机号', 'N/A'),
-                result.get('余额前(元)', 'N/A'),
-                result.get('积分', 'N/A'),
-                result.get('抵扣券(张)', 'N/A'),
-                result.get('签到奖励(元)', 'N/A'),
-                result.get('签到总次数', 'N/A'),
-                result.get('余额(元)', 'N/A'),
+                format_value(result.get('昵称'), 'N/A'),
+                format_value(result.get('用户ID'), 'N/A'),
+                format_value(result.get('手机号'), 'N/A'),
+                format_value(result.get('余额前(元)'), '0.0'),
+                format_value(result.get('积分'), '0'),
+                format_value(result.get('抵扣券(张)'), '0'),
+                format_value(result.get('签到奖励(元)'), '0.0'),
+                format_value(result.get('签到总次数'), '0'),
+                format_value(result.get('余额(元)'), '0.0'),
                 transfer_info,
-                result.get('状态', 'N/A'),
-                result.get('时间戳', 'N/A'),
+                format_value(result.get('状态'), 'N/A'),
+                format_value(result.get('时间戳'), 'N/A'),
                 owner_name
             )
             
@@ -5500,6 +5559,41 @@ class HistoryResultsWindow:
         self._refresh_tree()
         self._update_stats()
         self.log("历史结果已刷新")
+    
+    def _show_main_context_menu(self, event):
+        """显示主界面账号列表的右键菜单"""
+        # 选中右键点击的项
+        item = self.tree.identify_row(event.y)
+        if not item:
+            return
+        
+        self.tree.selection_set(item)
+        
+        # 获取该项的数据
+        values = self.tree.item(item, 'values')
+        if not values or len(values) < 3:
+            return
+        
+        nickname = values[0]  # 昵称
+        user_id = values[1]  # 用户ID
+        phone = values[2]  # 手机号
+        
+        # 创建右键菜单
+        context_menu = tk.Menu(self.tree, tearoff=0)
+        context_menu.add_command(label=f"📋 复制手机号: {phone}", command=lambda: self._copy_to_clipboard(phone))
+        if user_id and user_id != 'N/A' and user_id != '-':
+            context_menu.add_command(label=f"📋 复制用户ID: {user_id}", command=lambda: self._copy_to_clipboard(user_id))
+        if nickname and nickname != 'N/A' and nickname != '-':
+            context_menu.add_command(label=f"📋 复制昵称: {nickname}", command=lambda: self._copy_to_clipboard(nickname))
+        
+        # 显示菜单
+        context_menu.post(event.x_root, event.y_root)
+    
+    def _copy_to_clipboard(self, text):
+        """复制文本到剪贴板"""
+        self.window.clipboard_clear()
+        self.window.clipboard_append(text)
+        self.log(f"✓ 已复制到剪贴板: {text}")
     
     def _export_excel(self):
         """导出Excel - 支持按时间范围导出，每天记录清晰区分"""
@@ -6452,11 +6546,11 @@ class WorkflowControlWindow:
             self.transfer_var.set(True)
             self._disable_checkboxes()
         elif mode == "quick_checkin":
-            # 快速签到：登录 + 签到（跳过签到前的资料获取，跳过转账）
+            # 快速签到：登录 + 签到 + 转账（跳过签到前的资料获取）
             self.login_var.set(True)
             self.profile_var.set(False)  # 跳过签到前的资料获取
             self.checkin_var.set(True)
-            self.transfer_var.set(False)  # 跳过转账（因为没有用户ID）
+            self.transfer_var.set(True)  # 启用转账（签到后会获取用户ID）
             self._disable_checkboxes()
         elif mode == "login_only":
             # 只登录：登录 + 获取资料

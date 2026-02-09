@@ -760,7 +760,14 @@ class XimengAutomation:
         # 获取文件日志记录器
         file_logger = logging.getLogger(__name__)
         
-        # 创建简洁日志记录器（GUI日志 + 文件日志）
+        # 获取账号日志管理器
+        from .account_logger import get_account_logger
+        account_logger = get_account_logger()
+        
+        # 记录账号处理开始
+        account_logger.log_account_start(account.phone)
+        
+        # 创建简洁日志记录器（GUI日志 + 文件日志 + 账号独立日志）
         # 使用一个简单的包装类来避免参数传递问题
         if self._log_callback:
             class GuiLogger:
@@ -777,7 +784,9 @@ class XimengAutomation:
         concise = ConciseLogger(
             module_name="workflow",
             gui_logger=gui_logger_obj,
-            file_logger=file_logger  # ← 添加文件日志记录器
+            file_logger=file_logger,
+            account_logger=account_logger,
+            phone=account.phone
         )
         
         # 输出工作流开始信息（仅文件日志）
@@ -866,106 +875,125 @@ class XimengAutomation:
                     
                     # 第2次返回键
                     await self.adb.press_back(device_id)
-                    await interruptible_sleep(3)  # 增加等待时间到3秒，让页面充分加载
+                    await asyncio.sleep(1)  # 等待页面加载
                     
                     # 清理缓存（页面已改变）
                     self.detector.clear_cache()
                     
-                    # 按返回键后检测页面状态（最多重试3次）- 使用整合检测器（GPU加速）
-                    for retry in range(3):
-                        # 使用整合检测器进行快速检测
+                    # ===== 关键修复：使用统一的广告处理方法 =====
+                    # 按返回键后可能到达个人页，也可能遇到个人页广告
+                    # 使用高频扫描方法处理广告并确认到达个人页
+                    max_scan_time = 5.0
+                    scan_interval = 0.05  # 每50毫秒扫描一次
+                    scan_start = asyncio.get_event_loop().time()
+                    ad_closed_count = 0
+                    
+                    while (asyncio.get_event_loop().time() - scan_start) < max_scan_time:
                         page_result = await self.detector.detect_page(
                             device_id, use_cache=False, detect_elements=False
                         )
                         
-                        if page_result:
-                            log(f"检测结果: {page_result.state.value} - {page_result.details}")
+                        if not page_result or not page_result.state:
+                            await asyncio.sleep(scan_interval)
+                            continue
+                        
+                        current_state = page_result.state
+                        
+                        # 检测到正常个人页 → 成功
+                        if current_state == PageState.PROFILE_LOGGED:
+                            log(f"✓ 已返回到个人页（关闭广告: {ad_closed_count}次）")
+                            break
+                        
+                        # 检测到个人页广告 → 立即关闭
+                        elif current_state == PageState.PROFILE_AD:
+                            log(f"⚠️ 检测到个人页广告，立即关闭...")
                             
-                            if page_result.state == PageState.PROFILE_LOGGED:
-                                log(f"✓ 已返回到个人页")
-                                break
-                            elif page_result.state == PageState.POINTS_PAGE:
-                                # 仍然在积分页，再按一次返回键
-                                log(f"⚠️ 仍在积分页，再按一次返回键...")
-                                await self.adb.press_back(device_id)
-                                await interruptible_sleep(3)
-                                self.detector.clear_cache()
-                                # 不break，继续重试检测
-                            elif page_result.state == PageState.LAUNCHER:
-                                log(f"❌ 检测到桌面，应用已退出！尝试重启应用...")
-                                # 强制停止应用
-                                await self.adb.stop_app(device_id, "com.xmwl.shop")
-                                await asyncio.sleep(1)
-                                # 重新启动应用
-                                await self.adb.start_app(device_id, "com.xmwl.shop")
-                                await interruptible_sleep(5)
-                                log(f"✓ 应用已重新启动")
-                                
-                                # 清理缓存（应用已重启）
-                                self.detector.clear_cache()
-                                
-                                # 重启后再次检测页面状态 - 使用整合检测器（GPU加速）
-                                log(f"检测应用启动后的页面状态...")
-                                page_result = await self.detector.detect_page(
-                                    device_id, use_cache=False, detect_elements=False
-                                )
-                                if page_result:
-                                    log(f"当前页面: {page_result.state.value}")
-                                else:
-                                    log(f"⚠️ 无法检测页面状态")
-                                break
-                            else:
-                                # 其他状态，可能是个人页但模板没匹配上，用OCR再确认
-                                if "个人" in page_result.details or "我的" in page_result.details or "余额" in page_result.details:
-                                    log(f"✓ OCR确认已在个人页（{page_result.details}）")
-                                    break
-                                
-                                if retry < 2:
-                                    log(f"⚠️ 返回后页面状态: {page_result.state.value}，等待后重试...")
-                                    await interruptible_sleep(3)  # 增加等待时间到3秒
-                                else:
-                                    log(f"⚠️ 返回后页面状态: {page_result.state.value}")
+                            # 使用返回键关闭广告（最可靠）
+                            await self.adb.press_back(device_id)
+                            ad_closed_count += 1
+                            
+                            # 等待0.3秒让广告关闭动画完成
+                            await asyncio.sleep(0.3)
+                            
+                            # 清除缓存
+                            self.detector.clear_cache(device_id)
+                            
+                            # 继续扫描
+                            continue
+                        
+                        # 仍在积分页 → 再按一次返回键
+                        elif current_state == PageState.POINTS_PAGE:
+                            log(f"⚠️ 仍在积分页，再按一次返回键...")
+                            await self.adb.press_back(device_id)
+                            await asyncio.sleep(1)
+                            self.detector.clear_cache()
+                            continue
+                        
+                        # 其他状态 → 继续扫描
                         else:
-                            if retry < 2:
-                                log(f"⚠️ 无法检测页面状态，等待后重试...")
-                                await asyncio.sleep(2)  # 等待更长时间
-                            else:
-                                log(f"⚠️ 无法检测页面状态")
+                            await asyncio.sleep(scan_interval)
                     else:
-                        log(f"⚠️ 无法检测返回后的页面状态")
+                        # 超时，检查最终状态
+                        log(f"⚠️ 等待个人页超时，检查最终状态...")
+                        final_result = await self.detector.detect_page(
+                            device_id, use_cache=False, detect_elements=False
+                        )
+                        if final_result:
+                            log(f"最终状态: {final_result.state.value}")
                 else:
                     log(f"当前页面: {page_result.state.value if page_result else 'unknown'}")
                     await asyncio.sleep(2)
             
             # ==================== 步骤2: 获取初始个人资料 ====================
-            # 检查是否启用获取资料流程
-            if not workflow_config.get('enable_profile', True):
-                file_logger.info("="*60)
-                file_logger.info("快速签到模式：仅获取余额，跳过昵称和用户ID")
-                file_logger.info("="*60)
+            # 快速签到模式逻辑：
+            # - 如果账号有登录缓存 → 跳过获取资料（真正的快速模式）
+            # - 如果账号没有登录缓存 → 执行完整流程（获取资料并保存缓存）
+            enable_profile = workflow_config.get('enable_profile', True)
+            has_login_cache = False
+            
+            # 检查是否有登录缓存（检查 login_cache 目录）
+            if not enable_profile and self.auto_login.enable_cache and self.auto_login.cache_manager:
+                # 检查登录缓存目录是否存在
+                # 需要检查两种格式：
+                # 1. 手机号（旧格式）
+                # 2. 手机号_用户ID（新格式）
+                cache_base_dir = self.auto_login.cache_manager.cache_dir
+                has_login_cache = False
                 
-                # 快速签到模式：只获取余额，不获取昵称和用户ID
-                step_number += 1
-                concise.step(step_number, "获取余额")
+                # 检查旧格式：手机号
+                old_format_dir = cache_base_dir / account.phone
+                if old_format_dir.exists() and any(old_format_dir.iterdir()):
+                    has_login_cache = True
+                    file_logger.debug(f"找到旧格式缓存: {old_format_dir}")
                 
-                try:
-                    # 使用 BalanceReader 快速获取余额
-                    balance = await self.balance_reader.get_balance(device_id)
-                    
-                    if balance is not None:
-                        result.balance_before = balance
-                        file_logger.info(f"登录余额: {balance:.2f} 元")
-                        concise.success(f"余额: {balance:.2f}元")
-                    else:
-                        file_logger.warning("未能获取余额")
-                        concise.error("未能获取余额")
-                except Exception as e:
-                    file_logger.error(f"获取余额出错: {str(e)}")
-                    concise.error(f"获取余额出错")
+                # 检查新格式：手机号_*
+                if not has_login_cache and cache_base_dir.exists():
+                    for cache_dir in cache_base_dir.iterdir():
+                        if cache_dir.is_dir() and cache_dir.name.startswith(f"{account.phone}_"):
+                            if any(cache_dir.iterdir()):
+                                has_login_cache = True
+                                file_logger.debug(f"找到新格式缓存: {cache_dir}")
+                                break
                 
-                # 标记为跳过完整资料获取
+                if has_login_cache:
+                    file_logger.info("="*60)
+                    file_logger.info("快速签到模式：检测到有登录缓存，跳过获取资料")
+                    file_logger.info("="*60)
+                    concise.action("快速模式：有缓存，跳过获取资料")
+                else:
+                    file_logger.info("="*60)
+                    file_logger.info("快速签到模式：检测到无登录缓存，自动切换为完整流程")
+                    file_logger.info("="*60)
+                    concise.action("快速模式：无缓存，切换为完整流程")
+                    # 自动切换为完整流程
+                    enable_profile = True
+            
+            # 根据最终的 enable_profile 决定是否获取资料
+            if not enable_profile:
+                # 有缓存，跳过获取资料
                 profile_success = False
                 profile_data = None
+                file_logger.info("跳过获取个人资料")
             else:
                 step_number += 1
                 
@@ -1145,7 +1173,7 @@ class XimengAutomation:
             
             # 如果3次尝试后仍未成功（但快速签到模式除外）
             # 快速签到模式下，允许跳过获取资料，在签到时获取
-            if not workflow_config.get('enable_profile', True):
+            if not enable_profile:
                 # 快速签到模式：跳过资料检查，继续执行
                 file_logger.info("快速签到模式：跳过资料检查，将在签到时获取资料")
             elif not profile_success or not profile_data:
@@ -1159,7 +1187,7 @@ class XimengAutomation:
             # ==================== 步骤2后处理：保存数据和缓存 ====================
             # 只有在成功获取资料后才执行
             if profile_success and profile_data:
-                # ==================== 步骤3: 存储初始数据到 result ====================
+                # ==================== 存储初始数据到 result ====================
                 result.nickname = profile_data.get('nickname')  # 直接使用OCR结果，不使用历史数据
                 result.user_id = profile_data.get('user_id')  # 直接使用OCR结果，不使用历史数据
                 # phone 已经在初始化时设置
@@ -1189,31 +1217,31 @@ class XimengAutomation:
                 file_logger.debug(f"user_id: {result.user_id}")
                 
                 # ==================== 步骤3.5: 保存登录缓存（包含用户ID）====================
-                # 优化：异步保存缓存，不阻塞主流程
+                # 修复：同步保存缓存，确保一定会保存成功
                 if self.auto_login.enable_cache and self.auto_login.cache_manager:
                     if result.user_id:
-                        file_logger.info(f"异步保存登录缓存（包含用户ID: {result.user_id}）...")
+                        file_logger.info(f"保存登录缓存（包含用户ID: {result.user_id}）...")
+                        concise.action("保存登录缓存")
                     else:
-                        file_logger.info("异步保存登录缓存（未获取到用户ID）...")
+                        file_logger.info("保存登录缓存（未获取到用户ID）...")
+                        concise.action("保存登录缓存")
                     
-                    # 创建异步任务，不等待完成
-                    async def save_cache_async():
-                        try:
-                            cache_saved = await self.auto_login.cache_manager.save_login_cache(
-                                device_id, 
-                                account.phone, 
-                                user_id=result.user_id
-                            )
-                            if cache_saved:
-                                file_logger.info("登录缓存已保存")
-                            else:
-                                file_logger.warning("登录缓存保存失败")
-                        except Exception as e:
-                            file_logger.error(f"保存登录缓存时出错: {str(e)}")
-                    
-                    # 启动后台任务，不等待完成
-                    asyncio.create_task(save_cache_async())
-                    file_logger.info("缓存保存任务已启动（后台执行）")
+                    try:
+                        # 同步等待缓存保存完成
+                        cache_saved = await self.auto_login.cache_manager.save_login_cache(
+                            device_id, 
+                            account.phone, 
+                            user_id=result.user_id
+                        )
+                        if cache_saved:
+                            file_logger.info("✓ 登录缓存已保存")
+                            concise.success("缓存已保存")
+                        else:
+                            file_logger.warning("✗ 登录缓存保存失败")
+                            concise.error("缓存保存失败")
+                    except Exception as e:
+                        file_logger.error(f"✗ 保存登录缓存时出错: {str(e)}")
+                        concise.error(f"缓存保存出错: {str(e)}")
                 else:
                     if not self.auto_login.enable_cache:
                         file_logger.info("缓存功能未启用，跳过缓存保存")
@@ -1222,6 +1250,53 @@ class XimengAutomation:
                 
                 # 优化：移除不必要的1秒等待
                 # await asyncio.sleep(1)  # 已移除
+                
+                # ==================== 步骤2.5: 验证用户ID（正常模式）====================
+                # 验证当前用户ID是否与缓存中的ID匹配
+                if result.user_id and self.auto_login.enable_cache and self.auto_login.cache_manager:
+                    file_logger.info("="*60)
+                    file_logger.info("验证用户ID")
+                    file_logger.info("="*60)
+                    
+                    # 从缓存中获取预期的用户ID
+                    expected_user_id = self.auto_login.cache_manager._get_expected_user_id(account.phone)
+                    current_user_id = result.user_id
+                    
+                    if expected_user_id:
+                        file_logger.info(f"当前用户ID: {current_user_id}")
+                        file_logger.info(f"缓存用户ID: {expected_user_id}")
+                        
+                        if current_user_id != expected_user_id:
+                            # ID不匹配，清理缓存并返回错误
+                            file_logger.error(f"用户ID不匹配！")
+                            file_logger.error(f"  当前: {current_user_id}")
+                            file_logger.error(f"  缓存: {expected_user_id}")
+                            
+                            concise.error(f"ID不匹配: {current_user_id} ≠ {expected_user_id}")
+                            log(f"❌ 用户ID验证失败: 当前({current_user_id}) ≠ 缓存({expected_user_id})")
+                            
+                            # 清理缓存
+                            file_logger.info("清理登录缓存...")
+                            await self.auto_login.cache_manager.clear_app_login_data(
+                                device_id, 
+                                "com.xmwl.shop"
+                            )
+                            
+                            # 返回错误
+                            from .models.error_types import ErrorType
+                            result.error_type = ErrorType.CACHE_USER_ID_MISMATCH
+                            result.error_message = f"用户ID不匹配（当前: {current_user_id}, 缓存: {expected_user_id}）"
+                            result.success = False
+                            return result
+                        else:
+                            file_logger.info("✓ 用户ID验证通过")
+                            concise.success("ID验证通过")
+                            log(f"✓ 用户ID验证通过: {current_user_id}")
+                    else:
+                        file_logger.info("缓存中无用户ID记录，跳过验证")
+                        concise.action("无缓存ID，跳过验证")
+                    
+                    file_logger.info("="*60)
                 
                 # ==================== 优化：跳过重复获取个人资料 ====================
                 # 步骤2已经获取了完整的个人资料，不需要在步骤4重复获取
@@ -1273,7 +1348,7 @@ class XimengAutomation:
                             'user_id': result.user_id
                         }
                     else:
-                        # 快速签到模式：从数据库历史记录中获取昵称和用户ID
+                        # 快速签到模式：从数据库历史记录中获取用户信息
                         file_logger.info("快速签到模式：从数据库历史记录中获取用户信息")
                         from .local_db import LocalDatabase
                         db = LocalDatabase()
@@ -1283,9 +1358,24 @@ class XimengAutomation:
                             # 从历史记录中提取信息
                             result.nickname = latest_record.get('nickname', '未知')
                             result.user_id = latest_record.get('user_id', '未知')
-                            file_logger.info(f"从历史记录获取: 昵称={result.nickname}, 用户ID={result.user_id}")
+                            result.balance_before = latest_record.get('balance_after')  # 使用上次的最终余额作为本次的余额前
+                            result.points = latest_record.get('points')
+                            result.vouchers = latest_record.get('vouchers')
+                            result.coupons = latest_record.get('coupons')
+                            
+                            file_logger.info(f"从历史记录获取:")
+                            file_logger.info(f"  - 昵称: {result.nickname}")
+                            file_logger.info(f"  - 用户ID: {result.user_id}")
+                            if result.balance_before is not None:
+                                file_logger.info(f"  - 余额前: {result.balance_before:.2f} 元")
+                            if result.points is not None:
+                                file_logger.info(f"  - 积分: {result.points}")
+                            if result.vouchers is not None:
+                                file_logger.info(f"  - 抵扣券: {result.vouchers}")
+                            if result.coupons is not None:
+                                file_logger.info(f"  - 优惠券: {result.coupons}")
                         else:
-                            file_logger.warning("未找到历史记录，昵称和用户ID将在签到后获取")
+                            file_logger.warning("未找到历史记录，用户信息将在签到后获取")
                         
                         updated_profile_data = None
                     
@@ -1301,79 +1391,121 @@ class XimengAutomation:
                     )
                     
                     # 记录签到结果
-                    if checkin_result['success']:
+                    if checkin_result.get('success'):
                         # 保存签到后余额（用于计算签到奖励）
                         checkin_balance_after = checkin_result.get('checkin_balance_after')
                         if checkin_balance_after is not None:
                             result.checkin_balance_after = checkin_balance_after
                         
-                        # 计算签到奖励：签到后余额 - 余额前
-                        if result.balance_before is not None and checkin_balance_after is not None:
-                            result.checkin_reward = checkin_balance_after - result.balance_before
+                        # 保存总签到次数
+                        result.checkin_total_times = checkin_result.get('total_times')
+                        
+                        # 从签到结果中提取完整资料（签到流程已获取）
+                        # 智能合并：只用有效值更新，保留原有值
+                        
+                        # 昵称：只有当签到结果的昵称有效且不是错误识别时才更新
+                        checkin_nickname = checkin_result.get('nickname')
+                        if checkin_nickname and checkin_nickname not in ['西', '1 0', '10', '1', '0']:
+                            result.nickname = checkin_nickname
+                        
+                        # 用户ID：只有当签到结果的用户ID有效时才更新
+                        checkin_user_id = checkin_result.get('user_id')
+                        if checkin_user_id and checkin_user_id != '未知':
+                            result.user_id = checkin_user_id
+                        elif not profile_success:
+                            # 快速签到模式：如果签到后没有获取到user_id，从数据库历史记录中获取
+                            if not result.user_id:
+                                file_logger.info("签到后未获取到用户ID，尝试从数据库历史记录中获取...")
+                                from .local_db import LocalDatabase
+                                db = LocalDatabase()
+                                history_data = db.get_latest_account_data(account.phone)
+                                if history_data and history_data.get('user_id'):
+                                    result.user_id = history_data.get('user_id')
+                                    file_logger.info(f"✓ 从数据库获取到用户ID: {result.user_id}")
+                                else:
+                                    file_logger.warning("⚠️ 数据库中也没有用户ID记录")
+                        
+                        # 其他字段：只要不是None就更新
+                        if checkin_result.get('points') is not None:
+                            result.points = checkin_result.get('points')
+                        if checkin_result.get('vouchers') is not None:
+                            result.vouchers = checkin_result.get('vouchers')
+                        if checkin_result.get('coupons') is not None:
+                            result.coupons = checkin_result.get('coupons')
+                        if checkin_result.get('balance_before') is not None:
+                            result.balance_before = checkin_result.get('balance_before')
+                        if checkin_result.get('coupons') is not None:
+                            result.coupons = checkin_result.get('coupons')
+                        if checkin_result.get('balance_before') is not None:
+                            result.balance_before = checkin_result.get('balance_before')
+                        
+                        # ==================== 快速签到模式：验证用户ID ====================
+                        # 如果是快速签到模式，签到后获取了完整资料，需要验证ID
+                        if not profile_success and result.user_id and self.auto_login.enable_cache and self.auto_login.cache_manager:
+                            file_logger.info("="*60)
+                            file_logger.info("快速签到模式：验证用户ID")
+                            file_logger.info("="*60)
+                            
+                            # 从缓存中获取预期的用户ID
+                            expected_user_id = self.auto_login.cache_manager._get_expected_user_id(account.phone)
+                            current_user_id = result.user_id
+                            
+                            if expected_user_id:
+                                file_logger.info(f"当前用户ID: {current_user_id}")
+                                file_logger.info(f"缓存用户ID: {expected_user_id}")
+                                
+                                if current_user_id != expected_user_id:
+                                    # ID不匹配，清理缓存并返回错误
+                                    file_logger.error(f"用户ID不匹配！")
+                                    file_logger.error(f"  当前: {current_user_id}")
+                                    file_logger.error(f"  缓存: {expected_user_id}")
+                                    
+                                    concise.error(f"ID不匹配: {current_user_id} ≠ {expected_user_id}")
+                                    log(f"❌ 用户ID验证失败: 当前({current_user_id}) ≠ 缓存({expected_user_id})")
+                                    
+                                    # 清理缓存
+                                    file_logger.info("清理登录缓存...")
+                                    await self.auto_login.cache_manager.clear_app_login_data(
+                                        device_id, 
+                                        "com.xmwl.shop"
+                                    )
+                                    
+                                    # 返回错误
+                                    from .models.error_types import ErrorType
+                                    result.error_type = ErrorType.CACHE_USER_ID_MISMATCH
+                                    result.error_message = f"用户ID不匹配（当前: {current_user_id}, 缓存: {expected_user_id}）"
+                                    result.success = False
+                                    return result
+                                else:
+                                    file_logger.info("✓ 用户ID验证通过")
+                                    concise.success("ID验证通过")
+                                    log(f"✓ 用户ID验证通过: {current_user_id}")
+                            else:
+                                file_logger.info("缓存中无用户ID记录，跳过验证")
+                                concise.action("无缓存ID，跳过验证")
+                            
+                            file_logger.info("="*60)
+                        
+                        # 判断是签到成功还是今日已签到
+                        # 计算签到奖励：有变化就计算，没变化就是0
+                        if result.balance_before is not None and result.checkin_balance_after is not None:
+                            result.checkin_reward = result.checkin_balance_after - result.balance_before
                         else:
-                            # 如果无法计算，使用返回的reward_amount（可能不准确）
-                            result.checkin_reward = checkin_result.get('reward_amount', 0.0)
+                            result.checkin_reward = 0.0
                         
-                        result.checkin_total_times = checkin_result.get('total_times')
+                        # 记录日志（根据是否已签到显示不同信息）
+                        is_already_checked = checkin_result.get('already_checked', False)
+                        if is_already_checked:
+                            file_logger.info("今日已签到")
+                            concise.success("今日已签到")
+                        else:
+                            file_logger.info("签到成功")
+                            concise.success("签到完成")
                         
-                        # 如果是快速签到模式（没有获取资料），从签到结果中提取资料
-                        if not profile_success:
-                            # 提取昵称、用户ID等信息
-                            if checkin_result.get('nickname'):
-                                result.nickname = checkin_result.get('nickname')
-                            if checkin_result.get('user_id'):
-                                result.user_id = checkin_result.get('user_id')
-                            if checkin_result.get('balance_before') is not None:
-                                result.balance_before = checkin_result.get('balance_before')
-                            if checkin_result.get('points') is not None:
-                                result.points = checkin_result.get('points')
-                            if checkin_result.get('vouchers') is not None:
-                                result.vouchers = checkin_result.get('vouchers')
-                            if checkin_result.get('coupons') is not None:
-                                result.coupons = checkin_result.get('coupons')
-                        
-                        # 注意：这里不要使用checkin_result的balance_after，因为那是签到后余额
-                        # 最终余额应该在转账后更新
-                        file_logger.info("签到成功")
-                        file_logger.info(f"签到次数: {checkin_result.get('checkin_count', 0)}")
-                        file_logger.info(f"签到奖励: {result.checkin_reward:.2f} 元")
-                        
-                        # 添加简洁日志：签到完成
-                        concise.success("签到完成")
-                        
-                    elif checkin_result.get('already_checked'):
-                        # 即使已签到，也要获取总次数
-                        result.checkin_total_times = checkin_result.get('total_times')
-                        
-                        # 保存签到后余额
-                        checkin_balance_after = checkin_result.get('checkin_balance_after')
-                        if checkin_balance_after is not None:
-                            result.checkin_balance_after = checkin_balance_after
-                        
-                        # 如果是快速签到模式（没有获取资料），从签到结果中提取资料
-                        if not profile_success:
-                            # 提取昵称、用户ID等信息
-                            if checkin_result.get('nickname'):
-                                result.nickname = checkin_result.get('nickname')
-                            if checkin_result.get('user_id'):
-                                result.user_id = checkin_result.get('user_id')
-                            if checkin_result.get('balance_before') is not None:
-                                result.balance_before = checkin_result.get('balance_before')
-                            if checkin_result.get('points') is not None:
-                                result.points = checkin_result.get('points')
-                            if checkin_result.get('vouchers') is not None:
-                                result.vouchers = checkin_result.get('vouchers')
-                            if checkin_result.get('coupons') is not None:
-                                result.coupons = checkin_result.get('coupons')
-                        
-                        file_logger.info("今日已签到")
+                        # 记录签到次数和奖励
                         if result.checkin_total_times:
                             file_logger.info(f"总签到次数: {result.checkin_total_times}")
-                        else:
-                            file_logger.info("(未获取到总签到次数)")
-                        
-                        # 添加简洁日志：今日已签到
-                        concise.success("今日已签到")
+                        file_logger.info(f"签到奖励: {result.checkin_reward:.2f} 元")
                         
                     else:
                         # 签到失败，设置错误类型
@@ -1396,40 +1528,29 @@ class XimengAutomation:
             # 优化：移除签到后的1秒等待，直接进入下一步
             # await asyncio.sleep(1)  # 已移除
             
-            # ==================== 步骤7: 获取最终余额（仅在签到启用且未返回余额时）====================
+            # 调试日志：确认执行到这里
+            file_logger.info("[调试] 签到流程结束，准备执行步骤4")
+            concise.action("[调试] 准备执行步骤4")
+            
+            # ==================== 步骤4: 获取最终余额 ====================
             # 只有在启用签到流程时才获取最终余额
+            # 注意：此时转账还未执行（转账在步骤5），所以这里只处理未转账的情况
+            # 如果后续执行了转账（步骤5），转账成功后会重新获取实际余额
             if workflow_config.get('enable_checkin', True):
-                # 优化：如果签到流程已经返回了余额，跳过重复获取
-                if result.balance_after is not None:
-                    step_number += 1
-                    
-                    # 添加简洁日志：使用签到返回的余额
-                    concise.step(step_number, "获取最终余额")
-                    concise.success(f"最终余额: {result.balance_after:.2f}元（使用签到数据）")
-                    
-                    file_logger.info("="*60)
-                    file_logger.info(f"步骤{step_number}: 使用签到流程返回的最终余额")
-                    file_logger.info(f"最终余额: {result.balance_after:.2f} 元")
-                    file_logger.info("(跳过重复获取，节省时间)")
-                    file_logger.info("="*60)
-                elif result.checkin_balance_after is not None:
-                    # 如果有签到后余额，使用它作为最终余额（没有转账的情况）
-                    step_number += 1
-                    
-                    concise.step(step_number, "获取最终余额")
-                    
+                step_number += 1
+                concise.step(step_number, "获取最终余额")
+                
+                # 情况1：有签到后余额 → 使用签到返回的余额（不需要重复获取）
+                if result.checkin_balance_after is not None:
                     result.balance_after = result.checkin_balance_after
                     file_logger.info("="*60)
                     file_logger.info(f"步骤{step_number}: 使用签到后余额作为最终余额")
                     file_logger.info(f"最终余额: {result.balance_after:.2f} 元")
+                    file_logger.info("(使用签到数据，节省时间)")
                     file_logger.info("="*60)
-                    concise.success(f"最终余额: {result.balance_after:.2f}元（使用签到后余额）")
+                    concise.success(f"最终余额: {result.balance_after:.2f}元（使用签到数据）")
                 elif not profile_success:
-                    # 快速签到模式：使用登录时获取的余额作为最终余额
-                    step_number += 1
-                    
-                    concise.step(step_number, "获取最终余额")
-                    
+                    # 情况2：快速签到模式 → 使用登录时获取的余额作为最终余额
                     file_logger.info("="*60)
                     file_logger.info(f"步骤{step_number}: 快速签到模式 - 使用登录余额作为最终余额")
                     file_logger.info("="*60)
@@ -1443,114 +1564,9 @@ class XimengAutomation:
                         file_logger.warning("登录时未获取到余额，无法设置最终余额")
                         concise.error("未获取到余额")
                 else:
-                    step_number += 1
-                    
-                    # 添加简洁日志：获取最终余额
-                    concise.step(step_number, "获取最终余额")
-                    
-                    file_logger.info("="*60)
-                    file_logger.info(f"步骤{step_number}: 获取最终个人资料")
-                    file_logger.info("(签到流程未返回余额，需要重新获取)")
-                    file_logger.info("="*60)
-                
-                    try:
-                        # 判断是否执行了转账
-                        has_transfer = result.transfer_amount is not None and result.transfer_amount > 0
-                        
-                        if has_transfer:
-                            # 情况2：转账后，程序可能在钱包页或个人页
-                            file_logger.info("检测到已执行转账，检查当前页面状态")
-                            
-                            # 检测当前页面
-                            page_result = await self.detector.detect_page(device_id, use_cache=False, detect_elements=False)
-                            
-                            if page_result and page_result.state == PageState.WALLET:
-                                # 在钱包页，按返回键回到个人页
-                                concise.action("从钱包页返回个人页")
-                                file_logger.info("当前在钱包页，按返回键回到个人页...")
-                                await self.adb.press_back(device_id)
-                                await asyncio.sleep(1.0)  # 等待页面切换
-                                file_logger.info("✓ 已返回个人页")
-                            elif page_result and page_result.state in [PageState.PROFILE, PageState.PROFILE_LOGGED]:
-                                # 已经在个人页
-                                file_logger.info("当前已在个人页")
-                            else:
-                                # 其他页面，尝试导航到个人页
-                                file_logger.info(f"当前在其他页面（{page_result.state.value if page_result else 'unknown'}），导航到个人页")
-                                concise.action("导航到个人页")
-                                nav_success = await self.navigator.navigate_to_profile(device_id)
-                                if not nav_success:
-                                    file_logger.warning("导航到个人资料页面失败，跳过最终数据获取")
-                                    concise.error("导航失败")
-                                    # 继续执行，不要中断流程
-                        else:
-                            # 情况1：不转账，直接导航到个人页
-                            concise.action("导航到个人页")
-                            file_logger.info("导航到个人页...")
-                            nav_success = await self.navigator.navigate_to_profile(device_id)
-                            
-                            if not nav_success:
-                                file_logger.warning("导航到个人资料页面失败，跳过最终数据获取")
-                                concise.error("导航失败")
-                        
-                        # 直接获取个人资料（不再需要检测和处理广告）
-                            try:
-                                # 获取完整个人资料（带超时）
-                                # 使用并行处理方法提升性能
-                                concise.action("获取最终资料")
-                                account_str = f"{account.phone}----{account.password}"
-                                profile_task = self.profile_reader.get_full_profile_parallel(device_id, account=account_str)
-                                try:
-                                    final_profile = await asyncio.wait_for(profile_task, timeout=15.0)  # 统一为15秒
-                                    
-                                    # 更新最终数据（确保类型正确）
-                                    balance = final_profile.get('balance')
-                                    if balance is not None:
-                                        # 确保余额是float类型
-                                        if isinstance(balance, str):
-                                            try:
-                                                result.balance_after = float(balance)
-                                            except ValueError:
-                                                result.balance_after = None
-                                        else:
-                                            result.balance_after = balance
-                                    else:
-                                        result.balance_after = None
-                                    
-                                    # 更新其他可能变化的字段
-                                    if final_profile.get('points') is not None:
-                                        result.points = final_profile.get('points')
-                                    if final_profile.get('vouchers') is not None:
-                                        result.vouchers = final_profile.get('vouchers')
-                                    if final_profile.get('coupons') is not None:
-                                        result.coupons = final_profile.get('coupons')
-                                    
-                                    if result.balance_after is not None:
-                                        file_logger.info(f"最终余额: {result.balance_after:.2f} 元")
-                                        # 添加简洁日志：最终余额
-                                        concise.success(f"最终余额: {result.balance_after:.2f}元")
-                                    else:
-                                        file_logger.warning("未能获取最终余额")
-                                        concise.error("未能获取最终余额")
-                                    
-                                    if result.points is not None:
-                                        file_logger.info(f"最终积分: {result.points} 积分")
-                                    
-                                    if result.vouchers is not None:
-                                        file_logger.info(f"最终抵扣券: {result.vouchers} 张")
-                                    
-                                    if result.coupons is not None:
-                                        file_logger.info(f"最终优惠券: {result.coupons} 张")
-                                    
-                                except asyncio.TimeoutError:
-                                    file_logger.error("获取最终数据超时")
-                                    concise.error("获取超时")
-                            except Exception as e:
-                                file_logger.error(f"获取最终数据出错: {str(e)}")
-                                concise.error(f"获取出错: {str(e)}")
-                    except Exception as e:
-                        file_logger.error(f"获取最终数据流程出错: {str(e)}")
-                        concise.error(f"流程出错: {str(e)}")
+                    # 情况3：其他情况
+                    file_logger.warning("未获取到签到后余额，无法设置最终余额")
+                    concise.error("未获取到余额")
             else:
                 file_logger.info("="*60)
                 file_logger.info("跳过获取最终余额")
@@ -1579,9 +1595,14 @@ class XimengAutomation:
                 file_logger.info(f"余额变化: {result.balance_change:+.2f} 元")
             file_logger.info("="*60)
             
-            # ==================== 步骤7.5: 自动转账（每次处理账号时重新读取配置）====================
+            # 调试日志：确认执行到这里
+            file_logger.info("[调试] 步骤4完成，准备执行步骤5")
+            concise.action("[调试] 准备执行步骤5")
+            
+            # ==================== 步骤5: 自动转账（每次处理账号时重新读取配置）====================
+            step_number += 1
             file_logger.info("="*60)
-            file_logger.info("步骤7.5: 检查自动转账")
+            file_logger.info(f"步骤{step_number}: 检查自动转账")
             file_logger.info("="*60)
             
             # 检查是否启用转账流程
@@ -1595,10 +1616,14 @@ class XimengAutomation:
                     from .transfer_config import get_transfer_config
                     from .transfer_lock import get_transfer_lock
                     from .transfer_history import get_transfer_history
+                    from .recipient_selector import RecipientSelector
                     
                     transfer_config = get_transfer_config()
                     transfer_lock = get_transfer_lock()
                     transfer_history = get_transfer_history()
+                    
+                    # 创建收款人选择器（根据配置的策略）
+                    recipient_selector = RecipientSelector(strategy=transfer_config.recipient_selection_strategy)
                     
                     should_auto_transfer = transfer_config.enabled
                     
@@ -1633,7 +1658,13 @@ class XimengAutomation:
                                     account_level = transfer_config.get_account_level(result.user_id)
                                     
                                     if transfer_config.should_transfer(result.user_id, result.balance_after, current_level=0):
-                                        recipient_id = transfer_config.get_transfer_recipient(result.user_id, current_level=0)
+                                        # 使用增强版方法获取收款人（支持随机/轮询选择）
+                                        recipient_id = transfer_config.get_transfer_recipient_enhanced(
+                                            phone=account.phone,
+                                            user_id=result.user_id,
+                                            current_level=0,
+                                            selector=recipient_selector
+                                        )
                                         if recipient_id:
                                             log(f"  ✓ 满足转账条件，准备转账到 ID: {recipient_id}")
                                             
@@ -1685,14 +1716,72 @@ class XimengAutomation:
                                                         log(f"  ✓ 转账成功")
                                                         if transfer_result.get('amount'):
                                                             log(f"    - 转账金额: {transfer_result['amount']:.2f} 元")
-                                                            # 更新余额（转账后余额会减少）
-                                                            if result.balance_after is not None:
-                                                                result.balance_after -= transfer_result['amount']
-                                                                log(f"    - 转账后余额: {result.balance_after:.2f} 元")
+                                                            
                                                             # 保存转账信息到result对象
                                                             result.transfer_amount = transfer_result.get('amount', 0.0)
                                                             result.transfer_recipient = recipient_id
                                                             log(f"    - 已保存转账信息: {result.transfer_amount:.2f} 元 → {result.transfer_recipient}")
+                                                            
+                                                            # 转账成功后，重新获取实际余额（不要用计算，要获取真实余额）
+                                                            log(f"    - 重新获取转账后的实际余额...")
+                                                            try:
+                                                                # 检测当前页面
+                                                                page_result = await self.detector.detect_page(device_id, use_cache=False, detect_elements=False)
+                                                                
+                                                                if page_result and page_result.state == PageState.WALLET:
+                                                                    # 在钱包页，按返回键回到个人页
+                                                                    log(f"    - 当前在钱包页，返回个人页...")
+                                                                    await self.adb.press_back(device_id)
+                                                                    await asyncio.sleep(1.0)
+                                                                elif page_result and page_result.state not in [PageState.PROFILE, PageState.PROFILE_LOGGED]:
+                                                                    # 不在个人页，导航到个人页
+                                                                    log(f"    - 导航到个人页...")
+                                                                    await self.navigator.navigate_to_profile(device_id)
+                                                                    await asyncio.sleep(1.0)
+                                                                
+                                                                # 获取转账后的完整个人资料
+                                                                account_str = f"{account.phone}----{account.password}"
+                                                                profile_task = self.profile_reader.get_full_profile_parallel(device_id, account=account_str)
+                                                                final_profile = await asyncio.wait_for(profile_task, timeout=15.0)
+                                                                
+                                                                # 更新最终余额
+                                                                balance = final_profile.get('balance')
+                                                                if balance is not None:
+                                                                    if isinstance(balance, str):
+                                                                        try:
+                                                                            result.balance_after = float(balance)
+                                                                        except ValueError:
+                                                                            result.balance_after = None
+                                                                    else:
+                                                                        result.balance_after = balance
+                                                                    
+                                                                    if result.balance_after is not None:
+                                                                        log(f"    - ✓ 转账后实际余额: {result.balance_after:.2f} 元")
+                                                                    else:
+                                                                        log(f"    - ⚠️ 未能获取转账后余额")
+                                                                else:
+                                                                    log(f"    - ⚠️ 未能获取转账后余额")
+                                                                
+                                                                # 更新其他可能变化的字段
+                                                                if final_profile.get('points') is not None:
+                                                                    result.points = final_profile.get('points')
+                                                                if final_profile.get('vouchers') is not None:
+                                                                    result.vouchers = final_profile.get('vouchers')
+                                                                if final_profile.get('coupons') is not None:
+                                                                    result.coupons = final_profile.get('coupons')
+                                                                    
+                                                            except asyncio.TimeoutError:
+                                                                log(f"    - ⚠️ 获取转账后余额超时，使用计算值")
+                                                                # 降级：使用计算值
+                                                                if result.balance_after is not None:
+                                                                    result.balance_after -= transfer_result['amount']
+                                                                    log(f"    - 转账后余额(计算): {result.balance_after:.2f} 元")
+                                                            except Exception as e:
+                                                                log(f"    - ⚠️ 获取转账后余额失败: {e}，使用计算值")
+                                                                # 降级：使用计算值
+                                                                if result.balance_after is not None:
+                                                                    result.balance_after -= transfer_result['amount']
+                                                                    log(f"    - 转账后余额(计算): {result.balance_after:.2f} 元")
                                                             
                                                             # 保存转账记录到数据库
                                                             try:
@@ -1739,10 +1828,11 @@ class XimengAutomation:
                                                             except Exception as e:
                                                                 log(f"    - ⚠️ 保存转账记录异常: {e}")
                                                     else:
-                                                        # 转账失败，设置错误类型
+                                                        # 转账失败，设置错误类型和失败状态
                                                         from .models.error_types import ErrorType
                                                         result.error_type = ErrorType.TRANSFER_FAILED
                                                         result.error_message = transfer_result.get('message', '未知错误')
+                                                        result.success = False  # 标记整体失败
                                                         log(f"  ❌ 转账失败: {result.error_message}")
                                                         # 转账失败时，设置收款人为"失败"
                                                         result.transfer_amount = 0.0
@@ -1786,10 +1876,11 @@ class XimengAutomation:
                                                         except Exception as e:
                                                             log(f"    - ⚠️ 保存失败记录异常: {e}")
                                                 except Exception as e:
-                                                    # 转账异常，设置错误类型
+                                                    # 转账异常，设置错误类型和失败状态
                                                     from .models.error_types import ErrorType
                                                     result.error_type = ErrorType.TRANSFER_FAILED
                                                     result.error_message = str(e)
+                                                    result.success = False  # 标记整体失败
                                                     log(f"  ❌ 转账异常: {e}")
                                                     import traceback
                                                     log(f"  详细错误: {traceback.format_exc()}")
@@ -1858,7 +1949,7 @@ class XimengAutomation:
                 except Exception as e:
                     log(f"  ❌ 转账检查出错: {str(e)}\n")
             
-            # ==================== 步骤8: 退出登录 ====================
+            # ==================== 步骤6: 退出登录 ====================
             step_number += 1
             
             file_logger.info("="*60)
@@ -1880,11 +1971,26 @@ class XimengAutomation:
             else:
                 result.success = True
             
+            # 记录账号处理结束
+            account_logger.log_account_end(
+                account.phone,
+                result.success,
+                result.error_message if not result.success else "处理成功"
+            )
+            
             return result
             
         except Exception as e:
             result.error_message = str(e)
             file_logger.error(f"工作流程出错: {str(e)}")
+            
+            # 记录账号处理结束（异常情况）
+            account_logger.log_account_end(
+                account.phone,
+                False,
+                f"异常: {str(e)}"
+            )
+            
             return result
     
     def _log_profile_data(self, result: AccountResult):

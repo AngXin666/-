@@ -9,6 +9,11 @@ from typing import Optional, Dict, Tuple, List
 from io import BytesIO
 from PIL import Image
 
+# 在导入 RapidOCR 之前设置日志级别
+import logging
+for logger_name in ['rapidocr', 'RapidOCR', 'ppocr', 'onnxruntime']:
+    logging.getLogger(logger_name).setLevel(logging.ERROR)
+
 try:
     from rapidocr import RapidOCR
     HAS_OCR = True
@@ -33,6 +38,10 @@ class CheckinPageReader:
         
         # 使用全局 OCR 线程池（替代单独的 OCR 实例）
         self._ocr_pool = get_ocr_pool() if HAS_OCR else None
+        
+        # 初始化OCR区域学习器（不需要device_id，在使用时传入）
+        from .ocr_region_learner import OCRRegionLearner
+        self._region_learner = None  # 延迟初始化，在使用时根据device_id创建
     
     async def get_checkin_info(self, device_id: str) -> Dict[str, any]:
         """获取签到页面信息
@@ -60,6 +69,10 @@ class CheckinPageReader:
             return result
         
         try:
+            # 创建设备专属的OCR区域学习器
+            from .ocr_region_learner import OCRRegionLearner
+            learner = OCRRegionLearner(device_id=device_id)
+            
             # 获取截图
             screenshot = await self.adb.screencap(device_id)
             if not screenshot:
@@ -72,7 +85,8 @@ class CheckinPageReader:
             enhanced_img = enhance_for_ocr(img)
             
             # 使用 OCR 线程池识别（异步，带超时）
-            ocr_result = await self._ocr_pool.recognize(enhanced_img, timeout=2.0)  # 优化：减少超时 10秒→2秒
+            # 优化：增加超时时间 2秒→5秒，避免批量处理时超时
+            ocr_result = await self._ocr_pool.recognize(enhanced_img, timeout=5.0)
             
             # 检查返回值
             if not ocr_result or not ocr_result.texts:
@@ -92,6 +106,47 @@ class CheckinPageReader:
             
             # 解析签到信息
             self._parse_checkin_times(texts, result)
+            
+            # 如果成功识别到签到次数，记录OCR区域用于学习
+            if result['total_times'] is not None or result['daily_remaining_times'] is not None:
+                # 查找包含签到次数信息的文本框位置
+                for i, text in enumerate(texts):
+                    if i < len(boxes):
+                        # 检查是否包含总次数信息
+                        if result['total_times'] is not None and ('总次数' in text or re.search(r'总\s*次\s*数', text)):
+                            box = boxes[i]
+                            x_coords = [p[0] for p in box]
+                            y_coords = [p[1] for p in box]
+                            x = int(min(x_coords))
+                            y = int(min(y_coords))
+                            width = int(max(x_coords) - min(x_coords))
+                            height = int(max(y_coords) - min(y_coords))
+                            
+                            # 记录成功识别的区域
+                            learner.record_success(
+                                region_name="checkin_total_times",
+                                region=(x, y, width, height),
+                                confidence=0.9
+                            )
+                            print(f"[学习器] 记录总次数区域: ({x}, {y}, {width}, {height})")
+                        
+                        # 检查是否包含剩余次数信息
+                        if result['daily_remaining_times'] is not None and ('当日' in text or '剩余' in text):
+                            box = boxes[i]
+                            x_coords = [p[0] for p in box]
+                            y_coords = [p[1] for p in box]
+                            x = int(min(x_coords))
+                            y = int(min(y_coords))
+                            width = int(max(x_coords) - min(x_coords))
+                            height = int(max(y_coords) - min(y_coords))
+                            
+                            # 记录成功识别的区域
+                            learner.record_success(
+                                region_name="checkin_remaining_times",
+                                region=(x, y, width, height),
+                                confidence=0.9
+                            )
+                            print(f"[学习器] 记录剩余次数区域: ({x}, {y}, {width}, {height})")
             
             # 查找签到按钮（在循环外单独处理）
             for i, text in enumerate(texts):
