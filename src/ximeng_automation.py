@@ -1486,21 +1486,15 @@ class XimengAutomation:
                             
                             file_logger.info("="*60)
                         
-                        # 判断是签到成功还是今日已签到
-                        # 计算签到奖励：有变化就计算，没变化就是0
+                        # 计算签到奖励：签到后余额 - 签到前余额
                         if result.balance_before is not None and result.checkin_balance_after is not None:
                             result.checkin_reward = result.checkin_balance_after - result.balance_before
                         else:
                             result.checkin_reward = 0.0
                         
-                        # 记录日志（根据是否已签到显示不同信息）
-                        is_already_checked = checkin_result.get('already_checked', False)
-                        if is_already_checked:
-                            file_logger.info("今日已签到")
-                            concise.success("今日已签到")
-                        else:
-                            file_logger.info("签到成功")
-                            concise.success("签到完成")
+                        # 记录日志
+                        file_logger.info("签到完成")
+                        concise.success("签到完成")
                         
                         # 记录签到次数和奖励
                         if result.checkin_total_times:
@@ -1532,40 +1526,32 @@ class XimengAutomation:
             file_logger.info("[调试] 签到流程结束，准备执行步骤4")
             concise.action("[调试] 准备执行步骤4")
             
-            # ==================== 步骤4: 获取最终余额 ====================
-            # 只有在启用签到流程时才获取最终余额
-            # 注意：此时转账还未执行（转账在步骤5），所以这里只处理未转账的情况
-            # 如果后续执行了转账（步骤5），转账成功后会重新获取实际余额
+            # ==================== 步骤4: 设置最终余额 ====================
+            # 逻辑简化：
+            # - 如果有签到后余额，最终余额 = 签到后余额（转账前）
+            # - 如果有转账，转账后会重新获取实际余额并更新 balance_after
             if workflow_config.get('enable_checkin', True):
                 step_number += 1
-                concise.step(step_number, "获取最终余额")
+                concise.step(step_number, "设置最终余额")
                 
-                # 情况1：有签到后余额 → 使用签到返回的余额（不需要重复获取）
+                # 使用签到后余额作为最终余额（如果没有转账，这就是最终值）
                 if result.checkin_balance_after is not None:
                     result.balance_after = result.checkin_balance_after
                     file_logger.info("="*60)
-                    file_logger.info(f"步骤{step_number}: 使用签到后余额作为最终余额")
-                    file_logger.info(f"最终余额: {result.balance_after:.2f} 元")
-                    file_logger.info("(使用签到数据，节省时间)")
+                    file_logger.info(f"步骤{step_number}: 设置最终余额")
+                    file_logger.info(f"最终余额: {result.balance_after:.2f} 元（签到后余额）")
                     file_logger.info("="*60)
-                    concise.success(f"最终余额: {result.balance_after:.2f}元（使用签到数据）")
-                elif not profile_success:
-                    # 情况2：快速签到模式 → 使用登录时获取的余额作为最终余额
+                    concise.success(f"最终余额: {result.balance_after:.2f}元")
+                elif result.balance_before is not None:
+                    # 降级：如果没有签到后余额，使用签到前余额
+                    result.balance_after = result.balance_before
                     file_logger.info("="*60)
-                    file_logger.info(f"步骤{step_number}: 快速签到模式 - 使用登录余额作为最终余额")
+                    file_logger.info(f"步骤{step_number}: 设置最终余额")
+                    file_logger.info(f"最终余额: {result.balance_after:.2f} 元（使用签到前余额）")
                     file_logger.info("="*60)
-                    
-                    # 使用登录时获取的余额
-                    if result.balance_before is not None:
-                        result.balance_after = result.balance_before
-                        file_logger.info(f"最终余额: {result.balance_after:.2f} 元（使用登录数据）")
-                        concise.success(f"最终余额: {result.balance_after:.2f}元（使用登录数据）")
-                    else:
-                        file_logger.warning("登录时未获取到余额，无法设置最终余额")
-                        concise.error("未获取到余额")
+                    concise.success(f"最终余额: {result.balance_after:.2f}元")
                 else:
-                    # 情况3：其他情况
-                    file_logger.warning("未获取到签到后余额，无法设置最终余额")
+                    file_logger.warning("未获取到余额信息")
                     concise.error("未获取到余额")
             else:
                 file_logger.info("="*60)
@@ -1641,19 +1627,25 @@ class XimengAutomation:
                                 lock_info = transfer_lock.get_lock_info(account.phone)
                                 log(f"  ⚠️ 转账进行中，跳过（已锁定 {lock_info['elapsed']:.1f}秒）")
                             else:
-                                # 【安全检查2】检查最近5分钟是否已转账
+                                # 【安全检查2】检查最近5分钟是否已成功转账
                                 recent_transfer = transfer_history.get_recent_transfer(
                                     sender_phone=account.phone,
                                     minutes=5
                                 )
                                 
-                                if recent_transfer:
-                                    log(f"  ⚠️ 最近已有转账记录，跳过")
+                                if recent_transfer and recent_transfer.success:
+                                    # 只有成功的转账才跳过
+                                    log(f"  ⚠️ 最近已有成功转账记录，跳过")
                                     log(f"    - 时间: {recent_transfer.timestamp}")
                                     log(f"    - 金额: {recent_transfer.amount:.2f} 元")
                                     log(f"    - 收款人: {recent_transfer.recipient_phone}")
-                                    log(f"    - 状态: {'成功' if recent_transfer.success else '失败'}")
                                 else:
+                                    # 没有成功转账记录，或者有失败记录，允许转账
+                                    if recent_transfer and not recent_transfer.success:
+                                        log(f"  ⚠️ 检测到最近有失败的转账记录，允许重试")
+                                        log(f"    - 失败时间: {recent_transfer.timestamp}")
+                                        log(f"    - 收款人: {recent_transfer.recipient_phone}")
+                                    
                                     # 判断是否需要转账（使用最新的配置）
                                     account_level = transfer_config.get_account_level(result.user_id)
                                     
@@ -1688,7 +1680,8 @@ class XimengAutomation:
                                                             log(f"  重新导航到个人页面...")
                                                             nav_success = await self.navigator.navigate_to_profile(device_id)
                                                             if not nav_success:
-                                                                log(f"  ⚠️ 导航失败，继续尝试转账...")
+                                                                log(f"  ⚠️ 导航失败，跳过本次重试")
+                                                                continue  # 跳过本次重试，不继续转账
                                                             await asyncio.sleep(2)
                                                         
                                                         # 执行转账（传入转账前余额用于验证）
@@ -1724,61 +1717,73 @@ class XimengAutomation:
                                                             
                                                             # 转账成功后，重新获取实际余额（不要用计算，要获取真实余额）
                                                             log(f"    - 重新获取转账后的实际余额...")
-                                                            try:
-                                                                # 检测当前页面
-                                                                page_result = await self.detector.detect_page(device_id, use_cache=False, detect_elements=False)
-                                                                
-                                                                if page_result and page_result.state == PageState.WALLET:
-                                                                    # 在钱包页，按返回键回到个人页
-                                                                    log(f"    - 当前在钱包页，返回个人页...")
-                                                                    await self.adb.press_back(device_id)
-                                                                    await asyncio.sleep(1.0)
-                                                                elif page_result and page_result.state not in [PageState.PROFILE, PageState.PROFILE_LOGGED]:
-                                                                    # 不在个人页，导航到个人页
-                                                                    log(f"    - 导航到个人页...")
-                                                                    await self.navigator.navigate_to_profile(device_id)
-                                                                    await asyncio.sleep(1.0)
-                                                                
-                                                                # 获取转账后的完整个人资料
-                                                                account_str = f"{account.phone}----{account.password}"
-                                                                profile_task = self.profile_reader.get_full_profile_parallel(device_id, account=account_str)
-                                                                final_profile = await asyncio.wait_for(profile_task, timeout=15.0)
-                                                                
-                                                                # 更新最终余额
-                                                                balance = final_profile.get('balance')
-                                                                if balance is not None:
-                                                                    if isinstance(balance, str):
-                                                                        try:
-                                                                            result.balance_after = float(balance)
-                                                                        except ValueError:
-                                                                            result.balance_after = None
-                                                                    else:
-                                                                        result.balance_after = balance
+                                                            
+                                                            # 添加重试机制（最多3次）
+                                                            max_retries = 3
+                                                            balance_retrieved = False
+                                                            
+                                                            for retry in range(max_retries):
+                                                                try:
+                                                                    if retry > 0:
+                                                                        log(f"    - 第{retry+1}次尝试获取转账后余额...")
+                                                                        await asyncio.sleep(1.0)  # 重试前等待
                                                                     
-                                                                    if result.balance_after is not None:
-                                                                        log(f"    - ✓ 转账后实际余额: {result.balance_after:.2f} 元")
-                                                                    else:
-                                                                        log(f"    - ⚠️ 未能获取转账后余额")
-                                                                else:
-                                                                    log(f"    - ⚠️ 未能获取转账后余额")
-                                                                
-                                                                # 更新其他可能变化的字段
-                                                                if final_profile.get('points') is not None:
-                                                                    result.points = final_profile.get('points')
-                                                                if final_profile.get('vouchers') is not None:
-                                                                    result.vouchers = final_profile.get('vouchers')
-                                                                if final_profile.get('coupons') is not None:
-                                                                    result.coupons = final_profile.get('coupons')
+                                                                    # 检测当前页面
+                                                                    page_result = await self.detector.detect_page(device_id, use_cache=False, detect_elements=False)
                                                                     
-                                                            except asyncio.TimeoutError:
-                                                                log(f"    - ⚠️ 获取转账后余额超时，使用计算值")
-                                                                # 降级：使用计算值
-                                                                if result.balance_after is not None:
-                                                                    result.balance_after -= transfer_result['amount']
-                                                                    log(f"    - 转账后余额(计算): {result.balance_after:.2f} 元")
-                                                            except Exception as e:
-                                                                log(f"    - ⚠️ 获取转账后余额失败: {e}，使用计算值")
-                                                                # 降级：使用计算值
+                                                                    if page_result and page_result.state == PageState.WALLET:
+                                                                        # 在钱包页，按返回键回到个人页
+                                                                        log(f"    - 当前在钱包页，返回个人页...")
+                                                                        await self.adb.press_back(device_id)
+                                                                        await asyncio.sleep(1.0)
+                                                                    elif page_result and page_result.state not in [PageState.PROFILE, PageState.PROFILE_LOGGED]:
+                                                                        # 不在个人页，导航到个人页
+                                                                        log(f"    - 导航到个人页...")
+                                                                        await self.navigator.navigate_to_profile(device_id)
+                                                                        await asyncio.sleep(1.0)
+                                                                    
+                                                                    # 获取转账后的完整个人资料
+                                                                    account_str = f"{account.phone}----{account.password}"
+                                                                    profile_task = self.profile_reader.get_full_profile_parallel(device_id, account=account_str)
+                                                                    final_profile = await asyncio.wait_for(profile_task, timeout=15.0)
+                                                                    
+                                                                    # 更新最终余额
+                                                                    balance = final_profile.get('balance')
+                                                                    if balance is not None:
+                                                                        if isinstance(balance, str):
+                                                                            try:
+                                                                                result.balance_after = float(balance)
+                                                                            except ValueError:
+                                                                                result.balance_after = None
+                                                                        else:
+                                                                            result.balance_after = balance
+                                                                        
+                                                                        if result.balance_after is not None:
+                                                                            log(f"    - ✓ 转账后实际余额: {result.balance_after:.2f} 元")
+                                                                            balance_retrieved = True
+                                                                            
+                                                                            # 更新其他可能变化的字段
+                                                                            if final_profile.get('points') is not None:
+                                                                                result.points = final_profile.get('points')
+                                                                            if final_profile.get('vouchers') is not None:
+                                                                                result.vouchers = final_profile.get('vouchers')
+                                                                            if final_profile.get('coupons') is not None:
+                                                                                result.coupons = final_profile.get('coupons')
+                                                                            
+                                                                            break  # 成功获取，跳出重试循环
+                                                                        else:
+                                                                            log(f"    - ⚠️ 第{retry+1}次获取余额为None")
+                                                                    else:
+                                                                        log(f"    - ⚠️ 第{retry+1}次未能获取余额")
+                                                                        
+                                                                except asyncio.TimeoutError:
+                                                                    log(f"    - ⚠️ 第{retry+1}次获取余额超时")
+                                                                except Exception as e:
+                                                                    log(f"    - ⚠️ 第{retry+1}次获取余额失败: {e}")
+                                                            
+                                                            # 如果所有重试都失败，使用计算值
+                                                            if not balance_retrieved:
+                                                                log(f"    - ⚠️ 所有重试都失败，使用计算值")
                                                                 if result.balance_after is not None:
                                                                     result.balance_after -= transfer_result['amount']
                                                                     log(f"    - 转账后余额(计算): {result.balance_after:.2f} 元")

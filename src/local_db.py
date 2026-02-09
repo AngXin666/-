@@ -968,7 +968,7 @@ class LocalDatabase:
                            balance_after, transfer_amount, transfer_recipient, duration, status, login_method, run_date, created_at, owner
                     FROM history_records
                     WHERE {where_clause}
-                    ORDER BY created_at DESC
+                    ORDER BY run_date DESC, created_at DESC
                     LIMIT ?
                 """
                 

@@ -451,6 +451,7 @@ class AutomationGUI:
         
         # 日志自动滚动控制
         self.log_auto_scroll = True  # 默认开启自动滚动
+        self._scroll_check_timer = None  # 防抖定时器
         
         # 绑定鼠标滚轮和滚动条事件，用户滑动时停止自动滚动
         self.log_text.bind("<MouseWheel>", self._on_log_scroll)
@@ -461,6 +462,7 @@ class AutomationGUI:
         log_scrollbar = self.log_text.vbar
         if log_scrollbar:
             log_scrollbar.bind("<B1-Motion>", self._on_log_scrollbar_drag)
+            log_scrollbar.bind("<ButtonRelease-1>", self._on_log_scrollbar_release)
         
         # === 错误日志区域 ===
         error_log_frame = ttk.LabelFrame(main_frame, text="错误日志", padding="5")
@@ -1429,14 +1431,31 @@ class AutomationGUI:
         self.log_auto_scroll = True
     
     def _on_log_scroll(self, event):
-        """用户滚动日志时停止自动滚动"""
-        self.log_auto_scroll = False
+        """用户滚动日志时检查是否在底部，决定是否自动滚动"""
+        # 延迟检查，等待滚动完成
+        self.root.after(100, self._check_log_scroll_position)
         return None  # 允许事件继续传播
     
     def _on_log_scrollbar_drag(self, event):
-        """用户拖动滚动条时停止自动滚动"""
-        self.log_auto_scroll = False
+        """用户拖动滚动条时检查是否在底部，决定是否自动滚动"""
+        # 延迟检查，等待拖动完成
+        self.root.after(100, self._check_log_scroll_position)
         return None
+    
+    def _check_log_scroll_position(self):
+        """检查日志文本框是否滚动到底部"""
+        try:
+            # 获取当前滚动位置
+            # yview() 返回 (top, bottom)，表示可见区域的相对位置（0.0-1.0）
+            yview = self.log_text.yview()
+            
+            # 如果底部位置接近1.0（允许小误差），认为在底部
+            if yview[1] >= 0.99:
+                self.log_auto_scroll = True
+            else:
+                self.log_auto_scroll = False
+        except Exception:
+            pass
     
     def _on_tree_click(self, event):
         """处理表格点击事件(切换勾选状态)"""
