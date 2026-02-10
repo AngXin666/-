@@ -1802,7 +1802,7 @@ class XimengAutomation:
                                                                     strategy = "单级转账"
                                                                 
                                                                 # 获取账号的管理员信息
-                                                                owner_name = ""
+                                                                owner_name = "未分配"  # 默认值
                                                                 try:
                                                                     from .user_manager import UserManager
                                                                     user_manager = UserManager()
@@ -1855,7 +1855,7 @@ class XimengAutomation:
                                                                 strategy = "单级转账"
                                                             
                                                             # 获取账号的管理员信息
-                                                            owner_name = ""
+                                                            owner_name = "未分配"  # 默认值
                                                             try:
                                                                 from .user_manager import UserManager
                                                                 user_manager = UserManager()
@@ -1898,7 +1898,7 @@ class XimengAutomation:
                                                         strategy = transfer_config.strategy
                                                         
                                                         # 获取账号的管理员信息
-                                                        owner_name = ""
+                                                        owner_name = "未分配"  # 默认值
                                                         try:
                                                             from .user_manager import UserManager
                                                             user_manager = UserManager()
