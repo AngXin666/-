@@ -695,30 +695,27 @@ class DailyCheckin:
             # 点击后短暂等待，让页面开始变化
             await asyncio.sleep(0.3)
             
-            # 点击后立即检测页面状态
-            post_click_result = await self._detect_page_cached(device_id, use_cache=False, cache_key="post_click")
-            if post_click_result:
-                log(f"  [签到] 点击后页面状态: {post_click_result.state.value} (置信度: {post_click_result.confidence:.2%})")
-            
-            # 等待页面加载（优化：使用智能等待器代替固定等待）
+            # 使用 SmartWaiter 定期深度学习检测
             log(f"  [签到] 等待签到页面加载...")
-            from .performance.smart_waiter import wait_for_page
-            page_result = await wait_for_page(
+            from .performance.smart_waiter import SmartWaiter
+            waiter = SmartWaiter()
+            page_result = await waiter.wait_for_page_change(
                 device_id,
                 self.detector,
-                [PageState.CHECKIN, PageState.CHECKIN_POPUP, PageState.WARMTIP],  # 可能到达签到页、签到弹窗或温馨提示
-                log_callback=lambda msg: log(f"  [SmartWaiter] {msg}")  # 输出SmartWaiter的日志
+                [PageState.CHECKIN, PageState.CHECKIN_POPUP, PageState.WARMTIP, PageState.LOGIN],
+                max_wait=5.0,  # 最多等待5秒
+                poll_interval=0.5,  # 每0.5秒检测一次
+                log_callback=lambda msg: log(f"  [SmartWaiter] {msg}"),
+                stability_check=False,  # 检测到即返回
+                adb_bridge=None  # 不传递ADB，禁用轻量级检测，直接用深度学习
             )
             
             if not page_result:
-                # 如果智能等待超时，给一个短暂的固定等待作为降级
-                log(f"  [签到] 智能等待超时，使用降级等待...")
-                await asyncio.sleep(1.0)  # 降级等待1秒
+                # 如果 SmartWaiter 超时，使用降级等待
+                log(f"  [签到] SmartWaiter 超时，使用降级等待...")
+                await asyncio.sleep(0.5)
                 # 重新检测页面状态
                 page_result = await self._detect_page_cached(device_id, use_cache=False, cache_key="page_enter")
-            else:
-                # 智能等待成功，直接使用返回的页面结果
-                log(f"  [签到] ✓ 页面已加载: {page_result.state.value} (置信度: {page_result.confidence:.2%})")
             
             # 6.1 进入签到页面后先截图
             log(f"  [签到] 保存进入页面截图...")
@@ -727,6 +724,98 @@ class DailyCheckin:
                 result['screenshots'].append(page_enter_screenshot)
             
             # 6.2 智能等待识别到页面后，立即用深度学习检测页面类型
+            
+            # 检查是否到达登录页（缓存失效）
+            if page_result and page_result.state == PageState.LOGIN:
+                log(f"  [签到] ⚠️ 检测到登录页，缓存已失效，需要登录")
+                concise.action("缓存失效，执行登录")
+                
+                # 如果提供了登录回调，直接执行登录
+                if login_callback and password:
+                    log(f"  [签到] 执行登录流程...")
+                    try:
+                        # 调用登录回调（这是一个协程）
+                        login_result = await login_callback(device_id, phone, password)
+                        
+                        if login_result and login_result.success:
+                            log(f"  [签到] ✓ 登录成功，继续签到流程")
+                            concise.success("登录成功")
+                            
+                            # 登录后需要处理积分页跳转（优化：减少等待时间）
+                            await asyncio.sleep(1.0)  # 优化：2秒→1秒
+                            
+                            # 检测当前页面
+                            page_result = await self.detector.detect_page(
+                                device_id, use_cache=False, detect_elements=False
+                            )
+                            
+                            if page_result and page_result.state == PageState.POINTS_PAGE:
+                                log(f"  [签到] 检测到积分页，按2次返回键...")
+                                await self.adb.press_back(device_id)
+                                await asyncio.sleep(0.5)  # 优化：1秒→0.5秒
+                                await self.adb.press_back(device_id)
+                                await asyncio.sleep(0.5)  # 优化：1秒→0.5秒
+                                self.detector.clear_cache()
+                            
+                            # 导航到首页
+                            log(f"  [签到] 导航到首页...")
+                            success = await self.guard.ensure_page_state(
+                                device_id,
+                                PageState.HOME,
+                                self.navigator.navigate_to_home,
+                                "登录后导航首页"
+                            )
+                            
+                            if not success:
+                                result['message'] = "登录后无法导航到首页"
+                                result['error_type'] = ErrorType.CANNOT_REACH_CHECKIN
+                                result['error_message'] = result['message']
+                                return result
+                            
+                            # 重新点击签到按钮
+                            log(f"  [签到] 重新点击签到按钮...")
+                            await self.adb.tap(device_id, checkin_button_pos[0], checkin_button_pos[1])
+                            await asyncio.sleep(0.3)
+                            
+                            # 重新等待签到页面（使用 SmartWaiter）
+                            from .performance.smart_waiter import SmartWaiter
+                            waiter = SmartWaiter()
+                            page_result = await waiter.wait_for_page_change(
+                                device_id,
+                                self.detector,
+                                [PageState.CHECKIN, PageState.CHECKIN_POPUP, PageState.WARMTIP],
+                                max_wait=5.0,
+                                poll_interval=0.5,
+                                log_callback=lambda msg: log(f"  [SmartWaiter] {msg}"),
+                                stability_check=False,
+                                adb_bridge=None  # 禁用轻量级检测，直接用深度学习
+                            )
+                            
+                            if not page_result:
+                                await asyncio.sleep(1.0)
+                                page_result = await self._detect_page_cached(device_id, use_cache=False, cache_key="page_enter_after_login")
+                        else:
+                            log(f"  [签到] ❌ 登录失败: {login_result.error_message if login_result else '未知错误'}")
+                            result['message'] = f"登录失败: {login_result.error_message if login_result else '未知错误'}"
+                            result['error_type'] = ErrorType.LOGIN_PASSWORD_ERROR
+                            result['error_message'] = result['message']
+                            result['need_relogin'] = True
+                            return result
+                    except Exception as e:
+                        log(f"  [签到] ❌ 登录过程出错: {str(e)}")
+                        result['message'] = f"登录过程出错: {str(e)}"
+                        result['error_type'] = ErrorType.LOGIN_PASSWORD_ERROR
+                        result['error_message'] = result['message']
+                        result['need_relogin'] = True
+                        return result
+                else:
+                    # 没有提供登录回调或密码，无法登录
+                    log(f"  [签到] ❌ 缓存已失效但未提供登录信息")
+                    result['message'] = "缓存已失效，需要重新登录"
+                    result['error_type'] = ErrorType.CACHE_INVALID
+                    result['error_message'] = result['message']
+                    result['need_relogin'] = True
+                    return result
             
             # 检查是否误点到其他页面（文章页、搜索页、分类页）
             pages_need_return_home = [
