@@ -1380,11 +1380,16 @@ class XimengAutomation:
                         updated_profile_data = None
                     
                     # 直接调用 do_checkin，它会自动处理导航和返回首页
+                    # 传递登录回调，以便在缓存失效时可以直接登录
+                    async def login_callback_wrapper(dev_id, phone_num, pwd):
+                        """登录回调包装器"""
+                        return await self.auto_login.login(dev_id, phone_num, pwd)
+                    
                     checkin_result = await self.daily_checkin.do_checkin(
                         device_id, 
                         phone=account.phone,
                         password=account.password,
-                        login_callback=None,  # 已经登录，不需要回调
+                        login_callback=login_callback_wrapper,  # 传递登录回调，用于缓存失效时登录
                         log_callback=None,
                         profile_data=updated_profile_data,  # 传递个人信息（可能为None）
                         allow_skip_profile=not profile_success  # 快速签到模式下允许跳过

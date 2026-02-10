@@ -18,6 +18,7 @@ class ErrorType(Enum):
     
     # 缓存相关错误
     CACHE_USER_ID_MISMATCH = "cache_user_id_mismatch"
+    CACHE_INVALID = "cache_invalid"
     
     # 导航相关错误
     CANNOT_REACH_PROFILE = "cannot_reach_profile"
@@ -58,6 +59,7 @@ class ErrorType(Enum):
             
             # 缓存相关错误
             ErrorType.CACHE_USER_ID_MISMATCH: "缓存失败:用户ID不匹配",
+            ErrorType.CACHE_INVALID: "缓存失败:缓存已失效",
             
             # 导航相关错误
             ErrorType.CANNOT_REACH_PROFILE: "失败:无法到达个人页",

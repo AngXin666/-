@@ -3432,14 +3432,10 @@ class AutomationGUI:
             if has_valid_cache:
                 # 使用缓存登录
                 result = await ximeng.run_full_workflow(device_id, account, skip_login=True, workflow_config=workflow_config)
+                result.login_method = "缓存"
             else:
                 # 正常登录
                 result = await ximeng.run_full_workflow(device_id, account, skip_login=False, workflow_config=workflow_config)
-            
-            # 设置登录方式
-            if has_valid_cache:
-                result.login_method = "缓存"
-            else:
                 result.login_method = "正常登录"
             
             # 计算耗时
