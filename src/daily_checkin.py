@@ -70,10 +70,6 @@ class DailyCheckin:
         ocr_pool = model_manager.get_ocr_thread_pool() if HAS_OCR else None
         self._smart_clicker = SmartButtonClicker(adb, detector, ocr_pool)
         
-        # 初始化页面状态守卫
-        from .page_state_guard import PageStateGuard
-        self.guard = PageStateGuard(adb, detector)
-        
         # 初始化页面检测缓存管理器
         from .page_detector_cache import PageDetectorCache
         self._page_cache = PageDetectorCache(
@@ -545,7 +541,14 @@ class DailyCheckin:
                 'rewards': [],
                 'screenshots': [],
                 'need_relogin': False,
-                'error_type': None  # 错误类型（ErrorType枚举）
+                'error_type': None,  # 错误类型（ErrorType枚举）
+                'nickname': None,  # 昵称
+                'user_id': None,  # 用户ID
+                'points': None,  # 积分
+                'vouchers': None,  # 抵扣券
+                'coupons': None,  # 优惠券
+                'balance_before': None,  # 签到前余额
+                'checkin_balance_after': None  # 签到后余额
             }
             
             # 初始化余额变量，避免后续引用未定义
@@ -573,59 +576,67 @@ class DailyCheckin:
                 if vouchers is not None:
                     log(f"    - 抵扣券: {vouchers} 张")
             elif allow_skip_profile:
-                # 快速签到模式：只获取余额（用于计算签到奖励），跳过积分和抵扣券
-                log(f"  [签到] 快速签到模式：只获取余额...")
+                # 快速签到模式：完全不去个人页，使用从数据库获取的余额
+                log(f"  [签到] 快速签到模式：使用数据库余额（不去个人页）...")
                 profile_success = True  # 标记为成功，允许继续
                 
-                try:
-                    from .profile_reader import ProfileReader
-                    profile_reader = ProfileReader(self.adb, self.detector)
-                    balance = await profile_reader.get_balance(device_id)
-                    
-                    if balance is not None:
-                        log(f"  [签到] ✓ 签到前余额: {balance:.2f} 元")
-                    else:
-                        log(f"  [签到] ⚠️ 无法获取余额，将无法计算签到奖励")
-                except Exception as e:
-                    log(f"  [签到] ⚠️ 获取余额失败: {e}")
+                # 从 profile_data 中获取余额（已从数据库获取）
+                # 如果 profile_data 为 None，说明数据库中没有历史记录，无法计算签到奖励
+                if profile_data and profile_data.get('balance') is not None:
+                    balance = profile_data.get('balance')
+                    log(f"  [签到] ✓ 使用数据库余额: {balance:.2f} 元")
+                else:
                     balance = None
+                    log(f"  [签到] ⚠️ 数据库中无余额记录，将无法计算签到奖励")
                 
                 points = None
                 vouchers = None
             else:
-                # 需要获取个人信息
-                log(f"  [签到] 获取个人信息...")
+                # 完整模式：需要去个人页获取完整个人信息
+                log(f"  [签到] 完整模式：导航到个人页获取完整资料...")
                 profile_success = False
                 
                 try:
-                    from .profile_reader import ProfileReader
-                    profile_reader = ProfileReader(self.adb)
-                    profile_data = await profile_reader.get_full_profile(device_id)
+                    # 1. 先导航到个人页
+                    concise.action("导航到个人页")
+                    nav_success = await self.navigator.navigate_to_profile(device_id)
                     
-                    if profile_data:
-                        balance = profile_data.get('balance')
-                        points = profile_data.get('points')
-                        vouchers = profile_data.get('vouchers')
-                        
-                        # 至少要能获取到余额，才认为成功
-                        if balance is not None:
-                            profile_success = True
-                            log(f"  [签到] ✓ 个人信息:")
-                            log(f"    - 余额: {balance:.2f} 元")
-                            
-                            if points is not None:
-                                log(f"    - 积分: {points} 积分")
-                            else:
-                                log(f"    - 积分: 无法获取")
-                            
-                            if vouchers is not None:
-                                log(f"    - 抵扣券: {vouchers} 张")
-                            else:
-                                log(f"    - 抵扣券: 无法获取")
-                        else:
-                            log(f"  [签到] ❌ 无法获取余额信息")
+                    if not nav_success:
+                        log(f"  [签到] ❌ 无法导航到个人页")
+                        profile_success = False
                     else:
-                        log(f"  [签到] ❌ 无法获取个人信息")
+                        log(f"  [签到] ✓ 已到达个人页")
+                        
+                        # 2. 获取完整个人资料
+                        concise.action("读取个人资料")
+                        from .profile_reader import ProfileReader
+                        profile_reader = ProfileReader(self.adb, self.detector)
+                        profile_data = await profile_reader.get_full_profile(device_id)
+                        
+                        if profile_data:
+                            balance = profile_data.get('balance')
+                            points = profile_data.get('points')
+                            vouchers = profile_data.get('vouchers')
+                            
+                            # 至少要能获取到余额，才认为成功
+                            if balance is not None:
+                                profile_success = True
+                                log(f"  [签到] ✓ 个人信息:")
+                                log(f"    - 余额: {balance:.2f} 元")
+                                
+                                if points is not None:
+                                    log(f"    - 积分: {points} 积分")
+                                else:
+                                    log(f"    - 积分: 无法获取")
+                                
+                                if vouchers is not None:
+                                    log(f"    - 抵扣券: {vouchers} 张")
+                                else:
+                                    log(f"    - 抵扣券: 无法获取")
+                            else:
+                                log(f"  [签到] ❌ 无法获取余额信息")
+                        else:
+                            log(f"  [签到] ❌ 无法获取个人信息")
                         
                 except Exception as e:
                     log(f"  [签到] ❌ 获取个人信息出错: {e}")
@@ -641,15 +652,94 @@ class DailyCheckin:
             
             # 优化：删除不必要的1秒等待
             
-            # 4. 导航到首页准备签到
+            # 4. 导航到首页准备签到（先检查是否在登录页）
             concise.action("导航到首页")
             log(f"  [签到] 导航到首页...")
-            success = await self.guard.ensure_page_state(
-                device_id,
-                PageState.HOME,
-                self.navigator.navigate_to_home,
-                "签到前导航首页"
-            )
+            
+            # 先检测当前页面状态
+            current_page = await self.detector.detect_page(device_id, use_cache=False, detect_elements=False)
+            
+            # 如果当前在登录页，先执行登录
+            if current_page and current_page.state == PageState.LOGIN:
+                log(f"  [签到] ⚠️ 当前在登录页，缓存已失效，需要先登录")
+                concise.action("缓存失效，执行登录")
+                
+                if login_callback and password:
+                    log(f"  [签到] 执行登录流程...")
+                    try:
+                        # 调用登录回调
+                        login_result = await login_callback(device_id, phone, password)
+                        
+                        if login_result and login_result.success:
+                            log(f"  [签到] ✓ 登录成功，继续签到流程")
+                            concise.success("登录成功")
+                            
+                            # 登录后需要处理积分页跳转
+                            await asyncio.sleep(1.0)
+                            
+                            # 检测当前页面
+                            page_result = await self.detector.detect_page(
+                                device_id, use_cache=False, detect_elements=False
+                            )
+                            
+                            if page_result and page_result.state == PageState.POINTS_PAGE:
+                                log(f"  [签到] 检测到积分页，按2次返回键...")
+                                await self.adb.press_back(device_id)
+                                await asyncio.sleep(0.5)
+                                await self.adb.press_back(device_id)
+                                await asyncio.sleep(0.5)
+                                self.detector.clear_cache()
+                            
+                            # 快速签到模式下，缓存失效后需要重新获取签到前余额
+                            if allow_skip_profile:
+                                log(f"  [签到] 快速签到模式：缓存失效后重新获取签到前余额...")
+                                try:
+                                    # 导航到个人页
+                                    concise.action("获取签到前余额")
+                                    nav_success = await self.navigator.navigate_to_profile(device_id)
+                                    
+                                    if nav_success:
+                                        log(f"  [签到] ✓ 已到达个人页")
+                                        
+                                        # 获取完整个人资料
+                                        from .profile_reader import ProfileReader
+                                        profile_reader = ProfileReader(self.adb, self.detector)
+                                        fresh_profile_data = await profile_reader.get_full_profile(device_id)
+                                        
+                                        if fresh_profile_data and fresh_profile_data.get('balance') is not None:
+                                            balance = fresh_profile_data.get('balance')
+                                            log(f"  [签到] ✓ 重新获取到签到前余额: {balance:.2f} 元")
+                                        else:
+                                            log(f"  [签到] ⚠️ 无法获取签到前余额，使用历史数据")
+                                    else:
+                                        log(f"  [签到] ⚠️ 无法导航到个人页，使用历史数据")
+                                except Exception as e:
+                                    log(f"  [签到] ⚠️ 获取签到前余额出错: {e}，使用历史数据")
+                        else:
+                            log(f"  [签到] ❌ 登录失败: {login_result.error_message if login_result else '未知错误'}")
+                            result['message'] = f"登录失败: {login_result.error_message if login_result else '未知错误'}"
+                            result['error_type'] = ErrorType.LOGIN_PASSWORD_ERROR
+                            result['error_message'] = result['message']
+                            result['need_relogin'] = True
+                            return result
+                    except Exception as e:
+                        log(f"  [签到] ❌ 登录过程出错: {str(e)}")
+                        result['message'] = f"登录过程出错: {str(e)}"
+                        result['error_type'] = ErrorType.LOGIN_PASSWORD_ERROR
+                        result['error_message'] = result['message']
+                        result['need_relogin'] = True
+                        return result
+                else:
+                    # 没有提供登录回调或密码，无法登录
+                    log(f"  [签到] ❌ 缓存已失效但未提供登录信息")
+                    result['message'] = "缓存已失效，需要重新登录"
+                    result['error_type'] = ErrorType.CACHE_INVALID
+                    result['error_message'] = result['message']
+                    result['need_relogin'] = True
+                    return result
+            
+            # 导航到首页
+            success = await self.navigator.navigate_to_home(device_id)
             
             if not success:
                 result['message'] = "无法导航到首页"
@@ -695,7 +785,7 @@ class DailyCheckin:
             # 点击后短暂等待，让页面开始变化
             await asyncio.sleep(0.3)
             
-            # 使用 SmartWaiter 定期深度学习检测
+            # 使用 SmartWaiter 混合检测模式（更快更准）
             log(f"  [签到] 等待签到页面加载...")
             from .performance.smart_waiter import SmartWaiter
             waiter = SmartWaiter()
@@ -704,18 +794,28 @@ class DailyCheckin:
                 self.detector,
                 [PageState.CHECKIN, PageState.CHECKIN_POPUP, PageState.WARMTIP, PageState.LOGIN],
                 max_wait=5.0,  # 最多等待5秒
-                poll_interval=0.5,  # 每0.5秒检测一次
+                poll_interval=0.2,  # 优化：高频轮询（感知哈希很快）
                 log_callback=lambda msg: log(f"  [SmartWaiter] {msg}"),
                 stability_check=False,  # 检测到即返回
-                adb_bridge=None  # 不传递ADB，禁用轻量级检测，直接用深度学习
+                adb_bridge=self.adb,  # 传递ADB用于截图
+                detection_mode="hybrid"  # 使用混合检测：感知哈希+深度学习
             )
             
             if not page_result:
-                # 如果 SmartWaiter 超时，使用降级等待
-                log(f"  [签到] SmartWaiter 超时，使用降级等待...")
-                await asyncio.sleep(0.5)
-                # 重新检测页面状态
-                page_result = await self._detect_page_cached(device_id, use_cache=False, cache_key="page_enter")
+                # 如果 SmartWaiter 5秒超时，使用全局 wait_for_page（15秒超时）
+                log(f"  [签到] SmartWaiter 超时，使用全局 wait_for_page 等待...")
+                page_result = await wait_for_page(
+                    device_id,
+                    self.detector,
+                    [PageState.CHECKIN, PageState.CHECKIN_POPUP, PageState.WARMTIP, PageState.LOGIN],
+                    log_callback=lambda msg: log(f"  [等待] {msg}")
+                )
+                
+                # 如果15秒还是超时，再尝试一次检测
+                if not page_result:
+                    log(f"  [签到] 等待超时，最后一次检测...")
+                    await asyncio.sleep(0.5)
+                    page_result = await self._detect_page_cached(device_id, use_cache=False, cache_key="page_enter")
             
             # 6.1 进入签到页面后先截图
             log(f"  [签到] 保存进入页面截图...")
@@ -725,9 +825,29 @@ class DailyCheckin:
             
             # 6.2 智能等待识别到页面后，立即用深度学习检测页面类型
             
+            # ==================== 调试日志：检查页面检测结果 ====================
+            log(f"  [调试] page_result 检查:")
+            log(f"    - page_result 是否为 None: {page_result is None}")
+            if page_result:
+                log(f"    - page_result.state: {page_result.state}")
+                log(f"    - page_result.state.value: {page_result.state.value}")
+                log(f"    - page_result.confidence: {page_result.confidence:.2%}")
+                log(f"    - 是否是登录页: {page_result.state == PageState.LOGIN}")
+            else:
+                log(f"    - page_result 为 None，无法检测页面状态")
+            
+            # 检查登录回调和密码
+            log(f"  [调试] 登录参数检查:")
+            log(f"    - login_callback 是否提供: {login_callback is not None}")
+            log(f"    - password 是否提供: {password is not None}")
+            if password:
+                log(f"    - password 长度: {len(password)}")
+            # ==================== 调试日志结束 ====================
+            
             # 检查是否到达登录页（缓存失效）
             if page_result and page_result.state == PageState.LOGIN:
                 log(f"  [签到] ⚠️ 检测到登录页，缓存已失效，需要登录")
+                log(f"  [调试] 进入登录处理分支")
                 concise.action("缓存失效，执行登录")
                 
                 # 如果提供了登录回调，直接执行登录
@@ -757,14 +877,35 @@ class DailyCheckin:
                                 await asyncio.sleep(0.5)  # 优化：1秒→0.5秒
                                 self.detector.clear_cache()
                             
+                            # 快速签到模式下，缓存失效后需要重新获取签到前余额
+                            if allow_skip_profile:
+                                log(f"  [签到] 快速签到模式：缓存失效后重新获取签到前余额...")
+                                try:
+                                    # 导航到个人页
+                                    concise.action("获取签到前余额")
+                                    nav_success = await self.navigator.navigate_to_profile(device_id)
+                                    
+                                    if nav_success:
+                                        log(f"  [签到] ✓ 已到达个人页")
+                                        
+                                        # 获取完整个人资料
+                                        from .profile_reader import ProfileReader
+                                        profile_reader = ProfileReader(self.adb, self.detector)
+                                        fresh_profile_data = await profile_reader.get_full_profile(device_id)
+                                        
+                                        if fresh_profile_data and fresh_profile_data.get('balance') is not None:
+                                            balance = fresh_profile_data.get('balance')
+                                            log(f"  [签到] ✓ 重新获取到签到前余额: {balance:.2f} 元")
+                                        else:
+                                            log(f"  [签到] ⚠️ 无法获取签到前余额，使用历史数据")
+                                    else:
+                                        log(f"  [签到] ⚠️ 无法导航到个人页，使用历史数据")
+                                except Exception as e:
+                                    log(f"  [签到] ⚠️ 获取签到前余额出错: {e}，使用历史数据")
+                            
                             # 导航到首页
                             log(f"  [签到] 导航到首页...")
-                            success = await self.guard.ensure_page_state(
-                                device_id,
-                                PageState.HOME,
-                                self.navigator.navigate_to_home,
-                                "登录后导航首页"
-                            )
+                            success = await self.navigator.navigate_to_home(device_id)
                             
                             if not success:
                                 result['message'] = "登录后无法导航到首页"
@@ -777,21 +918,18 @@ class DailyCheckin:
                             await self.adb.tap(device_id, checkin_button_pos[0], checkin_button_pos[1])
                             await asyncio.sleep(0.3)
                             
-                            # 重新等待签到页面（使用 SmartWaiter）
-                            from .performance.smart_waiter import SmartWaiter
-                            waiter = SmartWaiter()
-                            page_result = await waiter.wait_for_page_change(
+                            # 重新等待签到页面（使用全局 wait_for_page，15秒超时）
+                            log(f"  [签到] 等待进入签到页...")
+                            page_result = await wait_for_page(
                                 device_id,
                                 self.detector,
                                 [PageState.CHECKIN, PageState.CHECKIN_POPUP, PageState.WARMTIP],
-                                max_wait=5.0,
-                                poll_interval=0.5,
-                                log_callback=lambda msg: log(f"  [SmartWaiter] {msg}"),
-                                stability_check=False,
-                                adb_bridge=None  # 禁用轻量级检测，直接用深度学习
+                                log_callback=lambda msg: log(f"  [等待] {msg}")
                             )
                             
+                            # 如果15秒超时，再尝试一次检测
                             if not page_result:
+                                log(f"  [签到] 等待超时，再次检测...")
                                 await asyncio.sleep(1.0)
                                 page_result = await self._detect_page_cached(device_id, use_cache=False, cache_key="page_enter_after_login")
                         else:
@@ -855,34 +993,52 @@ class DailyCheckin:
                         log(f"  [签到] ⚠️ 智能点击器失败，按返回键")
                         await self.adb.press_back(device_id)
                 
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.5)  # 优化：1秒→0.5秒
                 self.detector.clear_cache(device_id)
                 
-                # 验证是否回到首页
-                page_result = await self.detector.detect_page(device_id, use_cache=False, detect_elements=False)
-                if page_result and page_result.state == PageState.HOME:
-                    log(f"  [签到] ✓ 已返回首页，重新点击签到按钮...")
-                    # 使用智能按钮点击器重新点击签到按钮
-                    success, used_pos = await self._smart_clicker.click_button(
-                        device_id=device_id,
-                        button_name="home_checkin_button",
-                        valid_range=self.CHECKIN_BUTTON_VALID_RANGE,
-                        default_position=checkin_button_pos,
-                        cached_position=checkin_button_pos,
-                        log_callback=lambda msg: log(msg)
-                    )
-                    if not success:
-                        log(f"  [签到] ⚠️ 智能点击器失败，使用直接点击")
-                        await self.adb.tap(device_id, checkin_button_pos[0], checkin_button_pos[1])
-                    await asyncio.sleep(1)
-                    # 重新检测页面
-                    page_result = await self.detector.detect_page(device_id, use_cache=False, detect_elements=False)
-                else:
-                    log(f"  [签到] ❌ 返回首页失败，当前页面: {page_result.state.value if page_result else 'unknown'}")
-                    result['message'] = "返回首页失败"
+                # 等待返回首页（检测到立即返回，15秒只是超时保护）
+                log(f"  [签到] 等待返回首页...")
+                home_result = await wait_for_page(
+                    device_id,
+                    self.detector,
+                    [PageState.HOME],
+                    log_callback=lambda msg: log(f"  [等待] {msg}")
+                )
+                
+                # 如果15秒超时，标记失败
+                if not home_result or home_result.state != PageState.HOME:
+                    log(f"  [签到] ❌ 等待返回首页超时（15秒），标记失败")
+                    result['message'] = "返回首页失败（15秒超时）"
                     result['error_type'] = ErrorType.CANNOT_REACH_CHECKIN
                     result['error_message'] = result['message']
                     return result
+                
+                # 已返回首页，重新点击签到按钮
+                log(f"  [签到] ✓ 已返回首页，重新点击签到按钮...")
+                # 已返回首页，重新点击签到按钮
+                # 使用智能按钮点击器重新点击签到按钮
+                success, used_pos = await self._smart_clicker.click_button(
+                    device_id=device_id,
+                    button_name="home_checkin_button",
+                    valid_range=self.CHECKIN_BUTTON_VALID_RANGE,
+                    default_position=checkin_button_pos,
+                    cached_position=checkin_button_pos,
+                    log_callback=lambda msg: log(msg)
+                )
+                if not success:
+                    log(f"  [签到] ⚠️ 智能点击器失败，使用直接点击")
+                    await self.adb.tap(device_id, checkin_button_pos[0], checkin_button_pos[1])
+                
+                await asyncio.sleep(0.3)  # 优化：1秒→0.3秒
+                
+                # 等待进入签到页（检测到立即返回，15秒只是超时保护）
+                log(f"  [签到] 等待进入签到页...")
+                page_result = await wait_for_page(
+                    device_id,
+                    self.detector,
+                    [PageState.CHECKIN, PageState.CHECKIN_POPUP, PageState.WARMTIP],
+                    log_callback=lambda msg: log(f"  [等待] {msg}")
+                )
             
             if page_result and (page_result.state == PageState.CHECKIN or page_result.state == PageState.CHECKIN_POPUP):
                 log(f"  [签到] ✓ 已进入签到页面（深度学习检测，置信度: {page_result.confidence:.2%}）")
@@ -962,8 +1118,6 @@ class DailyCheckin:
             max_attempts = 20
             
             # 优化：缓存变量
-            cached_home_checkin_button = None  # 缓存首页的"每日签到"入口按钮位置
-            cached_checkin_button = None  # 缓存签到页的"立即签到"按钮位置
             total_times = result['total_times']  # 缓存总次数
             initial_remaining_times = result['remaining_times']  # 缓存初始的当日剩余次数
             checkin_count = 0  # 签到计数器
@@ -1068,29 +1222,13 @@ class DailyCheckin:
                                 log(f"  [签到] ✓ 已返回签到页面，继续下一轮循环")
                                 continue
                     
-                    # 如果不是弹窗，或者关闭弹窗后仍不在签到页面，尝试其他处理
+                    # 如果不是弹窗，或者关闭弹窗后仍不在签到页面，直接报错退出
                     if current_state not in [PageState.CHECKIN, PageState.CHECKIN_POPUP]:
-                        # 尝试处理异常页面
-                        log(f"  [签到] 尝试处理异常页面...")
-                        handled = await self.guard._handle_unexpected_page(device_id, current_state, PageState.CHECKIN, "签到循环中", retry_count=attempt)
-                        if not handled:
-                            result['message'] = f"签到循环中页面异常: {current_state.value}"
-                            result['error_type'] = ErrorType.CHECKIN_FAILED  # 签到失败
-                            result['error_message'] = result['message']
-                            log(f"  [签到] ❌ 无法处理异常页面")
-                            break
-                        # 重新验证（使用签到循环场景优先级模板）
-                        log(f"  [签到] 重新验证页面状态...")
-                        current_state = await self.guard.get_current_page_state(device_id, "处理异常后", scenario='checkin_loop')
-                        if current_state not in [PageState.CHECKIN, PageState.CHECKIN_POPUP]:
-                            result['message'] = "无法返回签到页面"
-                            result['error_type'] = ErrorType.CHECKIN_FAILED  # 签到失败
-                            result['error_message'] = result['message']
-                            log(f"  [签到] ❌ 无法返回签到页面")
-                            break
-                        else:
-                            log(f"  [签到] ✓ 已返回签到页面，继续循环")
-                            continue  # 添加continue，避免执行后续的签到逻辑
+                        result['message'] = f"签到循环中页面异常: {current_state.value}"
+                        result['error_type'] = ErrorType.CHECKIN_FAILED  # 签到失败
+                        result['error_message'] = result['message']
+                        log(f"  [签到] ❌ 页面异常，无法继续签到")
+                        break
                 
                 # 5.1 读取签到页面信息
                 if attempt == 0:
@@ -1126,40 +1264,36 @@ class DailyCheckin:
                     else:
                         log(f"  [签到 {attempt + 1}] 剩余次数: {remaining_times if remaining_times is not None else '未知'}，继续签到...")
                 
-                # 5.4 执行签到（使用缓存的按钮位置）
-                if cached_checkin_button is None:
-                    # 第一次循环：检测签到按钮位置
-                    log(f"  [签到 {attempt + 1}] 使用整合检测器检测签到按钮...")
-                    try:
-                        detection_result = await self._detect_page_cached(
-                            device_id,
-                            use_cache=True,  # 使用缓存（按钮位置通常不变）
-                            detect_elements=True,
-                            cache_key="button_detect",
-                            ttl=2.0  # 按钮位置缓存2秒
-                        )
-                        
-                        if detection_result and detection_result.elements:
-                            for element in detection_result.elements:
-                                if '签到按钮' in element.class_name or '签到' in element.class_name:
-                                    cached_checkin_button = element.center
-                                    log(f"  [签到 {attempt + 1}] 整合检测器检测到签到按钮: {cached_checkin_button} (置信度: {element.confidence:.2%})")
-                                    break
-                        
-                        if cached_checkin_button is None:
-                            log(f"  [签到 {attempt + 1}] 整合检测器未检测到按钮，降级到OCR...")
-                    except Exception as e:
-                        log(f"  [签到 {attempt + 1}] 整合检测器检测失败: {e}，降级到OCR...")
+                # 5.4 执行签到（每次都重新检测按钮位置，不使用缓存）
+                log(f"  [签到 {attempt + 1}] 使用整合检测器检测签到按钮...")
+                checkin_button = None
+                try:
+                    detection_result = await self._detect_page_cached(
+                        device_id,
+                        use_cache=False,  # 不使用缓存（按钮位置会变化）
+                        detect_elements=True,
+                        cache_key=f"button_detect_{attempt}",  # 每次使用不同的key
+                        ttl=0  # 不缓存
+                    )
                     
-                    # 如果整合检测器失败，使用默认签到按钮坐标
-                    if cached_checkin_button is None:
-                        cached_checkin_button = (270, 800)
-                        log(f"  [签到 {attempt + 1}] 使用默认坐标: {cached_checkin_button}")
-                else:
-                    # 后续循环：使用缓存的按钮位置
-                    log(f"  [签到 {attempt + 1}] 使用缓存的按钮位置: {cached_checkin_button}")
+                    if detection_result and detection_result.elements:
+                        for element in detection_result.elements:
+                            if '签到按钮' in element.class_name or '签到' in element.class_name:
+                                checkin_button = element.center
+                                log(f"  [签到 {attempt + 1}] 整合检测器检测到签到按钮: {checkin_button} (置信度: {element.confidence:.2%})")
+                                break
+                    
+                    if checkin_button is None:
+                        log(f"  [签到 {attempt + 1}] 整合检测器未检测到按钮，使用默认坐标...")
+                except Exception as e:
+                    log(f"  [签到 {attempt + 1}] 整合检测器检测失败: {e}，使用默认坐标...")
                 
-                x, y = cached_checkin_button
+                # 如果整合检测器失败，使用默认签到按钮坐标
+                if checkin_button is None:
+                    checkin_button = (270, 800)
+                    log(f"  [签到 {attempt + 1}] 使用默认坐标: {checkin_button}")
+                
+                x, y = checkin_button
                 
                 # 5.4.1 点击签到按钮前截图（可选，调试用）
                 # log(f"  [签到 {attempt + 1}] 保存点击前截图...")
@@ -1225,60 +1359,133 @@ class DailyCheckin:
                     log(f"  [签到 {attempt + 1}] ✓ 已返回首页，准备重新进入签到页...")
                     
                     # 重新点击首页的"每日签到"入口按钮进入签到页
-                    # 使用智能按钮点击器（自动学习坐标）
-                    if cached_home_checkin_button:
-                        log(f"  [签到 {attempt + 1}] 使用缓存的首页入口按钮位置: {cached_home_checkin_button}")
-                        success, used_pos = await self._smart_clicker.click_button(
-                            device_id=device_id,
-                            button_name="home_checkin_button",
-                            valid_range=self.CHECKIN_BUTTON_VALID_RANGE,
-                            default_position=cached_home_checkin_button,
-                            cached_position=cached_home_checkin_button,
-                            log_callback=lambda msg: log(msg)
-                        )
-                        if not success:
-                            log(f"  [签到 {attempt + 1}] ⚠️ 智能点击器失败，使用直接点击")
-                            await self.adb.tap(device_id, cached_home_checkin_button[0], cached_home_checkin_button[1])
+                    # 每次都重新检测按钮位置（不使用缓存）
+                    log(f"  [签到 {attempt + 1}] 检测首页入口按钮位置...")
+                    button_pos = await self._find_checkin_button(device_id)
+                    if button_pos:
+                        log(f"  [签到 {attempt + 1}] 检测到首页入口按钮: {button_pos}")
                     else:
-                        # 第一次需要查找首页入口按钮位置
-                        button_pos = await self._find_checkin_button(device_id)
-                        if button_pos:
-                            cached_home_checkin_button = button_pos
-                            log(f"  [签到 {attempt + 1}] 检测到首页入口按钮: {button_pos}")
-                        else:
-                            cached_home_checkin_button = self.CHECKIN_BUTTON
-                            log(f"  [签到 {attempt + 1}] 使用默认首页入口按钮坐标: {cached_home_checkin_button}")
-                        success, used_pos = await self._smart_clicker.click_button(
-                            device_id=device_id,
-                            button_name="home_checkin_button",
-                            valid_range=self.CHECKIN_BUTTON_VALID_RANGE,
-                            default_position=cached_home_checkin_button,
-                            cached_position=cached_home_checkin_button,
-                            log_callback=lambda msg: log(msg)
-                        )
-                        if not success:
-                            log(f"  [签到 {attempt + 1}] ⚠️ 智能点击器失败，使用直接点击")
-                            await self.adb.tap(device_id, cached_home_checkin_button[0], cached_home_checkin_button[1])
+                        button_pos = self.CHECKIN_BUTTON
+                        log(f"  [签到 {attempt + 1}] 使用默认首页入口按钮坐标: {button_pos}")
                     
-                    # 使用SmartWaiter等待页面变化
-                    log(f"  [签到 {attempt + 1}] 等待签到页面加载...")
-                    from .performance.smart_waiter import wait_for_page
-                    page_result = await wait_for_page(
+                    # 使用智能按钮点击器（自动学习坐标）
+                    success, used_pos = await self._smart_clicker.click_button(
+                        device_id=device_id,
+                        button_name="home_checkin_button",
+                        valid_range=self.CHECKIN_BUTTON_VALID_RANGE,
+                        default_position=button_pos,
+                        cached_position=button_pos,
+                        log_callback=lambda msg: log(msg)
+                    )
+                    if not success:
+                        log(f"  [签到 {attempt + 1}] ⚠️ 智能点击器失败，使用直接点击")
+                        await self.adb.tap(device_id, button_pos[0], button_pos[1])
+                    
+                    # 使用SmartWaiter混合检测等待页面变化（快速感知）
+                    log(f"  [签到 {attempt + 1}] 等待页面变化...")
+                    from .performance.smart_waiter import SmartWaiter
+                    waiter = SmartWaiter()
+                    page_result = await waiter.wait_for_page_change(
                         device_id,
                         self.detector,
-                        [PageState.CHECKIN, PageState.CHECKIN_POPUP, PageState.WARMTIP],
-                        log_callback=None
+                        [PageState.CHECKIN, PageState.CHECKIN_POPUP, PageState.WARMTIP,
+                         PageState.ARTICLE, PageState.SEARCH, PageState.CATEGORY],  # 添加可能误点的页面
+                        max_wait=5.0,
+                        poll_interval=0.2,  # 高频轮询
+                        log_callback=lambda msg: log(f"  [SmartWaiter] {msg}"),
+                        stability_check=False,
+                        adb_bridge=self.adb,
+                        detection_mode="hybrid"  # 混合检测：感知哈希+深度学习
                     )
                     
+                    # 处理不同的页面状态
                     page_verified = False
                     if page_result and page_result.state == PageState.CHECKIN:
                         log(f"  [签到 {attempt + 1}] ✓ 已进入签到页面")
                         page_verified = True
+                    elif page_result and page_result.state in [PageState.ARTICLE, PageState.SEARCH, PageState.CATEGORY]:
+                        # 误点到其他页面，快速返回首页重试
+                        log(f"  [签到 {attempt + 1}] ⚠️ 误点到{page_result.state.value}，返回首页重试...")
+                        
+                        # 返回首页
+                        if page_result.state == PageState.CATEGORY:
+                            # 分类页：点击首页按钮
+                            await self.adb.tap(device_id, 90, 920)
+                        else:
+                            # 其他页面：按返回键
+                            await self.adb.press_back(device_id)
+                        
+                        await asyncio.sleep(0.5)
+                        
+                        # 等待返回首页（先快速尝试，失败后降级重试）
+                        # 第一次尝试：快速检测（3秒）
+                        home_result = await waiter.wait_for_page_change(
+                            device_id,
+                            self.detector,
+                            [PageState.HOME],
+                            max_wait=3.0,  # 快速尝试：3秒
+                            poll_interval=0.2,
+                            log_callback=None,
+                            stability_check=False,
+                            adb_bridge=self.adb,
+                            detection_mode="hybrid"
+                        )
+                        
+                        # 如果快速检测失败，降级重试（更长超时）
+                        if not home_result or home_result.state != PageState.HOME:
+                            log(f"  [签到 {attempt + 1}] 快速检测超时，降级重试...")
+                            await asyncio.sleep(1.0)
+                            
+                            # 第二次尝试：使用全局wait_for_page（15秒超时）
+                            home_result = await wait_for_page(
+                                device_id,
+                                self.detector,
+                                [PageState.HOME],
+                                log_callback=None
+                            )
+                        
+                        if home_result and home_result.state == PageState.HOME:
+                            log(f"  [签到 {attempt + 1}] ✓ 已返回首页，重新点击签到按钮...")
+                            # 重新检测并点击签到按钮
+                            button_pos = await self._find_checkin_button(device_id)
+                            if not button_pos:
+                                button_pos = self.CHECKIN_BUTTON
+                            
+                            await self.adb.tap(device_id, button_pos[0], button_pos[1])
+                            await asyncio.sleep(0.3)
+                            
+                            # 等待进入签到页（检测到立即返回，15秒只是超时保护）
+                            page_result = await wait_for_page(
+                                device_id,
+                                self.detector,
+                                [PageState.CHECKIN, PageState.CHECKIN_POPUP, PageState.WARMTIP],
+                                log_callback=None
+                            )
+                            
+                            if page_result and page_result.state == PageState.CHECKIN:
+                                log(f"  [签到 {attempt + 1}] ✓ 重试成功，已进入签到页面")
+                                page_verified = True
+                            else:
+                                log(f"  [签到 {attempt + 1}] ❌ 重试失败，终止签到")
+                                result['message'] = "快速签到模式：重试后仍无法进入签到页面"
+                                result['error_type'] = ErrorType.CHECKIN_FAILED
+                                result['error_message'] = result['message']
+                                break
+                        else:
+                            log(f"  [签到 {attempt + 1}] ❌ 无法返回首页，终止签到")
+                            result['message'] = "快速签到模式：无法返回首页"
+                            result['error_type'] = ErrorType.CHECKIN_FAILED
+                            result['error_message'] = result['message']
+                            break
                     else:
-                        log(f"  [签到 {attempt + 1}] ❌ 未能进入签到页面，终止签到")
-                        result['message'] = "快速签到模式：无法重新进入签到页面（超时）"
+                        log(f"  [签到 {attempt + 1}] ❌ 未能进入签到页面，当前页面: {page_result.state.value if page_result else 'UNKNOWN'}")
+                        result['message'] = f"快速签到模式：无法重新进入签到页面（当前: {page_result.state.value if page_result else 'UNKNOWN'}）"
                         result['error_type'] = ErrorType.CHECKIN_FAILED
                         result['error_message'] = result['message']
+                        break
+                    
+                    # 如果成功进入签到页面，继续处理
+                    if not page_verified:
                         break
                     
                     # 更新已处理次数
@@ -1680,6 +1887,15 @@ class DailyCheckin:
             if checkin_balance_after is not None and balance is not None:
                 # 计算总奖励
                 total_reward = checkin_balance_after - balance
+                
+                # 容错处理：签到奖励不应该为负值
+                # 如果出现负值，说明账号在签到期间被转账了，签到奖励设置为0
+                if total_reward < 0:
+                    log(f"  [签到] ⚠️ 检测到异常：签到后余额({checkin_balance_after:.2f})小于签到前余额({balance:.2f})")
+                    log(f"  [签到] ⚠️ 原因：账号在签到期间被转账")
+                    log(f"  [签到] ✓ 容错处理：将签到奖励设置为0")
+                    total_reward = 0.0
+                
                 result['reward_amount'] = total_reward
                 result['checkin_count'] = checkin_count
                 result['checkin_balance_after'] = checkin_balance_after  # 返回签到后余额
@@ -1691,7 +1907,9 @@ class DailyCheckin:
                     result['points'] = final_profile.get('points')
                     result['vouchers'] = final_profile.get('vouchers')
                     result['coupons'] = final_profile.get('coupons')
-                    result['balance_before'] = balance  # 签到前余额
+                    # 只在 balance 不为 None 时才更新 balance_before（避免覆盖已有的正确值）
+                    if balance is not None:
+                        result['balance_before'] = balance  # 签到前余额
                 
                 log(f"  [签到] 签到前余额: {round(balance, 3)} 元")
                 log(f"  [签到] 签到后余额: {round(checkin_balance_after, 3)} 元")
@@ -1710,7 +1928,9 @@ class DailyCheckin:
                     result['points'] = final_profile.get('points')
                     result['vouchers'] = final_profile.get('vouchers')
                     result['coupons'] = final_profile.get('coupons')
-                    result['balance_before'] = balance  # 签到前余额
+                    # 只在 balance 不为 None 时才更新 balance_before（避免覆盖已有的正确值）
+                    if balance is not None:
+                        result['balance_before'] = balance  # 签到前余额
             
             # 6. 设置最终结果
             # 统一处理：签到流程执行完毕即为成功

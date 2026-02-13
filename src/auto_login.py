@@ -71,7 +71,6 @@ class AutoLogin:
         
         # 从ModelManager获取共享的检测器实例（不再自己创建）
         from .model_manager import ModelManager
-        from .page_state_guard import PageStateGuard
         from .page_detector import PageState
         
         model_manager = ModelManager.get_instance()
@@ -83,8 +82,6 @@ class AutoLogin:
             self.detector = model_manager.get_page_detector_integrated()
         
         print("[AutoLogin] 使用整合检测器（YOLO + 页面分类器）")
-        
-        self.guard = PageStateGuard(self.adb, self.detector)
         
         # 根据模拟器类型设置坐标
         self.set_emulator_type(emulator_type)
