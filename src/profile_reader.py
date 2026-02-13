@@ -1452,34 +1452,26 @@ class ProfileReader:
         best_result = {}
         collected_fields = []
         
-        # ===== 优化：优先从缓存获取昵称和用户ID =====
-        cache_has_identity = False  # 缓存是否有完整的身份信息（昵称+用户ID）
+        # ===== 优化：从缓存获取昵称和用户ID作为降级方案 =====
+        # 注意：不再跳过身份识别，而是始终尝试识别，以检测用户改名
+        cached_nickname = None
+        cached_user_id = None
         if phone:
             cached_nickname = self._cache.get_nickname(phone)
             cached_user_id = self._cache.get_user_id(phone)
             
             if cached_nickname and cached_user_id:
-                # 缓存有完整的身份信息，可以跳过身份识别
-                cache_has_identity = True
-                self._silent_log.log(f"[缓存] 找到完整身份信息")
-                best_result['nickname'] = cached_nickname
-                best_result['user_id'] = cached_user_id
-                collected_fields.extend(['nickname', 'user_id'])
+                self._silent_log.log(f"[缓存] 找到缓存信息（作为降级方案）")
                 self._silent_log.log(f"[缓存] - 昵称: {cached_nickname}")
                 self._silent_log.log(f"[缓存] - 用户ID: {cached_user_id}")
             elif cached_nickname or cached_user_id:
-                # 缓存只有部分信息
                 self._silent_log.log(f"[缓存] 找到部分缓存信息")
                 if cached_nickname:
-                    best_result['nickname'] = cached_nickname
-                    collected_fields.append('nickname')
                     self._silent_log.log(f"[缓存] - 昵称: {cached_nickname}")
                 if cached_user_id:
-                    best_result['user_id'] = cached_user_id
-                    collected_fields.append('user_id')
                     self._silent_log.log(f"[缓存] - 用户ID: {cached_user_id}")
             else:
-                self._silent_log.log(f"[缓存] 未找到缓存，需要完整OCR识别")
+                self._silent_log.log(f"[缓存] 未找到缓存")
         
         # 手机号可以直接从账号中提取
         if phone:
@@ -1488,16 +1480,10 @@ class ProfileReader:
         
         for attempt in range(max_retries):
             try:
-                # 如果缓存已有完整身份信息，只需要获取动态数据（余额、积分、抵扣券）
-                if cache_has_identity:
-                    print(f"[ProfileReader] 🚀 使用缓存优化：只获取动态数据")
-                    self._silent_log.log(f"[尝试 {attempt + 1}/{max_retries}] 获取动态数据（余额、积分、抵扣券）...")
-                    # 只获取动态数据，跳过身份识别
-                    profile = await self._get_dynamic_data_only(device_id)
-                else:
-                    print(f"[ProfileReader] 📝 缓存不完整：执行完整识别")
-                    self._silent_log.log(f"[尝试 {attempt + 1}/{max_retries}] 开始完整OCR识别...")
-                    profile = await self.get_full_profile(device_id, account=account, gui_logger=gui_logger, step_number=step_number)
+                # 始终执行完整识别，以检测用户改名
+                print(f"[ProfileReader] 📝 执行完整识别（检测改名）")
+                self._silent_log.log(f"[尝试 {attempt + 1}/{max_retries}] 开始完整OCR识别...")
+                profile = await self.get_full_profile(device_id, account=account, gui_logger=gui_logger, step_number=step_number)
                 
                 # 静默记录OCR识别到的原始数据
                 self._silent_log.log(f"[调试] OCR识别结果:")
@@ -1615,7 +1601,26 @@ class ProfileReader:
         
         if missing_fields:
             print(f"\n  ! 经过 {max_retries} 次尝试后，仍有字段缺失")
-            print(f"  开始尝试备选方案...")
+            
+            # 优先使用缓存作为降级方案
+            if phone and (best_result.get('nickname') is None or best_result.get('user_id') is None):
+                print(f"  [缓存降级] 尝试使用缓存数据...")
+                
+                if best_result.get('nickname') is None and cached_nickname:
+                    best_result['nickname'] = cached_nickname
+                    collected_fields.append('nickname')
+                    print(f"  [缓存降级] OK 使用缓存昵称: {cached_nickname}")
+                
+                if best_result.get('user_id') is None and cached_user_id:
+                    best_result['user_id'] = cached_user_id
+                    collected_fields.append('user_id')
+                    print(f"  [缓存降级] OK 使用缓存用户ID: {cached_user_id}")
+            
+            # 重新检查缺失字段
+            missing_fields = [f for f in all_fields if best_result.get(f) is None]
+            
+            if missing_fields:
+                print(f"  开始尝试其他备选方案...")
             
             fallback_success = []
             fallback_failed = []

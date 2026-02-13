@@ -55,10 +55,6 @@ class Navigator:
         ocr_pool = model_manager.get_ocr_thread_pool()
         self._smart_clicker = SmartButtonClicker(adb, self.detector, ocr_pool)
         
-        # 初始化页面状态守卫
-        from .page_state_guard import PageStateGuard
-        self.guard = PageStateGuard(adb, self.detector)
-        
         # 初始化页面检测缓存管理器
         from .page_detector_cache import PageDetectorCache
         self._page_cache = PageDetectorCache(
@@ -371,12 +367,11 @@ class Navigator:
                 self.detector.clear_cache()
                 continue
             
-            # 使用守卫处理异常页面
-            if current_state in [PageState.POPUP, PageState.UNKNOWN]:
-                handled = await self.guard._handle_unexpected_page(device_id, current_state, PageState.HOME, "导航到首页", retry_count=attempt)
-                if handled:
-                    await asyncio.sleep(1)
-                    continue
+            # 处理弹窗
+            if current_state == PageState.POPUP:
+                await self.detector.close_popup(device_id)
+                await asyncio.sleep(1)
+                continue
             
             # 在其他已知页面,点击首页标签
             # 优先使用YOLO检测"首页"按钮位置（更准确）
@@ -1217,24 +1212,27 @@ class Navigator:
         for attempt in range(max_attempts):
             print(f"[导航] 尝试 {attempt+1}/{max_attempts}")
             
-            # 1. 使用守卫检测当前页面
-            current_state = await self.guard.get_current_page_state(device_id, f"导航到抽奖页面 尝试{attempt+1}")
+            # 1. 检测当前页面
+            result = await self.detector.detect_page(device_id, use_ocr=True)
+            if not result or not result.state:
+                print(f"[导航] 无法检测页面状态")
+                await asyncio.sleep(2)
+                continue
+            
+            current_state = result.state
             print(f"[导航] 当前页面: {current_state.value}")
             
             # 2. 如果已在抽奖页面,返回成功
-            # 注意: 需要根据实际的页面状态枚举来判断
-            result = await self.detector.detect_page(device_id, use_ocr=True)
             if "抽奖页面" in result.details:
                 print(f"[导航] ✓ 已在抽奖页面")
                 return True
             
-            # 3. 使用守卫处理异常页面
+            # 3. 处理弹窗
             if current_state == PageState.POPUP:
-                print(f"[导航] 检测到弹窗,尝试处理...")
-                handled = await self.guard._handle_unexpected_page(device_id, current_state, PageState.UNKNOWN, "导航到抽奖页面", retry_count=attempt)
-                if handled:
-                    await asyncio.sleep(2)
-                    continue
+                print(f"[导航] 检测到弹窗,尝试关闭...")
+                await self.detector.close_popup(device_id)
+                await asyncio.sleep(2)
+                continue
             
             # 4. 如果不在首页,先返回首页
             if current_state != PageState.HOME:
@@ -1254,18 +1252,8 @@ class Navigator:
             
             clicked = False
             for keyword in lottery_keywords:
-                # 使用守卫执行点击操作
-                async def click_lottery_entry():
-                    return await ui_automation.click_by_text(device_id, keyword, timeout=5)
-                
                 try:
-                    result = await self.guard.execute_with_guard(
-                        device_id,
-                        click_lottery_entry,
-                        PageState.HOME,
-                        f"点击抽奖入口: {keyword}"
-                    )
-                    
+                    result = await ui_automation.click_by_text(device_id, keyword, timeout=5)
                     if result:
                         print(f"[导航] ✓ 点击了: {keyword}")
                         clicked = True

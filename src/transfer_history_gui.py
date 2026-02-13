@@ -78,11 +78,23 @@ class TransferHistoryGUI:
         recipient_entry = ttk.Entry(filter_frame, textvariable=self.recipient_var, width=15)
         recipient_entry.grid(row=0, column=3, sticky=tk.W, padx=5)
         
-        # 管理员筛选
+        # 管理员筛选（改为下拉选择框）
         ttk.Label(filter_frame, text="管理员:").grid(row=0, column=4, sticky=tk.W, padx=5)
-        self.owner_var = tk.StringVar()
-        owner_entry = ttk.Entry(filter_frame, textvariable=self.owner_var, width=15)
-        owner_entry.grid(row=0, column=5, sticky=tk.W, padx=5)
+        self.owner_var = tk.StringVar(value="全部")
+        owner_combo = ttk.Combobox(filter_frame, textvariable=self.owner_var, width=13, state='readonly')
+        
+        # 获取管理员列表
+        owner_list = ["全部"]
+        try:
+            from .user_manager import UserManager
+            user_manager = UserManager()
+            users = user_manager.get_all_users()
+            owner_list.extend([user.user_name for user in users if user.enabled])
+        except Exception as e:
+            print(f"获取管理员列表失败: {e}")
+        
+        owner_combo['values'] = owner_list
+        owner_combo.grid(row=0, column=5, sticky=tk.W, padx=5)
         
         # 日期范围筛选
         ttk.Label(filter_frame, text="日期范围:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
@@ -175,7 +187,10 @@ class TransferHistoryGUI:
         # 获取筛选条件
         sender = self.sender_var.get().strip() or None
         recipient = self.recipient_var.get().strip() or None
-        owner = self.owner_var.get().strip() or None
+        owner = self.owner_var.get().strip()
+        # 如果选择"全部"，则不筛选管理员
+        if owner == "全部":
+            owner = None
         days = self.days_var.get()
         
         # 计算日期范围
@@ -264,7 +279,7 @@ class TransferHistoryGUI:
         """重置筛选"""
         self.sender_var.set('')
         self.recipient_var.set('')
-        self.owner_var.set('')
+        self.owner_var.set('全部')
         self.days_var.set(30)
         self._load_data()
     

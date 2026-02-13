@@ -2672,7 +2672,7 @@ class AutomationGUI:
         
         if auto_launch:
             self.root.after(0, lambda w=max_workers: self._log(f"准备启动 {w} 个实例"))
-        self.root.after(0, lambda t=total, u=unchecked_count: 
+        self.root.after(0, lambda t=unchecked_count, u=unchecked_count: 
                        self._update_progress(0, t, f"正在检测模拟器实例... (待处理: {u})"))
         
         # 检测正在运行的模拟器实例
@@ -2965,11 +2965,11 @@ class AutomationGUI:
                                            self._update_stats(total, s, f, tcr, tb, tp, tv, tc))
                         
                         # 更新进度（显示实际处理的账号进度）
-                        # 进度 = 实际处理数 / 总账号数
+                        # 进度 = 实际处理数 / 待处理账号数
                         # 成功 = 勾选跳过数 + 执行成功数
                         # 失败 = 执行失败数
-                        self.root.after(0, lambda p=current_processed, t=total, s=current_success, f=current_failed: 
-                                       self._update_progress(p, total, f"进度: {p}/{t} | 成功: {s} | 失败: {f}"))
+                        self.root.after(0, lambda p=current_processed, t=unchecked_count, s=current_success, f=current_failed: 
+                                       self._update_progress(p, t, f"进度: {p}/{t} | 成功: {s} | 失败: {f}"))
                 
                 except Exception as e:
                     # 捕获所有异常,确保实例不会因为单个账号的异常而停止
@@ -3021,11 +3021,11 @@ class AutomationGUI:
                                    self._update_stats(total, s, f, tcr, tb, tp, tv, tc))
                     
                     # 更新进度（显示实际处理的账号进度）
-                    # 进度 = 实际处理数 / 总账号数
+                    # 进度 = 实际处理数 / 待处理账号数
                     # 成功 = 勾选跳过数 + 执行成功数
                     # 失败 = 执行失败数
-                    self.root.after(0, lambda p=current_processed, t=total, s=current_success, f=current_failed: 
-                                   self._update_progress(p, total, f"进度: {p}/{t} | 成功: {s} | 失败: {f}"))
+                    self.root.after(0, lambda p=current_processed, t=unchecked_count, s=current_success, f=current_failed: 
+                                   self._update_progress(p, t, f"进度: {p}/{t} | 成功: {s} | 失败: {f}"))
                     
                     # 继续处理下一个账号,不要停止实例
                     instance_log_callback(f"继续处理下一个账号...")
@@ -4897,7 +4897,7 @@ class HistoryResultsWindow:
         # 创建窗口
         self.window = tk.Toplevel(parent)
         self.window.title("历史结果查看")
-        self.window.geometry("1200x700")
+        self.window.geometry("1200x850")
         self.window.resizable(True, True)
         
         # 先隐藏窗口，避免白屏
@@ -5093,6 +5093,35 @@ class HistoryResultsWindow:
         
         # 提示信息
         ttk.Label(date_control_frame, text="（提示：在日期框上滚动鼠标滚轮可切换日期）", 
+                 foreground="gray", font=("TkDefaultFont", 8)).pack(side=tk.LEFT, padx=(10, 0))
+        
+        # === 管理员筛选区域 ===
+        owner_frame = ttk.Frame(date_frame)
+        owner_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        ttk.Label(owner_frame, text="管理员：").pack(side=tk.LEFT, padx=(0, 5))
+        
+        # 管理员下拉选择框
+        self.owner_var = tk.StringVar(value="全部")
+        self.owner_combo = ttk.Combobox(owner_frame, textvariable=self.owner_var, width=15, state='readonly')
+        
+        # 获取管理员列表
+        owner_list = ["全部"]
+        try:
+            from .user_manager import UserManager
+            user_manager = UserManager()
+            users = user_manager.get_all_users()
+            owner_list.extend([user.user_name for user in users if user.enabled])
+        except Exception as e:
+            self.log(f"获取管理员列表失败: {e}")
+        
+        self.owner_combo['values'] = owner_list
+        self.owner_combo.pack(side=tk.LEFT, padx=(0, 5))
+        
+        # 绑定选择事件
+        self.owner_combo.bind('<<ComboboxSelected>>', lambda e: self._filter_by_owner())
+        
+        ttk.Label(owner_frame, text="（选择管理员可筛选对应记录）", 
                  foreground="gray", font=("TkDefaultFont", 8)).pack(side=tk.LEFT, padx=(10, 0))
         
         # === 顶部信息区域 ===
@@ -5625,48 +5654,71 @@ class HistoryResultsWindow:
         self.log(f"✓ 已复制到剪贴板: {text}")
     
     def _export_excel(self):
-        """导出Excel - 支持按时间范围导出，每天记录清晰区分"""
+        """导出Excel - 支持按时间范围和管理员导出"""
         try:
             from tkinter import filedialog, messagebox
             from datetime import datetime, timedelta
             
             # 创建导出选项对话框
             export_dialog = tk.Toplevel(self.window)
-            export_dialog.title("导出Excel - 选择时间范围")
-            export_dialog.geometry("400x250")
+            export_dialog.title("导出Excel - 选择导出选项")
+            export_dialog.geometry("400x350")
             export_dialog.transient(self.window)
             export_dialog.grab_set()
             
             # 居中显示
             export_dialog.update_idletasks()
             x = (export_dialog.winfo_screenwidth() // 2) - (400 // 2)
-            y = (export_dialog.winfo_screenheight() // 2) - (250 // 2)
-            export_dialog.geometry(f'400x250+{x}+{y}')
+            y = (export_dialog.winfo_screenheight() // 2) - (350 // 2)
+            export_dialog.geometry(f'400x350+{x}+{y}')
             
             main_frame = ttk.Frame(export_dialog, padding="20")
             main_frame.pack(fill=tk.BOTH, expand=True)
             
             # 标题
-            ttk.Label(main_frame, text="选择导出时间范围", font=("TkDefaultFont", 12, "bold")).pack(pady=(0, 15))
+            ttk.Label(main_frame, text="选择导出选项", font=("TkDefaultFont", 12, "bold")).pack(pady=(0, 15))
             
             # 时间范围选项
+            ttk.Label(main_frame, text="时间范围:", font=("TkDefaultFont", 10, "bold")).pack(anchor=tk.W, pady=(0, 5))
             range_var = tk.StringVar(value="today")
             
-            ttk.Radiobutton(main_frame, text="今天", variable=range_var, value="today").pack(anchor=tk.W, pady=5)
-            ttk.Radiobutton(main_frame, text="最近7天", variable=range_var, value="week").pack(anchor=tk.W, pady=5)
-            ttk.Radiobutton(main_frame, text="最近半月（15天）", variable=range_var, value="half_month").pack(anchor=tk.W, pady=5)
-            ttk.Radiobutton(main_frame, text="最近一月（30天）", variable=range_var, value="month").pack(anchor=tk.W, pady=5)
-            ttk.Radiobutton(main_frame, text="全部记录", variable=range_var, value="all").pack(anchor=tk.W, pady=5)
+            ttk.Radiobutton(main_frame, text="今天", variable=range_var, value="today").pack(anchor=tk.W, pady=2)
+            ttk.Radiobutton(main_frame, text="最近7天", variable=range_var, value="week").pack(anchor=tk.W, pady=2)
+            ttk.Radiobutton(main_frame, text="最近半月（15天）", variable=range_var, value="half_month").pack(anchor=tk.W, pady=2)
+            ttk.Radiobutton(main_frame, text="最近一月（30天）", variable=range_var, value="month").pack(anchor=tk.W, pady=2)
+            ttk.Radiobutton(main_frame, text="全部记录", variable=range_var, value="all").pack(anchor=tk.W, pady=2)
+            
+            # 管理员选择
+            ttk.Label(main_frame, text="管理员:", font=("TkDefaultFont", 10, "bold")).pack(anchor=tk.W, pady=(15, 5))
+            owner_frame = ttk.Frame(main_frame)
+            owner_frame.pack(fill=tk.X, pady=(0, 5))
+            
+            owner_var = tk.StringVar(value="全部")
+            owner_combo = ttk.Combobox(owner_frame, textvariable=owner_var, width=25, state='readonly')
+            
+            # 获取管理员列表
+            owner_list = ["全部"]
+            try:
+                from .user_manager import UserManager
+                user_manager = UserManager()
+                users = user_manager.get_all_users()
+                owner_list.extend([user.user_name for user in users if user.enabled])
+            except Exception as e:
+                print(f"获取管理员列表失败: {e}")
+            
+            owner_combo['values'] = owner_list
+            owner_combo.pack(side=tk.LEFT)
             
             # 按钮
             button_frame = ttk.Frame(main_frame)
             button_frame.pack(pady=(15, 0))
             
-            result = {'confirmed': False, 'range': None}
+            result = {'confirmed': False, 'range': None, 'owner': None}
             
             def on_confirm():
                 result['confirmed'] = True
                 result['range'] = range_var.get()
+                result['owner'] = owner_var.get()
                 export_dialog.destroy()
             
             def on_cancel():
@@ -5707,8 +5759,16 @@ class HistoryResultsWindow:
                 end_date = None
                 range_name = "全部"
             
+            # 获取选择的管理员
+            selected_owner = result['owner']
+            owner_filter = None if selected_owner == "全部" else selected_owner
+            
             # 选择保存路径
-            default_name = f"历史结果_{range_name}_{now.year}年{now.month}月{now.day}日.xlsx"
+            if owner_filter:
+                default_name = f"历史结果_{range_name}_{selected_owner}_{now.year}年{now.month}月{now.day}日.xlsx"
+            else:
+                default_name = f"历史结果_{range_name}_{now.year}年{now.month}月{now.day}日.xlsx"
+            
             filepath = filedialog.asksaveasfilename(
                 title="导出Excel",
                 defaultextension=".xlsx",
@@ -5720,13 +5780,21 @@ class HistoryResultsWindow:
                 return
             
             # 从数据库加载指定范围的数据
-            self.log(f"正在导出{range_name}的数据...")
+            if owner_filter:
+                self.log(f"正在导出{range_name}的数据（管理员：{selected_owner}）...")
+            else:
+                self.log(f"正在导出{range_name}的数据（全部管理员）...")
+            
             db = LocalDatabase()
             
             if start_date and end_date:
                 all_records = db.get_history_records(start_date=start_date, end_date=end_date, limit=100000)
             else:
                 all_records = db.get_history_records(limit=100000)
+            
+            # 按管理员筛选
+            if owner_filter:
+                all_records = [r for r in all_records if r.get('owner') == owner_filter]
             
             if not all_records:
                 messagebox.showinfo("提示", "没有数据可导出")
@@ -5788,7 +5856,8 @@ class HistoryResultsWindow:
             processed_records.sort(key=lambda x: x['日期'], reverse=True)
             
             # 导出到Excel（按日期分组）
-            self._export_to_excel_with_date_groups(filepath, processed_records, range_name)
+            export_title = f"{range_name}_{selected_owner}" if owner_filter else range_name
+            self._export_to_excel_with_date_groups(filepath, processed_records, export_title)
             
             messagebox.showinfo("成功", f"已成功导出 {len(processed_records)} 条记录到:\n{filepath}")
             self.log(f"✓ 成功导出 {len(processed_records)} 条记录")
@@ -6141,6 +6210,50 @@ class HistoryResultsWindow:
             self.log(f"✓ 已显示全部账户（共 {len(self.all_tree_items)} 个）")
         else:
             self.log("✓ 已显示全部账户")
+    
+    def _filter_by_owner(self):
+        """按管理员筛选记录"""
+        selected_owner = self.owner_var.get()
+        
+        # 如果选择"全部"，显示所有记录
+        if selected_owner == "全部":
+            self._show_all()
+            return
+        
+        # 保存所有项目ID（如果还没保存）
+        if not self.all_tree_items:
+            self.all_tree_items = list(self.tree.get_children())
+        
+        # 先detach所有项目
+        for item in self.all_tree_items:
+            try:
+                self.tree.detach(item)
+            except:
+                pass
+        
+        # 筛选匹配的项目
+        matched_items = []
+        for item in self.all_tree_items:
+            try:
+                values = self.tree.item(item, 'values')
+                if values and len(values) >= 13:  # 确保有足够的列
+                    owner = str(values[12])  # 管理员在第13列（索引12）
+                    if owner == selected_owner:
+                        matched_items.append(item)
+            except Exception as e:
+                self.log(f"筛选项目时出错: {e}")
+        
+        # 重新attach匹配的项目
+        for item in matched_items:
+            try:
+                self.tree.reattach(item, '', 'end')
+            except:
+                pass
+        
+        if matched_items:
+            self.log(f"✓ 已筛选管理员 '{selected_owner}' 的记录（共 {len(matched_items)} 条）")
+        else:
+            self.log(f"✗ 未找到管理员 '{selected_owner}' 的记录")
     
     def _search_history_table(self):
         """搜索历史记录表格（根据手机号或ID）"""
