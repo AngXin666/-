@@ -7,94 +7,6 @@
         "width": 375,
         "height": 22,
         "confidence": 0.9,
-        "timestamp": "2026-02-12T00:11:34.836410"
-      },
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
-        "timestamp": "2026-02-12T00:12:07.880665"
-      },
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
-        "timestamp": "2026-02-12T00:12:12.193674"
-      },
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
-        "timestamp": "2026-02-12T00:12:18.713077"
-      },
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
-        "timestamp": "2026-02-12T00:12:47.835094"
-      },
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
-        "timestamp": "2026-02-12T00:12:53.872571"
-      },
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
-        "timestamp": "2026-02-12T00:13:19.870989"
-      },
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
-        "timestamp": "2026-02-12T00:13:29.018228"
-      },
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
-        "timestamp": "2026-02-12T00:13:34.770391"
-      },
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
-        "timestamp": "2026-02-12T00:13:54.165196"
-      },
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
-        "timestamp": "2026-02-12T00:14:00.518909"
-      },
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
         "timestamp": "2026-02-12T00:14:12.443210"
       },
       {
@@ -4000,101 +3912,101 @@
         "height": 22,
         "confidence": 0.9,
         "timestamp": "2026-02-13T22:23:57.542094"
+      },
+      {
+        "x": 84,
+        "y": 258,
+        "width": 375,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-13T22:24:45.286449"
+      },
+      {
+        "x": 84,
+        "y": 258,
+        "width": 375,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-13T22:24:51.126428"
+      },
+      {
+        "x": 84,
+        "y": 258,
+        "width": 375,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-13T22:24:53.702575"
+      },
+      {
+        "x": 84,
+        "y": 258,
+        "width": 375,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-13T22:25:39.237188"
+      },
+      {
+        "x": 84,
+        "y": 258,
+        "width": 375,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-13T22:25:44.297512"
+      },
+      {
+        "x": 84,
+        "y": 258,
+        "width": 375,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-13T22:25:47.750743"
+      },
+      {
+        "x": 84,
+        "y": 258,
+        "width": 375,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-13T22:26:31.169223"
+      },
+      {
+        "x": 84,
+        "y": 258,
+        "width": 375,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-13T22:26:35.234032"
+      },
+      {
+        "x": 84,
+        "y": 258,
+        "width": 375,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-13T22:26:38.062490"
+      },
+      {
+        "x": 84,
+        "y": 258,
+        "width": 375,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-13T22:27:15.984611"
+      },
+      {
+        "x": 84,
+        "y": 258,
+        "width": 375,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-13T22:27:22.036813"
       }
     ],
-    "total_count": 1716,
-    "last_updated": "2026-02-13T22:23:57.542094"
+    "total_count": 1727,
+    "last_updated": "2026-02-13T22:27:22.036813"
   },
   "checkin_remaining_times": {
     "regions": [
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
-        "timestamp": "2026-02-12T00:11:30.390564"
-      },
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
-        "timestamp": "2026-02-12T00:11:34.942503"
-      },
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
-        "timestamp": "2026-02-12T00:12:07.911812"
-      },
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
-        "timestamp": "2026-02-12T00:12:12.240396"
-      },
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
-        "timestamp": "2026-02-12T00:12:18.827028"
-      },
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
-        "timestamp": "2026-02-12T00:12:47.887425"
-      },
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
-        "timestamp": "2026-02-12T00:12:53.897878"
-      },
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
-        "timestamp": "2026-02-12T00:13:19.889748"
-      },
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
-        "timestamp": "2026-02-12T00:13:29.052294"
-      },
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
-        "timestamp": "2026-02-12T00:13:34.799590"
-      },
-      {
-        "x": 84,
-        "y": 258,
-        "width": 375,
-        "height": 22,
-        "confidence": 0.9,
-        "timestamp": "2026-02-12T00:13:54.190504"
-      },
       {
         "x": 84,
         "y": 258,
@@ -8006,9 +7918,97 @@
         "height": 22,
         "confidence": 0.9,
         "timestamp": "2026-02-13T22:23:57.574214"
+      },
+      {
+        "x": 84,
+        "y": 258,
+        "width": 375,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-13T22:24:45.315649"
+      },
+      {
+        "x": 84,
+        "y": 258,
+        "width": 375,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-13T22:24:51.162931"
+      },
+      {
+        "x": 84,
+        "y": 258,
+        "width": 375,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-13T22:24:53.728856"
+      },
+      {
+        "x": 84,
+        "y": 258,
+        "width": 375,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-13T22:25:39.267493"
+      },
+      {
+        "x": 84,
+        "y": 258,
+        "width": 375,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-13T22:25:44.327684"
+      },
+      {
+        "x": 84,
+        "y": 258,
+        "width": 375,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-13T22:25:47.777025"
+      },
+      {
+        "x": 84,
+        "y": 258,
+        "width": 375,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-13T22:26:31.193556"
+      },
+      {
+        "x": 84,
+        "y": 258,
+        "width": 375,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-13T22:26:35.263232"
+      },
+      {
+        "x": 84,
+        "y": 258,
+        "width": 375,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-13T22:26:38.086146"
+      },
+      {
+        "x": 84,
+        "y": 258,
+        "width": 375,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-13T22:27:16.026464"
+      },
+      {
+        "x": 84,
+        "y": 258,
+        "width": 375,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-13T22:27:22.056280"
       }
     ],
-    "total_count": 1712,
-    "last_updated": "2026-02-13T22:23:57.574214"
+    "total_count": 1723,
+    "last_updated": "2026-02-13T22:27:22.056280"
   }
 }
