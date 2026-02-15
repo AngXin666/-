@@ -66,20 +66,52 @@ class TransferHistoryGUI:
         filter_frame = ttk.LabelFrame(parent, text="筛选条件", padding="5")
         filter_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
         
+        # === 第一行：日期选择 ===
+        row = 0
+        ttk.Label(filter_frame, text="选择日期:").grid(row=row, column=0, sticky=tk.W, padx=5, pady=5)
+        
+        # 日期输入框
+        self.date_var = tk.StringVar(value=datetime.now().strftime('%Y-%m-%d'))
+        self.date_entry = ttk.Entry(filter_frame, textvariable=self.date_var, width=12)
+        self.date_entry.grid(row=row, column=1, sticky=tk.W, padx=5, pady=5)
+        
+        # 绑定回车键自动刷新
+        self.date_entry.bind('<Return>', lambda e: self._apply_filter())
+        
+        # 绑定鼠标滚轮事件（滚动日期）
+        self.date_entry.bind('<MouseWheel>', self._on_date_scroll)
+        
+        # 快捷按钮
+        ttk.Button(filter_frame, text="◀ 前一天", command=self._select_previous_day).grid(row=row, column=2, sticky=tk.W, padx=2, pady=5)
+        ttk.Button(filter_frame, text="今天", command=self._select_today).grid(row=row, column=3, sticky=tk.W, padx=2, pady=5)
+        ttk.Button(filter_frame, text="后一天 ▶", command=self._select_next_day).grid(row=row, column=4, sticky=tk.W, padx=2, pady=5)
+        
+        # 时间范围筛选按钮
+        ttk.Button(filter_frame, text="最近一周", command=self._select_last_week).grid(row=row, column=5, sticky=tk.W, padx=2, pady=5)
+        ttk.Button(filter_frame, text="最近半月", command=self._select_last_half_month).grid(row=row, column=6, sticky=tk.W, padx=2, pady=5)
+        ttk.Button(filter_frame, text="最近一月", command=self._select_last_month).grid(row=row, column=7, sticky=tk.W, padx=2, pady=5)
+        ttk.Button(filter_frame, text="全部", command=self._select_all).grid(row=row, column=8, sticky=tk.W, padx=2, pady=5)
+        
+        # 提示信息
+        ttk.Label(filter_frame, text="（提示：在日期框上滚动鼠标滚轮可切换日期）", 
+                 foreground="gray", font=("TkDefaultFont", 8)).grid(row=row, column=9, sticky=tk.W, padx=5, pady=5)
+        
+        # === 第二行：其他筛选条件 ===
+        row = 1
         # 发送人筛选
-        ttk.Label(filter_frame, text="发送人:").grid(row=0, column=0, sticky=tk.W, padx=5)
+        ttk.Label(filter_frame, text="发送人:").grid(row=row, column=0, sticky=tk.W, padx=5, pady=5)
         self.sender_var = tk.StringVar()
         sender_entry = ttk.Entry(filter_frame, textvariable=self.sender_var, width=15)
-        sender_entry.grid(row=0, column=1, sticky=tk.W, padx=5)
+        sender_entry.grid(row=row, column=1, sticky=tk.W, padx=5, pady=5)
         
         # 收款人筛选
-        ttk.Label(filter_frame, text="收款人:").grid(row=0, column=2, sticky=tk.W, padx=5)
+        ttk.Label(filter_frame, text="收款人:").grid(row=row, column=2, sticky=tk.W, padx=5, pady=5)
         self.recipient_var = tk.StringVar()
         recipient_entry = ttk.Entry(filter_frame, textvariable=self.recipient_var, width=15)
-        recipient_entry.grid(row=0, column=3, sticky=tk.W, padx=5)
+        recipient_entry.grid(row=row, column=3, sticky=tk.W, padx=5, pady=5)
         
         # 管理员筛选（改为下拉选择框）
-        ttk.Label(filter_frame, text="管理员:").grid(row=0, column=4, sticky=tk.W, padx=5)
+        ttk.Label(filter_frame, text="管理员:").grid(row=row, column=4, sticky=tk.W, padx=5, pady=5)
         self.owner_var = tk.StringVar(value="全部")
         owner_combo = ttk.Combobox(filter_frame, textvariable=self.owner_var, width=13, state='readonly')
         
@@ -94,23 +126,15 @@ class TransferHistoryGUI:
             print(f"获取管理员列表失败: {e}")
         
         owner_combo['values'] = owner_list
-        owner_combo.grid(row=0, column=5, sticky=tk.W, padx=5)
-        
-        # 日期范围筛选
-        ttk.Label(filter_frame, text="日期范围:").grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
-        self.days_var = tk.IntVar(value=30)
-        days_combo = ttk.Combobox(filter_frame, textvariable=self.days_var, width=12, state='readonly')
-        days_combo['values'] = (7, 30, 90, 180, 365)
-        days_combo.grid(row=1, column=1, sticky=tk.W, padx=5, pady=5)
-        ttk.Label(filter_frame, text="天").grid(row=1, column=2, sticky=tk.W)
+        owner_combo.grid(row=row, column=5, sticky=tk.W, padx=5, pady=5)
         
         # 筛选按钮
         filter_btn = ttk.Button(filter_frame, text="应用筛选", command=self._apply_filter)
-        filter_btn.grid(row=1, column=3, padx=5, pady=5)
+        filter_btn.grid(row=row, column=6, padx=5, pady=5)
         
         # 重置按钮
         reset_btn = ttk.Button(filter_frame, text="重置", command=self._reset_filter)
-        reset_btn.grid(row=1, column=4, padx=5, pady=5)
+        reset_btn.grid(row=row, column=7, padx=5, pady=5)
     
     def _create_statistics_section(self, parent):
         """创建统计信息区域"""
@@ -191,11 +215,26 @@ class TransferHistoryGUI:
         # 如果选择"全部"，则不筛选管理员
         if owner == "全部":
             owner = None
-        days = self.days_var.get()
+        
+        # 获取日期筛选
+        date_str = self.date_var.get().strip()
         
         # 计算日期范围
-        end_date = datetime.now().isoformat()
-        start_date = (datetime.now() - timedelta(days=days)).isoformat()
+        if date_str and date_str != "全部":
+            # 按天筛选：只查询指定日期的记录
+            try:
+                # 验证日期格式
+                datetime.strptime(date_str, '%Y-%m-%d')
+                # 使用ISO格式（数据库中的格式）
+                start_date = f"{date_str}T00:00:00"
+                end_date = f"{date_str}T23:59:59.999999"
+            except ValueError:
+                messagebox.showerror("日期格式错误", "请输入正确的日期格式：YYYY-MM-DD")
+                return
+        else:
+            # 查询全部记录（不限制日期）
+            start_date = None
+            end_date = None
         
         # 获取记录
         records = self.history_manager.get_transfer_records(
@@ -204,7 +243,7 @@ class TransferHistoryGUI:
             owner=owner,
             start_date=start_date,
             end_date=end_date,
-            limit=1000
+            limit=10000
         )
         
         # 填充数据
@@ -238,31 +277,81 @@ class TransferHistoryGUI:
             ))
         
         # 更新统计信息
-        self._update_statistics(sender, recipient, owner, days)
+        self._update_statistics(sender, recipient, owner, date_str)
     
-    def _update_statistics(self, sender=None, recipient=None, owner=None, days=30):
+    def _update_statistics(self, sender=None, recipient=None, owner=None, date_filter=None):
         """更新统计信息"""
-        stats = self.history_manager.get_transfer_statistics(
+        # 计算日期范围
+        if date_filter and date_filter != "全部":
+            try:
+                # 验证日期格式
+                datetime.strptime(date_filter, '%Y-%m-%d')
+                # 使用ISO格式（数据库中的格式）
+                start_date = f"{date_filter}T00:00:00"
+                end_date = f"{date_filter}T23:59:59.999999"
+                period_text = f"日期: {date_filter}"
+            except ValueError:
+                # 日期格式错误，使用全部记录
+                start_date = None
+                end_date = None
+                period_text = "全部记录"
+        else:
+            # 查询全部记录（不限制日期）
+            start_date = None
+            end_date = None
+            period_text = "全部记录"
+        
+        # 获取统计数据
+        records = self.history_manager.get_transfer_records(
             sender_phone=sender,
             recipient_phone=recipient,
             owner=owner,
-            days=days
+            start_date=start_date,
+            end_date=end_date,
+            limit=10000
         )
+        
+        # 计算统计信息
+        total_count = len(records)
+        success_count = sum(1 for r in records if r.success)
+        failed_count = total_count - success_count
+        success_rate = (success_count / total_count * 100) if total_count > 0 else 0
+        total_amount = sum(r.amount for r in records)
+        
+        # 收款人统计
+        recipient_stats = {}
+        for record in records:
+            key = (record.recipient_phone, record.recipient_name)
+            if key not in recipient_stats:
+                recipient_stats[key] = {'count': 0, 'amount': 0.0}
+            recipient_stats[key]['count'] += 1
+            recipient_stats[key]['amount'] += record.amount
+        
+        # 排序收款人统计（按金额降序）
+        recipient_list = [
+            {
+                'name': f"{name} ({phone})",
+                'count': stats['count'],
+                'amount': stats['amount']
+            }
+            for (phone, name), stats in recipient_stats.items()
+        ]
+        recipient_list.sort(key=lambda x: x['amount'], reverse=True)
         
         # 格式化统计信息
         stats_text = (
-            f"统计周期: 最近 {days} 天\n"
-            f"总转账次数: {stats['total_count']} 次\n"
-            f"成功次数: {stats['success_count']} 次\n"
-            f"失败次数: {stats['failed_count']} 次\n"
-            f"成功率: {stats['success_rate']:.1f}%\n"
-            f"总金额: {stats['total_amount']:.2f} 元"
+            f"统计周期: {period_text}\n"
+            f"总转账次数: {total_count} 次\n"
+            f"成功次数: {success_count} 次\n"
+            f"失败次数: {failed_count} 次\n"
+            f"成功率: {success_rate:.1f}%\n"
+            f"总金额: {total_amount:.2f} 元"
         )
         
         # 添加收款人统计
-        if stats['recipient_stats']:
+        if recipient_list:
             stats_text += "\n\n收款人统计 (Top 5):"
-            for i, recipient_stat in enumerate(stats['recipient_stats'][:5], 1):
+            for i, recipient_stat in enumerate(recipient_list[:5], 1):
                 stats_text += (
                     f"\n{i}. {recipient_stat['name']}: "
                     f"{recipient_stat['count']}次, "
@@ -270,6 +359,90 @@ class TransferHistoryGUI:
                 )
         
         self.stats_label.config(text=stats_text)
+    
+    def _on_date_scroll(self, event):
+        """鼠标滚轮滚动日期"""
+        try:
+            date_str = self.date_var.get()
+            # 如果是"全部"，先设置为今天
+            if date_str == "全部":
+                date_str = datetime.now().strftime('%Y-%m-%d')
+                self.date_var.set(date_str)
+            
+            current_date = datetime.strptime(date_str, '%Y-%m-%d')
+            # 向上滚动（event.delta > 0）：前一天
+            # 向下滚动（event.delta < 0）：后一天
+            if event.delta > 0:
+                new_date = current_date - timedelta(days=1)
+            else:
+                new_date = current_date + timedelta(days=1)
+            
+            self.date_var.set(new_date.strftime('%Y-%m-%d'))
+            self._apply_filter()
+        except ValueError:
+            # 日期格式错误，设置为今天
+            self.date_var.set(datetime.now().strftime('%Y-%m-%d'))
+    
+    def _select_previous_day(self):
+        """选择前一天"""
+        try:
+            date_str = self.date_var.get()
+            # 如果是"全部"，先设置为今天
+            if date_str == "全部":
+                date_str = datetime.now().strftime('%Y-%m-%d')
+            
+            current_date = datetime.strptime(date_str, '%Y-%m-%d')
+            new_date = current_date - timedelta(days=1)
+            self.date_var.set(new_date.strftime('%Y-%m-%d'))
+            self._apply_filter()
+        except ValueError:
+            # 日期格式错误，设置为今天的前一天
+            new_date = datetime.now() - timedelta(days=1)
+            self.date_var.set(new_date.strftime('%Y-%m-%d'))
+            self._apply_filter()
+    
+    def _select_today(self):
+        """选择今天"""
+        self.date_var.set(datetime.now().strftime('%Y-%m-%d'))
+        self._apply_filter()
+    
+    def _select_next_day(self):
+        """选择后一天"""
+        try:
+            date_str = self.date_var.get()
+            # 如果是"全部"，先设置为今天
+            if date_str == "全部":
+                date_str = datetime.now().strftime('%Y-%m-%d')
+            
+            current_date = datetime.strptime(date_str, '%Y-%m-%d')
+            new_date = current_date + timedelta(days=1)
+            self.date_var.set(new_date.strftime('%Y-%m-%d'))
+            self._apply_filter()
+        except ValueError:
+            # 日期格式错误，设置为今天的后一天
+            new_date = datetime.now() + timedelta(days=1)
+            self.date_var.set(new_date.strftime('%Y-%m-%d'))
+            self._apply_filter()
+    
+    def _select_last_week(self):
+        """选择最近一周"""
+        self.date_var.set("全部")
+        self._apply_filter()
+    
+    def _select_last_half_month(self):
+        """选择最近半月"""
+        self.date_var.set("全部")
+        self._apply_filter()
+    
+    def _select_last_month(self):
+        """选择最近一月"""
+        self.date_var.set("全部")
+        self._apply_filter()
+    
+    def _select_all(self):
+        """选择全部"""
+        self.date_var.set("全部")
+        self._apply_filter()
     
     def _apply_filter(self):
         """应用筛选"""
@@ -280,7 +453,7 @@ class TransferHistoryGUI:
         self.sender_var.set('')
         self.recipient_var.set('')
         self.owner_var.set('全部')
-        self.days_var.set(30)
+        self.date_var.set(datetime.now().strftime('%Y-%m-%d'))
         self._load_data()
     
     def _on_record_double_click(self, event):
