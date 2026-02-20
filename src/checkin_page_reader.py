@@ -80,21 +80,71 @@ class CheckinPageReader:
             
             img = Image.open(BytesIO(screenshot))
             
-            # 使用全屏OCR识别（简单快速）
-            # 使用OCR图像预处理模块增强图像（灰度图 + 对比度增强2倍）
-            enhanced_img = enhance_for_ocr(img)
+            # 优化：优先使用学习器推荐的区域进行OCR（更快更准确）
+            texts = []
+            boxes = []
+            used_learner = False
             
-            # 使用 OCR 线程池识别（异步，带超时）
-            # 优化：增加超时时间 2秒→5秒，避免批量处理时超时
-            ocr_result = await self._ocr_pool.recognize(enhanced_img, timeout=5.0)
+            # 尝试从学习器获取推荐区域
+            total_times_region = learner.get_best_region("checkin_total_times")
+            remaining_times_region = learner.get_best_region("checkin_remaining_times")
             
-            # 检查返回值
-            if not ocr_result or not ocr_result.texts:
-                return result
+            if total_times_region or remaining_times_region:
+                print(f"[签到页面OCR] 使用学习器推荐区域进行OCR识别")
+                
+                # 对推荐区域进行OCR
+                region_texts = []
+                region_boxes = []
+                
+                for region_name, region in [("总次数", total_times_region), ("剩余次数", remaining_times_region)]:
+                    if region:
+                        # 学习器返回的是元组 (x, y, w, h)
+                        x, y, w, h = region
+                        print(f"[签到页面OCR] {region_name}区域: ({x}, {y}, {w}, {h})")
+                        
+                        # 裁剪区域
+                        region_img = img.crop((x, y, x + w, y + h))
+                        
+                        # 增强图像
+                        enhanced_region = enhance_for_ocr(region_img)
+                        
+                        # OCR识别（超时1秒，因为区域很小）
+                        region_result = await self._ocr_pool.recognize(enhanced_region, timeout=1.0)
+                        
+                        if region_result and region_result.texts:
+                            region_texts.extend(region_result.texts)
+                            # 调整boxes坐标到全图坐标系
+                            if region_result.boxes is not None and len(region_result.boxes) > 0:
+                                for box in region_result.boxes:
+                                    adjusted_box = [[p[0] + x, p[1] + y] for p in box]
+                                    region_boxes.append(adjusted_box)
+                
+                # 如果区域OCR成功识别到文本，使用区域结果
+                if region_texts:
+                    texts = region_texts
+                    boxes = region_boxes
+                    used_learner = True
+                    print(f"[签到页面OCR] ✓ 学习器区域识别成功，识别到 {len(texts)} 段文本")
+                else:
+                    print(f"[签到页面OCR] ⚠️ 学习器区域识别失败，降级到全屏OCR")
             
-            texts = ocr_result.texts
-            # 修复：正确处理numpy数组
-            boxes = ocr_result.boxes if ocr_result.boxes is not None and len(ocr_result.boxes) > 0 else []
+            # 降级：如果学习器没有推荐区域或识别失败，使用全屏OCR
+            if not texts:
+                print(f"[签到页面OCR] 使用全屏OCR识别")
+                # 使用OCR图像预处理模块增强图像（灰度图 + 对比度增强2倍）
+                enhanced_img = enhance_for_ocr(img)
+                
+                # 使用 OCR 线程池识别（异步，带超时）
+                # 优化：增加超时时间 2秒→5秒，避免批量处理时超时
+                ocr_result = await self._ocr_pool.recognize(enhanced_img, timeout=5.0)
+                
+                # 检查返回值
+                if not ocr_result or not ocr_result.texts:
+                    return result
+                
+                texts = ocr_result.texts
+                # 修复：正确处理numpy数组
+                boxes = ocr_result.boxes if ocr_result.boxes is not None and len(ocr_result.boxes) > 0 else []
             
             # 合并所有文本用于调试
             result['raw_text'] = ' '.join(texts)
@@ -107,8 +157,8 @@ class CheckinPageReader:
             # 解析签到信息
             self._parse_checkin_times(texts, result)
             
-            # 如果成功识别到签到次数，记录OCR区域用于学习
-            if result['total_times'] is not None or result['daily_remaining_times'] is not None:
+            # 如果成功识别到签到次数，且使用的是全屏OCR，记录OCR区域用于学习
+            if not used_learner and (result['total_times'] is not None or result['daily_remaining_times'] is not None):
                 # 查找包含签到次数信息的文本框位置
                 for i, text in enumerate(texts):
                     if i < len(boxes):
@@ -400,11 +450,13 @@ class CheckinPageReader:
                     # 等待一下，让页面更新
                     await asyncio.sleep(1)
                     
-                    # 尝试关闭可能出现的弹窗
+                    # 尝试关闭可能出现的弹窗（使用统一的弹窗关闭方法）
                     try:
-                        # 点击屏幕中心或其他位置来关闭弹窗
-                        await self.adb.tap(device_id, 270, 960)  # 屏幕中心位置
-                        await asyncio.sleep(1)
+                        from .model_manager import ModelManager
+                        model_manager = ModelManager.get_instance()
+                        detector = model_manager.get_page_detector_integrated()
+                        if detector:
+                            await detector.close_popup(device_id)
                     except Exception as e:
                         print(f"  ⚠️ 关闭弹窗失败: {str(e)}")
                     

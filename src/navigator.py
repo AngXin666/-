@@ -48,13 +48,6 @@ class Navigator:
         # 初始化静默日志记录器
         self._silent_log = get_silent_logger()
         
-        # 初始化智能按钮点击器
-        from .smart_button_clicker import SmartButtonClicker
-        from .model_manager import ModelManager
-        model_manager = ModelManager.get_instance()
-        ocr_pool = model_manager.get_ocr_thread_pool()
-        self._smart_clicker = SmartButtonClicker(adb, self.detector, ocr_pool)
-        
         # 初始化页面检测缓存管理器
         from .page_detector_cache import PageDetectorCache
         self._page_cache = PageDetectorCache(
@@ -215,11 +208,11 @@ class Navigator:
         ]
         
         for attempt in range(max_attempts):
-            # 使用优先级模板检测
-            page_result = await self.detector.detect_page_with_priority(
+            # 使用快速页面检测(不检测元素,不使用缓存)
+            page_result = await self.detector.detect_page(
                 device_id,
-                expected_pages,
-                use_cache=True
+                use_cache=False,
+                detect_elements=False
             )
             if not page_result or not page_result.state:
                 self._silent_log.info(f"[导航到首页] ⚠️ 无法检测页面状态（尝试{attempt+1}/{max_attempts}），重试...")
@@ -304,6 +297,15 @@ class Navigator:
                     self.detector.clear_cache()
                     continue
             
+            # 如果在启动页服务弹窗，点击关闭
+            if current_state == PageState.STARTUP_POPUP:
+                self._silent_log.info(f"[导航到首页] 当前在启动页服务弹窗，点击关闭...")
+                # 使用返回键关闭弹窗
+                await self.adb.press_back(device_id)
+                await asyncio.sleep(1)
+                self.detector.clear_cache()
+                continue
+            
             # 如果在签到页面，按返回键
             if current_state == PageState.CHECKIN:
                 self._silent_log.info(f"[导航到首页] 当前在签到页面，按返回键...")
@@ -358,39 +360,11 @@ class Navigator:
                     self._silent_log.info(f"  ⚠️ 返回后页面状态: {page_result.state.value if page_result else 'unknown'}，重试...")
                     continue
             
-            # 如果在首页公告弹窗，点击弹窗外上方空白区域关闭
+            # 如果在首页公告弹窗，关闭弹窗
             if current_state == PageState.HOME_NOTICE:
-                self._silent_log.info(f"[导航到首页] 检测到首页公告弹窗，点击弹窗外上方空白区域关闭...")
-                await self.adb.tap(device_id, 270, 200)
-                await asyncio.sleep(1.5)
-                # 清除缓存，重新检测
+                self._silent_log.info(f"[导航到首页] 首页公告弹窗，关闭...")
+                await self.detector.close_popup(device_id, known_popup_type="home_announcement")
                 self.detector.clear_cache()
-                
-                # 关闭弹窗后立即检测是否误点进入分类页
-                check_result = await self.detector.detect_page(device_id, use_cache=False, detect_elements=False)
-                if check_result and check_result.state == PageState.CATEGORY:
-                    self._silent_log.info(f"[导航到首页] ⚠️ 关闭弹窗后误点进入分类页，点击首页按钮返回...")
-                    # 使用智能按钮点击器点击首页按钮
-                    from .smart_button_clicker import SmartButtonClicker
-                    from .model_manager import ModelManager
-                    model_manager = ModelManager.get_instance()
-                    ocr_pool = model_manager.get_ocr_thread_pool()
-                    smart_clicker = SmartButtonClicker(self.adb, self.detector, ocr_pool)
-                    
-                    success, home_pos = await smart_clicker.click_button(
-                        device_id=device_id,
-                        button_name="nav_home_button",
-                        valid_range=(50, 150, 850, 950),
-                        default_position=(90, 920),
-                        log_callback=lambda msg: self._silent_log.log(msg)
-                    )
-                    if not success:
-                        self._silent_log.info(f"[导航到首页] ⚠️ 智能点击器失败，使用默认坐标")
-                        await self.adb.tap(device_id, 90, 920)
-                    
-                    await asyncio.sleep(1.0)
-                    self.detector.clear_cache()
-                
                 continue
             
             # 处理弹窗
@@ -402,23 +376,8 @@ class Navigator:
                 check_result = await self.detector.detect_page(device_id, use_cache=False, detect_elements=False)
                 if check_result and check_result.state == PageState.CATEGORY:
                     self._silent_log.info(f"[导航到首页] ⚠️ 关闭弹窗后误点进入分类页，点击首页按钮返回...")
-                    # 使用智能按钮点击器点击首页按钮
-                    from .smart_button_clicker import SmartButtonClicker
-                    from .model_manager import ModelManager
-                    model_manager = ModelManager.get_instance()
-                    ocr_pool = model_manager.get_ocr_thread_pool()
-                    smart_clicker = SmartButtonClicker(self.adb, self.detector, ocr_pool)
-                    
-                    success, home_pos = await smart_clicker.click_button(
-                        device_id=device_id,
-                        button_name="nav_home_button",
-                        valid_range=(50, 150, 850, 950),
-                        default_position=(90, 920),
-                        log_callback=lambda msg: self._silent_log.log(msg)
-                    )
-                    if not success:
-                        self._silent_log.info(f"[导航到首页] ⚠️ 智能点击器失败，使用默认坐标")
-                        await self.adb.tap(device_id, 90, 920)
+                    # 直接点击首页按钮（使用默认坐标）
+                    await self.adb.tap(device_id, 90, 920)
                     
                     await asyncio.sleep(1.0)
                     self.detector.clear_cache()

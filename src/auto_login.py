@@ -591,23 +591,23 @@ class AutoLogin:
                     await wait_after_action(min_wait=0.3, max_wait=1.0)
                     
                     # 根据错误信息返回具体错误类型
-                    if "手机号不存在" in error_msg:
+                    if "手机号不存在" in error_msg or "手机号码不存在" in error_msg:
                         return LoginResult(
                             success=False, 
                             error_message="登录失败：手机号不存在",
-                            error_type=ErrorType.LOGIN_PHONE_NOT_EXIST
+                            error_type="phone_not_exist"
                         )
-                    elif "密码错误" in error_msg:
+                    elif "密码错误" in error_msg or "用户名或密码错误" in error_msg:
                         return LoginResult(
                             success=False, 
                             error_message="登录失败：密码错误",
-                            error_type=ErrorType.LOGIN_PASSWORD_ERROR
+                            error_type="wrong_password"
                         )
                     else:
                         return LoginResult(
                             success=False, 
                             error_message=f"登录失败：{error_msg}",
-                            error_type=None
+                            error_type="unknown_error"
                         )
                 
                 # 处理登录后可能出现的弹窗
@@ -652,11 +652,26 @@ class AutoLogin:
                 log(f"检测到登录错误: {error_msg}")
                 if hasattr(self.detector, 'close_popup'):
                     await self.detector.close_popup(device_id)
-                return LoginResult(
-                    success=False, 
-                    error_message=f"登录失败：{error_msg}",
-                    error_type=None  # 未知错误，不设置特定类型
-                )
+                
+                # 根据错误信息返回具体错误类型
+                if "手机号不存在" in error_msg or "手机号码不存在" in error_msg:
+                    return LoginResult(
+                        success=False, 
+                        error_message="登录失败：手机号不存在",
+                        error_type="phone_not_exist"
+                    )
+                elif "密码错误" in error_msg or "用户名或密码错误" in error_msg:
+                    return LoginResult(
+                        success=False, 
+                        error_message="登录失败：密码错误",
+                        error_type="wrong_password"
+                    )
+                else:
+                    return LoginResult(
+                        success=False, 
+                        error_message=f"登录失败：{error_msg}",
+                        error_type="unknown_error"
+                    )
             elif current_state == PageState.LOGIN:
                 log("仍在登录页面，登录可能失败")
                 return LoginResult(success=False, error_message="登录超时，仍在登录页面")

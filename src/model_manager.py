@@ -931,21 +931,27 @@ class ModelManager:
     def get_page_detector_integrated(self) -> 'PageDetectorIntegrated':
         """获取深度学习页面分类器（线程安全）
         
+        检测器本身是线程安全的，可以被多个线程并发调用。
+        移除锁以支持真正的并发执行，避免多账号串行等待。
+        
         Returns:
             PageDetectorIntegrated: 页面分类器实例
         
         Raises:
             RuntimeError: 如果模型未初始化
         """
-        with self._lock:
-            if 'page_detector_integrated' not in self._models:
-                raise RuntimeError(
-                    "PageDetectorIntegrated未初始化，请先调用initialize_all_models()"
-                )
-            return self._models['page_detector_integrated']
+        # 不使用锁，允许并发访问（检测器本身是线程安全的）
+        if 'page_detector_integrated' not in self._models:
+            raise RuntimeError(
+                "PageDetectorIntegrated未初始化，请先调用initialize_all_models()"
+            )
+        return self._models['page_detector_integrated']
     
     def get_ocr_thread_pool(self) -> 'OCRThreadPool':
         """获取OCR线程池（线程安全）
+        
+        OCR线程池本身是线程安全的，可以被多个线程并发调用。
+        移除锁以支持真正的并发执行，避免多账号串行等待。
         
         Returns:
             OCRThreadPool: OCR线程池实例
@@ -953,12 +959,12 @@ class ModelManager:
         Raises:
             RuntimeError: 如果模型未初始化
         """
-        with self._lock:
-            if 'ocr_thread_pool' not in self._models:
-                raise RuntimeError(
-                    "OCRThreadPool未初始化，请先调用initialize_all_models()"
-                )
-            return self._models['ocr_thread_pool']
+        # 不使用锁，允许并发访问（OCR线程池本身是线程安全的）
+        if 'ocr_thread_pool' not in self._models:
+            raise RuntimeError(
+                "OCRThreadPool未初始化，请先调用initialize_all_models()"
+            )
+        return self._models['ocr_thread_pool']
     
     def cleanup(self):
         """清理所有模型资源

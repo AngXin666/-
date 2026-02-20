@@ -118,11 +118,9 @@ class PageGuardConfig:
             "description": "签到弹窗,点击关闭",
             "close_position": (270, 800),  # 关闭按钮位置
         },
-        "首页公告": {
-            "action": PageAction.CLOSE,
-            "description": "首页公告弹窗,点击关闭",
-            "close_position": (270, 800),  # 关闭按钮位置
-        },
+        
+        # 注意：首页公告弹窗已在 page_detector_integrated.py 的 close_popup() 方法中统一处理
+        # 不需要在这里配置，避免代码重复
         
         # ===== 需要等待的页面 =====
         "广告页": {
