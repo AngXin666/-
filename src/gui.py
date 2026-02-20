@@ -221,6 +221,54 @@ class AutomationGUI:
         except Exception as e:
             print(f"获取模型加载状态失败: {e}")
     
+    def _create_text_context_menu(self, text_widget):
+        """为文本框创建右键复制菜单
+        
+        Args:
+            text_widget: 文本框控件
+        """
+        def show_context_menu(event):
+            """显示右键菜单"""
+            # 创建右键菜单
+            context_menu = tk.Menu(text_widget, tearoff=0)
+            
+            # 检查是否有选中的文本
+            try:
+                selected_text = text_widget.get(tk.SEL_FIRST, tk.SEL_LAST)
+                if selected_text:
+                    context_menu.add_command(
+                        label="📋 复制选中内容",
+                        command=lambda: self._copy_text_to_clipboard(selected_text)
+                    )
+            except tk.TclError:
+                # 没有选中文本
+                pass
+            
+            # 添加"复制全部"选项
+            context_menu.add_command(
+                label="📋 复制全部内容",
+                command=lambda: self._copy_text_to_clipboard(text_widget.get("1.0", tk.END).strip())
+            )
+            
+            # 显示菜单
+            context_menu.post(event.x_root, event.y_root)
+        
+        # 绑定右键点击事件
+        text_widget.bind("<Button-3>", show_context_menu)
+    
+    def _copy_text_to_clipboard(self, text):
+        """复制文本到剪贴板（不显示日志）
+        
+        Args:
+            text: 要复制的文本
+        """
+        if not text:
+            return
+        
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        # 不显示日志，避免干扰用户
+    
     def _create_widgets(self):
         """创建界面组件"""
         main_frame = ttk.Frame(self.root, padding="10")
@@ -449,6 +497,9 @@ class AutomationGUI:
         self.log_text.pack(fill=tk.BOTH, expand=False)
         self.log_text.bind("<Double-Button-1>", lambda e: self._clear_log())
         
+        # 添加右键复制功能
+        self._create_text_context_menu(self.log_text)
+        
         # 日志自动滚动控制
         self.log_auto_scroll = True  # 默认开启自动滚动
         self._scroll_check_timer = None  # 防抖定时器
@@ -473,6 +524,9 @@ class AutomationGUI:
         
         self.error_log_text = scrolledtext.ScrolledText(error_log_frame, height=6, state=tk.DISABLED)
         self.error_log_text.pack(fill=tk.BOTH, expand=False)
+        
+        # 添加右键复制功能
+        self._create_text_context_menu(self.error_log_text)
         
         # 配置错误日志文本颜色
         self.error_log_text.tag_configure("error", foreground="red")
@@ -5652,6 +5706,7 @@ class HistoryResultsWindow:
         self.window.clipboard_clear()
         self.window.clipboard_append(text)
         self.log(f"✓ 已复制到剪贴板: {text}")
+    
     
     def _export_excel(self):
         """导出Excel - 支持按时间范围和管理员导出"""

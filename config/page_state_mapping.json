@@ -56,6 +56,12 @@
       "chinese_name": "广告页",
       "description": "广告页面"
     },
+    "手机号码错误": {
+      "state": "LOGIN_ERROR",
+      "state_value": "login_error",
+      "chinese_name": "手机号码错误",
+      "description": "手机号码错误弹窗"
+    },
     "搜索页": {
       "state": "SEARCH",
       "state_value": "search",
@@ -79,6 +85,12 @@
       "state_value": "warmtip",
       "chinese_name": "温馨提示",
       "description": "温馨提示弹窗"
+    },
+    "用户名或密码错误": {
+      "state": "LOGIN_ERROR",
+      "state_value": "login_error",
+      "chinese_name": "用户名或密码错误",
+      "description": "用户名或密码错误弹窗"
     },
     "登录页": {
       "state": "LOGIN",
@@ -151,6 +163,12 @@
       "state_value": "home_error_popup",
       "chinese_name": "首页异常代码弹窗",
       "description": "首页异常代码弹窗"
+    },
+    "_标注错误_广告页": {
+      "state": "标注错误_AD_PAGE",
+      "state_value": "标注错误_ad_page",
+      "chinese_name": "_标注错误_广告页",
+      "description": "_标注错误_广告页（自动生成）"
     }
   },
   "auto_register": {

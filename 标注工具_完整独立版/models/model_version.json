@@ -1,7 +1,7 @@
 {
   "version": "1.0.0",
-  "update_date": "2026-02-08",
-  "description": "页面分类器训练完成 - 25个类别",
+  "update_date": "2026-02-20",
+  "description": "页面分类器训练完成 - 28个类别",
   "models": {
     "page_classifier": {
       "version": "1.0.0",

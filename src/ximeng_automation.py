@@ -231,15 +231,30 @@ class XimengAutomation:
                 # 第一次启动
                 if file_logger:
                     file_logger.debug("应用已启动，开始智能检测")
+                # 强制输出到控制台，确保能看到
+                print(f"[DEBUG] 第一次启动，准备进入主循环")
             
             # 主循环：智能检测和处理页面
             max_wait_time = 60
             start_time = asyncio.get_event_loop().time()
             
-            if file_logger:
-                file_logger.debug("开始智能启动流程检测")
+            # 强制输出到控制台
+            print(f"[DEBUG] 准备进入while循环，max_wait_time={max_wait_time}")
             
+            if file_logger:
+                file_logger.info("="*60)
+                file_logger.info("开始智能启动流程检测")
+                file_logger.info(f"最大等待时间: {max_wait_time}秒")
+                file_logger.info(f"当前时间: {time.strftime('%H:%M:%S')}")
+                file_logger.info("="*60)
+            
+            loop_count = 0
+            print(f"[DEBUG] 开始while循环")
             while asyncio.get_event_loop().time() - start_time < max_wait_time:
+                loop_count += 1
+                print(f"[DEBUG] 循环第 {loop_count} 次")
+                if file_logger:
+                    file_logger.info(f"循环第 {loop_count} 次")
                 if should_stop():
                     if file_logger:
                         file_logger.info("用户请求停止")
@@ -248,16 +263,31 @@ class XimengAutomation:
                 # 使用深度学习检测器检测当前页面（GPU加速）
                 detect_start = time.time()
                 
-                result = await detector.detect_page(device_id, use_cache=True, detect_elements=False)
-                detect_time = time.time() - detect_start
-                elapsed = asyncio.get_event_loop().time() - start_time
-                
-                # 详细日志：记录检测结果（仅文件日志）
-                if file_logger:
-                    file_logger.debug(
-                        f"[{elapsed:.1f}s] {result.state.value} "
-                        f"(置信度: {result.confidence:.2%}, 检测耗时: {detect_time*1000:.2f}ms)"
-                    )
+                print(f"[DEBUG] 准备调用detector.detect_page")
+                try:
+                    if file_logger:
+                        file_logger.info("正在检测页面状态...")
+                    
+                    print(f"[DEBUG] 开始调用detector.detect_page")
+                    result = await detector.detect_page(device_id, use_cache=True, detect_elements=False)
+                    print(f"[DEBUG] detector.detect_page调用完成，结果: {result.state.value if result else 'None'}")
+                    detect_time = time.time() - detect_start
+                    elapsed = asyncio.get_event_loop().time() - start_time
+                    
+                    # 详细日志：记录检测结果（改为info级别，确保输出）
+                    if file_logger:
+                        file_logger.info(
+                            f"[{elapsed:.1f}s] {result.state.value} "
+                            f"(置信度: {result.confidence:.2%}, 检测耗时: {detect_time*1000:.2f}ms)"
+                        )
+                except Exception as e:
+                    print(f"[DEBUG] detector.detect_page出错: {e}")
+                    if file_logger:
+                        file_logger.error(f"页面检测出错: {e}")
+                        import traceback
+                        file_logger.error(traceback.format_exc())
+                    await asyncio.sleep(1.0)
+                    continue
                 
                 # 检查是否已到达目标页面（启动流程只检测到首页即可）
                 if result.state == PageState.HOME:
@@ -345,15 +375,15 @@ class XimengAutomation:
                         file_logger.debug(f"弹窗处理完成 - 总耗时: {int(step_time)}秒")
                     continue
                 
-                # 处理首页公告弹窗
+                # 处理首页公告弹窗（使用统一的弹窗关闭方法）
                 if result.state == PageState.HOME_NOTICE:
                     step_start = time.time()
                     
                     # 简洁日志：关闭首页广告
                     concise.action("关闭首页广告")
                     
-                    # 点击弹窗外面的上方空白背景区域（避开搜索框）
-                    await self.adb.tap(device_id, 270, 200)
+                    # 使用统一的弹窗关闭方法，传入已知弹窗类型避免重复OCR识别
+                    await detector.close_popup(device_id, known_popup_type="home_announcement")
                     
                     # 使用智能等待器等待页面变化
                     from .performance.smart_waiter import wait_for_page

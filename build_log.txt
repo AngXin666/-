@@ -1,0 +1,45 @@
+﻿============================================================
+  溪盟商城自动化助手 v2.0.6 - 打包脚本
+============================================================
+
+PyInstaller版本: 6.18.0
+
+[1/5] 清理旧的构建文件...
+  删除: build
+  删除: dist
+  删除: __pycache__
+  删除: 溪盟商城自动化助手.spec
+python : Traceback (most recent call last):
+所在位置 行:1 字符: 1
++ python build_exe.py 2>&1 | Out-File -FilePath "
+build_log.txt" -Encodi ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Tra 
+   ceback (most recent call last)::String) [],   
+  RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  File "D:\360MoveData\Users\Administrator\Deskto
+p\模拟\build_exe.py", line 341, in main
+    clean_build_dirs()
+  File "D:\360MoveData\Users\Administrator\Deskto
+p\模拟\build_exe.py", line 35, in clean_build_dirs
+    print("  \u2713 清理完成")
+UnicodeEncodeError: 'gbk' codec can't encode char
+acter '\u2713' in position 2: illegal multibyte s
+equence
+
+During handling of the above exception, another e
+xception occurred:
+
+Traceback (most recent call last):
+  File "D:\360MoveData\Users\Administrator\Deskto
+p\模拟\build_exe.py", line 379, in <module>
+    success = main()
+              ^^^^^^
+  File "D:\360MoveData\Users\Administrator\Deskto
+p\模拟\build_exe.py", line 373, in main
+    print(f"\n\u2717 打包过程出错: {e}")
+UnicodeEncodeError: 'gbk' codec can't encode char
+acter '\u2717' in position 2: illegal multibyte s
+equence
