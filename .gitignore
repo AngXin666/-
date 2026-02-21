@@ -103,8 +103,10 @@ config.yaml
 login_cache/
 
 # 大型模型文件（超过GitHub 100MB限制）
-*.pth
-*.pt
+# [2026-02-21] 修改原因：用户明确要求模型文件必须备份到Git，不允许忽略
+# *.pt 和 *.pth 文件现在允许提交到Git（这是重大规则变更）
+# *.pth  # 已注释：允许.pth文件提交
+# *.pt   # 已注释：允许.pt文件提交
 *.keras
 *.h5
 *.onnx
