@@ -124,7 +124,7 @@
     "avatar_homepage": {
       "name": "头像和首页按钮检测模型",
       "page_type": "个人页_已登录_头像首页",
-      "model_path": "runs/detect/runs/detect/yolo_runs/avatar_homepage_detector/train/weights/best.pt",
+      "model_path": "runs/detect/yolo_runs/avatar_homepage_detector/train/weights/best.pt",
       "classes": [
         "头像",
         "首页按钮"
@@ -148,7 +148,7 @@
     "profile_detailed": {
       "name": "个人页详细标注检测模型（8区域）",
       "page_type": "个人页_已登录_详细",
-      "model_path": "runs/detect/runs/detect/yolo_runs/个人页已登录_detector2/weights/best.pt",
+      "model_path": "runs/detect/yolo_runs/个人页已登录_detector2/weights/best.pt",
       "classes": [
         "首页按钮",
         "我的按钮",
@@ -178,7 +178,7 @@
     "profile_unlogged": {
       "name": "未登录个人页检测模型",
       "page_type": "个人页_未登录",
-      "model_path": "runs/detect/runs/detect/yolo_runs/profile_unlogged_detector/weights/best.pt",
+      "model_path": "runs/detect/yolo_runs/profile_unlogged_detector/weights/best.pt",
       "classes": [
         "请登陆按钮"
       ],
@@ -201,7 +201,7 @@
     "startup_popup": {
       "name": "启动页服务弹窗检测模型",
       "page_type": "启动页服务弹窗",
-      "model_path": "runs/detect/runs/detect/yolo_runs/startup_popup_detector/weights/best.pt",
+      "model_path": "runs/detect/yolo_runs/startup_popup_detector/weights/best.pt",
       "classes": [
         "同意按钮",
         "拒绝按钮"
@@ -301,7 +301,7 @@
     "分类页": {
       "name": "分类页检测模型",
       "page_type": "分类页",
-      "model_path": "runs/detect\\runs\\detect\\yolo_runs\\分类页_detector\\weights\\best.pt",
+      "model_path": "runs/detect/yolo_runs/分类页_detector/weights/best.pt",
       "classes": [
         "我的按钮",
         "首页按钮"
@@ -326,7 +326,7 @@
     "搜索页": {
       "name": "搜索页检测模型",
       "page_type": "搜索页",
-      "model_path": "runs/detect\\runs\\detect\\yolo_runs\\搜索页_detector\\weights\\best.pt",
+      "model_path": "runs/detect/yolo_runs/搜索页_detector/weights/best.pt",
       "classes": [
         "返回按钮"
       ],
@@ -350,7 +350,7 @@
     "积分页": {
       "name": "积分页检测模型",
       "page_type": "积分页",
-      "model_path": "runs/detect\\runs\\detect\\yolo_runs\\积分页_detector\\weights\\best.pt",
+      "model_path": "runs/detect/yolo_runs/积分页_detector/weights/best.pt",
       "classes": [
         "返回按钮"
       ],
@@ -374,7 +374,7 @@
     "文章页": {
       "name": "文章页检测模型",
       "page_type": "文章页",
-      "model_path": "runs/detect\\runs\\detect\\yolo_runs\\文章页_detector\\weights\\best.pt",
+      "model_path": "runs/detect/yolo_runs/文章页_detector/weights/best.pt",
       "classes": [
         "返回按钮"
       ],
@@ -398,7 +398,7 @@
     "钱包页": {
       "name": "钱包页检测模型",
       "page_type": "钱包页",
-      "model_path": "runs/detect\\runs\\detect\\yolo_runs\\钱包页_detector\\weights\\best.pt",
+      "model_path": "runs/detect/yolo_runs/钱包页_detector/weights/best.pt",
       "classes": [
         "余额数字",
         "转增按钮"
@@ -423,7 +423,7 @@
     "个人页广告": {
       "name": "个人页广告检测模型",
       "page_type": "个人页广告",
-      "model_path": "runs/detect\\runs\\detect\\yolo_runs\\个人页广告_detector\\weights\\best.pt",
+      "model_path": "runs/detect/yolo_runs/个人页广告_detector/weights/best.pt",
       "classes": [
         "确认按钮"
       ],
@@ -447,7 +447,7 @@
     "首页异常代码弹窗": {
       "name": "首页异常代码弹窗检测模型",
       "page_type": "首页异常代码弹窗",
-      "model_path": "runs/detect\\runs\\detect\\yolo_runs\\首页异常代码弹窗_detector\\weights\\best.pt",
+      "model_path": "runs/detect/yolo_runs/首页异常代码弹窗_detector/weights/best.pt",
       "classes": [
         "确认按钮"
       ],
@@ -488,7 +488,7 @@
     "首页公告": {
       "name": "首页公告检测模型",
       "page_type": "首页公告",
-      "model_path": "runs/detect\\runs\\detect\\yolo_runs\\首页公告_detector\\weights\\best.pt",
+      "model_path": "runs/detect/yolo_runs/首页公告_detector/weights/best.pt",
       "classes": [
         "确认按钮"
       ],
@@ -512,7 +512,7 @@
     "签到成功弹窗": {
       "name": "签到成功弹窗检测模型",
       "page_type": "签到成功弹窗",
-      "model_path": "runs/detect\\runs\\detect\\yolo_runs\\签到成功弹窗_detector2\\weights\\best.pt",
+      "model_path": "runs/detect/yolo_runs/签到成功弹窗_detector2/weights/best.pt",
       "classes": [
         "关闭按钮",
         "签到成功文本",
@@ -538,7 +538,7 @@
     "签到页": {
       "name": "签到页检测模型",
       "page_type": "签到页",
-      "model_path": "runs/detect\\runs\\detect\\yolo_runs\\签到页_detector2\\weights\\best.pt",
+      "model_path": "runs/detect/yolo_runs/签到页_detector2/weights/best.pt",
       "classes": [
         "签到按钮",
         "签到次数"
@@ -563,7 +563,7 @@
     "温馨提示": {
       "name": "温馨提示检测模型",
       "page_type": "温馨提示",
-      "model_path": "runs/detect\\runs\\detect\\yolo_runs\\温馨提示_detector\\weights\\best.pt",
+      "model_path": "runs/detect/yolo_runs/温馨提示_detector/weights/best.pt",
       "classes": [
         "确认按钮"
       ],
@@ -587,7 +587,7 @@
     "首页": {
       "name": "首页检测模型",
       "page_type": "首页",
-      "model_path": "runs/detect\\runs\\detect\\yolo_runs\\首页_detector2\\weights\\best.pt",
+      "model_path": "runs/detect/yolo_runs/首页_detector2/weights/best.pt",
       "classes": [
         "我的按钮",
         "每日签到按钮"
@@ -664,7 +664,7 @@
     "checkin_20260131_000131": {
       "name": "签到页检测模型",
       "page_type": "签到页",
-      "model_path": "runs/detect/runs/detect/yolo_runs/签到页_detector/weights/best.pt",
+      "model_path": "runs/detect/yolo_runs/签到页_detector/weights/best.pt",
       "classes": [
         "签到按钮"
       ],
@@ -744,7 +744,7 @@
     "个人页广告_20260131_000131": {
       "name": "个人页广告检测模型",
       "page_type": "个人页广告",
-      "model_path": "runs/detect/runs/detect/yolo_runs/个人页广告_detector/weights/best.pt",
+      "model_path": "runs/detect/yolo_runs/个人页广告_detector/weights/best.pt",
       "classes": [
         "按钮"
       ],
@@ -770,7 +770,7 @@
     "category": {
       "name": "分类页检测模型",
       "page_type": "分类页",
-      "model_path": "runs/detect/runs/detect/yolo_runs/分类页_detector/weights/best.pt",
+      "model_path": "runs/detect/yolo_runs/分类页_detector/weights/best.pt",
       "classes": [
         "按钮"
       ],
@@ -796,7 +796,7 @@
     "search": {
       "name": "搜索页检测模型",
       "page_type": "搜索页",
-      "model_path": "runs/detect/runs/detect/yolo_runs/搜索页_detector/weights/best.pt",
+      "model_path": "runs/detect/yolo_runs/搜索页_detector/weights/best.pt",
       "classes": [
         "返回按钮"
       ],
@@ -822,7 +822,7 @@
     "article": {
       "name": "文章页检测模型",
       "page_type": "文章页",
-      "model_path": "runs/detect/runs/detect/yolo_runs/文章页_detector/weights/best.pt",
+      "model_path": "runs/detect/yolo_runs/文章页_detector/weights/best.pt",
       "classes": [
         "按钮"
       ],
@@ -848,7 +848,7 @@
     "warmtip_20260131_000131": {
       "name": "温馨提示检测模型",
       "page_type": "温馨提示",
-      "model_path": "runs/detect/runs/detect/yolo_runs/温馨提示_detector/weights/best.pt",
+      "model_path": "runs/detect/yolo_runs/温馨提示_detector/weights/best.pt",
       "classes": [
         "确认按钮"
       ],
@@ -874,7 +874,7 @@
     "points": {
       "name": "积分页检测模型",
       "page_type": "积分页",
-      "model_path": "runs/detect/runs/detect/yolo_runs/积分页_detector/weights/best.pt",
+      "model_path": "runs/detect/yolo_runs/积分页_detector/weights/best.pt",
       "classes": [
         "按钮"
       ],
@@ -900,7 +900,7 @@
     "签到成功弹窗_20260131_000131": {
       "name": "签到成功弹窗检测模型",
       "page_type": "签到成功弹窗",
-      "model_path": "runs/detect/runs/detect/yolo_runs/签到成功弹窗_detector/weights/best.pt",
+      "model_path": "runs/detect/yolo_runs/签到成功弹窗_detector/weights/best.pt",
       "classes": [
         "按钮"
       ],
@@ -926,7 +926,7 @@
     "签到成功弹窗_detector2": {
       "name": "签到成功弹窗_detector2检测模型",
       "page_type": "签到成功弹窗_detector2",
-      "model_path": "runs/detect/runs/detect/yolo_runs/签到成功弹窗_detector2/weights/best.pt",
+      "model_path": "runs/detect/yolo_runs/签到成功弹窗_detector2/weights/best.pt",
       "classes": [
         "按钮"
       ],
@@ -952,7 +952,7 @@
     "签到页_detector2": {
       "name": "签到页_detector2检测模型",
       "page_type": "签到页_detector2",
-      "model_path": "runs/detect/runs/detect/yolo_runs/签到页_detector2/weights/best.pt",
+      "model_path": "runs/detect/yolo_runs/签到页_detector2/weights/best.pt",
       "classes": [
         "按钮"
       ],
@@ -978,7 +978,7 @@
     "wallet": {
       "name": "钱包页检测模型",
       "page_type": "钱包页",
-      "model_path": "runs/detect/runs/detect/yolo_runs/钱包页_detector/weights/best.pt",
+      "model_path": "runs/detect/yolo_runs/钱包页_detector/weights/best.pt",
       "classes": [
         "余额数字",
         "转增按钮"
@@ -1005,7 +1005,7 @@
     "home_20260131_000131": {
       "name": "首页检测模型",
       "page_type": "首页",
-      "model_path": "runs/detect/runs/detect/yolo_runs/首页_detector/weights/best.pt",
+      "model_path": "runs/detect/yolo_runs/首页_detector/weights/best.pt",
       "classes": [
         "我的按钮",
         "签到按钮"
@@ -1032,7 +1032,7 @@
     "首页_detector2": {
       "name": "首页_detector2检测模型",
       "page_type": "首页_detector2",
-      "model_path": "runs/detect/runs/detect/yolo_runs/首页_detector2/weights/best.pt",
+      "model_path": "runs/detect/yolo_runs/首页_detector2/weights/best.pt",
       "classes": [
         "按钮"
       ],
@@ -1058,7 +1058,7 @@
     "首页公告_20260131_000131": {
       "name": "首页公告检测模型",
       "page_type": "首页公告",
-      "model_path": "runs/detect/runs/detect/yolo_runs/首页公告_detector/weights/best.pt",
+      "model_path": "runs/detect/yolo_runs/首页公告_detector/weights/best.pt",
       "classes": [
         "按钮"
       ],
@@ -1084,7 +1084,7 @@
     "首页异常代码弹窗_20260131_000131": {
       "name": "首页异常代码弹窗检测模型",
       "page_type": "首页异常代码弹窗",
-      "model_path": "runs/detect/runs/detect/yolo_runs/首页异常代码弹窗_detector/weights/best.pt",
+      "model_path": "runs/detect/yolo_runs/首页异常代码弹窗_detector/weights/best.pt",
       "classes": [
         "按钮"
       ],
