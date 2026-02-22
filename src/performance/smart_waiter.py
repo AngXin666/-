@@ -113,12 +113,10 @@ class SmartWaiter:
         
         # 检测器类型
         detector_type = type(detector).__name__
-        self._debug_logger.debug(f"[SmartWaiter] 检测器类型: {detector_type}")
         
         # 清除缓存，确保第一次检测就是最新状态
         if detector_type == 'PageDetectorIntegrated' and hasattr(detector, '_detection_cache'):
             detector._detection_cache.clear(device_id)
-            self._debug_logger.debug(f"[SmartWaiter] 已清除检测缓存")
         
         while asyncio.get_event_loop().time() - start_time < max_wait:
             total_checks += 1
@@ -137,22 +135,11 @@ class SmartWaiter:
             current_state = result.state
             current_confidence = result.confidence
             
-            # 调试日志
-            self._debug_logger.debug(
-                f"[SmartWaiter] 检测 #{total_checks}: {current_state.value} (置信度{current_confidence:.2%})"
-            )
-            
             # 检测到状态变化
             if current_state != last_state:
                 state_changes += 1
                 if log_callback and last_state is not None:
                     log_callback(f"页面变化: {last_state.value} → {current_state.value}")
-                    
-                    elapsed = asyncio.get_event_loop().time() - start_time
-                    self._debug_logger.debug(
-                        f"[SmartWaiter] 页面变化: {last_state.value} → {current_state.value} "
-                        f"(耗时{elapsed:.2f}秒, 置信度{current_confidence:.2%})"
-                    )
                 
                 # 重置稳定性计数
                 same_state_count = 1
@@ -174,31 +161,16 @@ class SmartWaiter:
                         if log_callback:
                             log_callback(f"✓ 页面稳定在 {current_state.value}，耗时{elapsed:.2f}秒")
                         
-                        self._debug_logger.debug(
-                            f"[SmartWaiter] ✓ 页面稳定在 {current_state.value} "
-                            f"(连续{same_state_count}次, 置信度{current_confidence:.2%}, 耗时{elapsed:.2f}秒)"
-                        )
-                        self._debug_logger.debug(
-                            f"[SmartWaiter] 统计: 总检测{total_checks}次, 状态变化{state_changes}次"
-                        )
                         return result
                     else:
                         if log_callback:
                             log_callback(f"确认中: {current_state.value}（{same_state_count}/{stability_count}次）")
-                        
-                        self._debug_logger.debug(
-                            f"[SmartWaiter] 确认中: {current_state.value} "
-                            f"({same_state_count}/{stability_count}次, 置信度{current_confidence:.2%})"
-                        )
                 else:
                     # 不需要稳定性检测，直接返回
                     elapsed = asyncio.get_event_loop().time() - start_time
                     if log_callback:
                         log_callback(f"✓ 检测到 {current_state.value}，耗时{elapsed:.2f}秒")
                     
-                    self._debug_logger.debug(
-                        f"[SmartWaiter] 统计: 总检测{total_checks}次, 状态变化{state_changes}次"
-                    )
                     return result
             
             # 如果是loading状态且ignore_loading=True
@@ -207,12 +179,6 @@ class SmartWaiter:
                 if log_callback and total_checks % 5 == 1:
                     elapsed = asyncio.get_event_loop().time() - start_time
                     log_callback(f"页面加载中...（{elapsed:.0f}秒）")
-                
-                if total_checks % 3 == 1:
-                    elapsed = asyncio.get_event_loop().time() - start_time
-                    self._debug_logger.debug(
-                        f"[SmartWaiter] 页面加载中 (已等待{elapsed:.1f}秒, 检测{total_checks}次)"
-                    )
             
             # 继续轮询
             await asyncio.sleep(poll_interval)
@@ -221,15 +187,6 @@ class SmartWaiter:
         elapsed = asyncio.get_event_loop().time() - start_time
         if log_callback:
             log_callback(f"⚠️ 等待超时（{elapsed:.1f}秒）")
-        
-        self._debug_logger.warning(f"[SmartWaiter] ⚠️ 超时保护触发 (耗时{elapsed:.1f}秒)")
-        self._debug_logger.warning(
-            f"[SmartWaiter] 统计: 总检测{total_checks}次, 状态变化{state_changes}次"
-        )
-        if last_state:
-            self._debug_logger.warning(
-                f"[SmartWaiter] 最后状态: {last_state.value} (置信度{last_confidence:.2%})"
-            )
         
         return None
     
@@ -262,8 +219,6 @@ class SmartWaiter:
         hash_changes = 0
         dl_checks = 0
         
-        self._debug_logger.debug(f"[SmartWaiter] 混合检测模式启动")
-        
         while asyncio.get_event_loop().time() - start_time < max_wait:
             total_checks += 1
             
@@ -285,10 +240,6 @@ class SmartWaiter:
                     if log_callback:
                         log_callback(f"检测到页面变化（距离:{distance}）")
                     
-                    self._debug_logger.debug(
-                        f"[SmartWaiter] 感知哈希检测到变化 #{hash_changes} (距离:{distance})"
-                    )
-                    
                     # 变化时用深度学习识别页面类型
                     dl_checks += 1
                     detector_type = type(detector).__name__
@@ -301,19 +252,12 @@ class SmartWaiter:
                     if result and result.state:
                         current_state = result.state
                         
-                        self._debug_logger.debug(
-                            f"[SmartWaiter] 深度学习识别: {current_state.value} (置信度{result.confidence:.2%})"
-                        )
-                        
                         # 检查是否是期望状态
                         if current_state in expected_states:
                             elapsed = asyncio.get_event_loop().time() - start_time
                             if log_callback:
                                 log_callback(f"✓ 检测到 {current_state.value}，耗时{elapsed:.2f}秒")
                             
-                            self._debug_logger.debug(
-                                f"[SmartWaiter] 统计: 总检测{total_checks}次, 哈希变化{hash_changes}次, 深度学习{dl_checks}次"
-                            )
                             return result
             
             # 继续轮询
@@ -323,11 +267,6 @@ class SmartWaiter:
         elapsed = asyncio.get_event_loop().time() - start_time
         if log_callback:
             log_callback(f"⚠️ 等待超时（{elapsed:.1f}秒）")
-        
-        self._debug_logger.warning(f"[SmartWaiter] ⚠️ 混合检测超时 (耗时{elapsed:.1f}秒)")
-        self._debug_logger.warning(
-            f"[SmartWaiter] 统计: 总检测{total_checks}次, 哈希变化{hash_changes}次, 深度学习{dl_checks}次"
-        )
         
         return None
     
@@ -353,8 +292,6 @@ class SmartWaiter:
         total_checks = 0
         changes = 0
         
-        self._debug_logger.debug(f"[SmartWaiter] 快速检测模式启动")
-        
         while asyncio.get_event_loop().time() - start_time < max_wait:
             total_checks += 1
             
@@ -375,10 +312,6 @@ class SmartWaiter:
                     changes += 1
                     if log_callback:
                         log_callback(f"检测到变化 #{changes}（距离:{distance}）")
-                    
-                    self._debug_logger.debug(
-                        f"[SmartWaiter] 快速检测到变化 #{changes} (距离:{distance})"
-                    )
             
             await asyncio.sleep(poll_interval)
         
@@ -386,10 +319,6 @@ class SmartWaiter:
         elapsed = asyncio.get_event_loop().time() - start_time
         if log_callback:
             log_callback(f"快速检测完成，共检测到{changes}次变化")
-        
-        self._debug_logger.debug(
-            f"[SmartWaiter] 快速检测完成: 总检测{total_checks}次, 变化{changes}次"
-        )
         
         return None
     

@@ -1580,8 +1580,7 @@ class XimengAutomation:
             # await asyncio.sleep(1)  # 已移除
             
             # 调试日志：确认执行到这里
-            file_logger.info("[调试] 签到流程结束，准备执行步骤4")
-            concise.action("[调试] 准备执行步骤4")
+            file_logger.info("签到流程结束，准备执行步骤4")
             
             # ==================== 步骤4: 设置最终余额 ====================
             # 注意：此处不再提前设置 balance_after
@@ -1597,13 +1596,13 @@ class XimengAutomation:
                 file_logger.info("原因: 流程控制已禁用签到，无需获取最终余额")
                 file_logger.info("="*60)
                 
-                file_logger.info(f"[调试] 只登录模式 - balance_before = {result.balance_before}")
+                file_logger.info(f"只登录模式 - balance_before = {result.balance_before}")
                 if result.balance_before is not None:
                     result.balance_after = result.balance_before
                     file_logger.info(f"使用初始余额作为最终余额: {result.balance_after:.2f} 元")
                     concise.success(f"最终余额: {result.balance_after:.2f}元（使用登录数据）")
                 else:
-                    file_logger.warning("[调试] balance_before 为 None，无法设置 balance_after")
+                    file_logger.warning("balance_before 为 None，无法设置 balance_after")
                     concise.error("未获取到余额")
             
             # 显示执行总结（仅文件日志）
@@ -1619,8 +1618,7 @@ class XimengAutomation:
             file_logger.info("="*60)
             
             # 调试日志：确认执行到这里
-            file_logger.info("[调试] 步骤4完成，准备执行步骤5")
-            concise.action("[调试] 准备执行步骤5")
+            file_logger.info("步骤4完成，准备执行步骤5")
             
             # ==================== 步骤5: 自动转账（每次处理账号时重新读取配置）====================
             step_number += 1

@@ -1817,7 +1817,7 @@
     "签到页_detector2_20260222_192507": {
       "name": "签到页_detector2检测模型",
       "page_type": "签到页_detector2",
-      "model_path": "runs/detect/runs/detect/yolo_runs/签到页_detector2/weights/best.pt",
+      "model_path": "runs/detect/yolo_runs/签到页_detector2/weights/best.pt",
       "classes": [
         "按钮"
       ],
@@ -1997,6 +1997,32 @@
       "file_hash": "fc59c3b2fa12f82c",
       "auto_registered": true,
       "notes": "自动注册于 2026-02-22 19:25:07"
+    },
+    "签到页_detector2_20260222_192812": {
+      "name": "签到页_detector2检测模型",
+      "page_type": "签到页_detector2",
+      "model_path": "runs/detect/runs/detect/yolo_runs/签到页_detector2/weights/best.pt",
+      "classes": [
+        "按钮"
+      ],
+      "num_classes": 1,
+      "performance": {
+        "mAP50": 0.0,
+        "precision": 0.0,
+        "recall": 0.0,
+        "mAP50-95": 0.0
+      },
+      "training_date": "2026-02-22",
+      "dataset_size": {
+        "original": 0,
+        "augmented": 0,
+        "train": 0,
+        "val": 0
+      },
+      "file_size_mb": 5.95,
+      "file_hash": "9c1a0613ae9acec7",
+      "auto_registered": true,
+      "notes": "自动注册于 2026-02-22 19:28:12"
     }
   },
   "usage": {

@@ -511,6 +511,13 @@ class DailyCheckin:
         from .logger import get_logger
         logger = get_logger()
         
+        # [2026-02-22] 添加调试日志：确认do_checkin方法被调用
+        logger.info("="*60)
+        logger.info("[调试] do_checkin 方法已被调用")
+        logger.info(f"[调试] 参数: device_id={device_id}, phone={phone}")
+        logger.info(f"[调试] allow_skip_profile={allow_skip_profile}")
+        logger.info("="*60)
+        
         # 创建简洁日志记录器
         from .concise_logger import ConciseLogger
         concise = ConciseLogger("daily_checkin", gui_logger, logger)
@@ -810,8 +817,31 @@ class DailyCheckin:
             if page_enter_screenshot:
                 result['screenshots'].append(page_enter_screenshot)
             
-            # 6.2 检查是否到达登录页（缓存失效）
+            # 6.2 智能等待识别到页面后，立即用深度学习检测页面类型
+            
+            # ==================== 调试日志：检查页面检测结果 ====================
+            log(f"  [调试] page_result 检查:")
+            log(f"    - page_result 是否为 None: {page_result is None}")
+            if page_result:
+                log(f"    - page_result.state: {page_result.state}")
+                log(f"    - page_result.state.value: {page_result.state.value}")
+                log(f"    - page_result.confidence: {page_result.confidence:.2%}")
+                log(f"    - 是否是登录页: {page_result.state == PageState.LOGIN}")
+            else:
+                log(f"    - page_result 为 None，无法检测页面状态")
+            
+            # 检查登录回调和密码
+            log(f"  [调试] 登录参数检查:")
+            log(f"    - login_callback 是否提供: {login_callback is not None}")
+            log(f"    - password 是否提供: {password is not None}")
+            if password:
+                log(f"    - password 长度: {len(password)}")
+            # ==================== 调试日志结束 ====================
+            
+            # 检查是否到达登录页（缓存失效）
             if page_result and page_result.state == PageState.LOGIN:
+                log(f"  [签到] ⚠️ 检测到登录页，缓存已失效，需要登录")
+                log(f"  [调试] 进入登录处理分支")
                 concise.action("缓存失效，执行登录")
                 
                 # 如果提供了登录回调，直接执行登录
@@ -1201,6 +1231,7 @@ class DailyCheckin:
                         log(f"  [签到 {attempt + 1}] 剩余次数: {remaining_times if remaining_times is not None else '未知'}，继续签到...")
                 
                 # 5.4 执行签到（每次都重新检测按钮位置，不使用缓存）
+                log(f"  [签到 {attempt + 1}] 使用智能检测器检测签到按钮...")
                 checkin_button = None
                 try:
                     detection_result = await self._detect_page_cached(
@@ -1215,18 +1246,18 @@ class DailyCheckin:
                         for element in detection_result.elements:
                             if '签到按钮' in element.class_name or '签到' in element.class_name:
                                 checkin_button = element.center
+                                log(f"  [签到 {attempt + 1}] 智能检测器检测到签到按钮: {checkin_button} (置信度: {element.confidence:.2%})")
                                 break
                     
                     if checkin_button is None:
-                        # 智能检测器未检测到按钮，使用默认坐标
-                        pass
+                        log(f"  [签到 {attempt + 1}] 智能检测器未检测到按钮，使用默认坐标...")
                 except Exception as e:
-                    # 智能检测器检测失败，使用默认坐标
-                    pass
+                    log(f"  [签到 {attempt + 1}] 智能检测器检测失败: {e}，使用默认坐标...")
                 
                 # 如果智能检测器失败，使用默认签到按钮坐标
                 if checkin_button is None:
                     checkin_button = (270, 800)
+                    log(f"  [签到 {attempt + 1}] 使用默认坐标: {checkin_button}")
                 
                 x, y = checkin_button
                 
@@ -1941,6 +1972,8 @@ class DailyCheckin:
 
         # 步骤1: 尝试使用智能检测器（YOLO）
         try:
+            logger.info(f"  [签到] 降级方案：使用智能检测器检测'每日签到'按钮...")
+
             # 使用智能检测器的元素检测功能
             detection_result = await self._detect_page_cached(
                 device_id,
@@ -1956,9 +1989,15 @@ class DailyCheckin:
                     if '每日签到' in element.class_name or '签到按钮' in element.class_name:
                         detected_position = element.center
                         detection_confidence = element.confidence
+                        logger.info(f"  [签到] 智能检测器检测到'{element.class_name}': {detected_position} (置信度: {detection_confidence:.2%})")
                         break
+
+                if detected_position is None:
+                    logger.info(f"  [签到] 智能检测器未检测到签到按钮")
+            else:
+                logger.info(f"  [签到] 智能检测器未检测到元素")
         except Exception as e:
-            pass
+            logger.info(f"  [签到] 智能检测器检测失败: {e}")
 
         # 步骤2: 坐标合理性验证
         if detected_position:

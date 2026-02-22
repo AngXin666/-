@@ -892,15 +892,6 @@ class AutomationGUI:
             
             # ===== 步骤4: 清空表格并重新填充 =====
             
-            # [2026-02-22] 修复：清空表格前先保存勾选状态（按手机号保存）
-            old_selections = {}
-            for item_id in self.results_tree.get_children():
-                values = self.results_tree.item(item_id, 'values')
-                if values and len(values) > 0:
-                    phone = values[0]  # 第一列是手机号
-                    checked = self.checked_items.get(item_id, False)
-                    old_selections[phone] = checked
-            
             # 清空现有表格
             all_items = self.results_tree.get_children()
             for item in all_items:
@@ -1056,20 +1047,14 @@ class AutomationGUI:
                 self._log(f"✅ 已加载 {total} 个账号")
             
             # ===== 步骤8: 恢复勾选状态 =====
-            # [2026-02-22] 修复：优先使用刚才保存的勾选状态，如果没有则从配置文件加载
             saved_selections = self.selection_manager.load_selections()
-            # 合并两个来源的勾选状态：old_selections（刚才保存的）优先级更高
-            if old_selections:
-                for phone, checked in old_selections.items():
-                    saved_selections[phone] = checked
-            
             if saved_selections:
                 restored_selection_count = 0
                 for item_id in self.results_tree.get_children():
                     values = self.results_tree.item(item_id, 'values')
                     if values and len(values) > 0:
                         phone = values[0]
-                        # 如果有该账号的勾选状态，恢复它
+                        # 如果配置文件中有该账号的状态，恢复它
                         if phone in saved_selections:
                             checked = saved_selections[phone]
                             self.checked_items[item_id] = checked
@@ -2852,7 +2837,9 @@ class AutomationGUI:
         # 为每个实例创建专属处理线程（从共享队列获取账号）
         def process_instance_accounts(instance_id):
             """处理账号（从共享队列动态获取）"""
-            # [2026-02-22] 删除调试日志
+            # [2026-02-22] 调试：线程入口日志
+            print(f"[调试] process_instance_accounts 线程已启动: instance_id={instance_id}")
+            self.root.after(0, lambda i=instance_id: self._log(f"[调试] 实例 {i} 线程函数开始执行"))
             
             # 为该实例创建独立的日志文件
             import os
@@ -2898,11 +2885,14 @@ class AutomationGUI:
                     pass  # 静默失败，不影响主流程
             
             # 持续从队列获取账号处理
+            instance_log_callback(f"[调试] 开始从队列获取账号")
             while True:
                 # [2026-02-22] 修改：只在获取账号前检查停止标志,处理中的账号会完成
                 # 从队列获取账号（非阻塞，超时1秒）
                 try:
+                    instance_log_callback(f"[调试] 尝试从队列获取账号...")
                     account_index, account = account_queue.get(timeout=1)
+                    instance_log_callback(f"[调试] 成功获取账号: {account.phone}")
                 except queue.Empty:
                     # 队列为空，检查是否所有账号都处理完了
                     if account_queue.empty():
@@ -3099,8 +3089,14 @@ class AutomationGUI:
             # 实例处理完成
             instance_log_callback(f"实例 {instance_id} 已完成所有任务")
         
+        # [2026-02-22] 调试：添加线程启动日志
+        self.root.after(0, lambda: self._log(f"[调试] 准备启动 {len(self.instance_pool)} 个实例线程"))
+        self.root.after(0, lambda: self._log(f"[调试] 实例池: {self.instance_pool}"))
+        self.root.after(0, lambda: self._log(f"[调试] 队列中账号数: {account_queue.qsize()}"))
+        
         # 启动所有实例的处理线程
         for inst_id in self.instance_pool:
+            self.root.after(0, lambda i=inst_id: self._log(f"[调试] 启动实例 {i} 的处理线程"))
             thread = threading.Thread(
                 target=process_instance_accounts,
                 args=(inst_id,),
@@ -3109,6 +3105,7 @@ class AutomationGUI:
             )
             thread.start()
             instance_threads.append(thread)
+            self.root.after(0, lambda i=inst_id, t=thread: self._log(f"[调试] 实例 {i} 线程已启动: {t.name}, is_alive={t.is_alive()}"))
         
         # 等待所有线程完成
         self.root.after(0, lambda: self._log(f"等待 {len(instance_threads)} 个实例线程完成..."))
@@ -3117,12 +3114,13 @@ class AutomationGUI:
         max_wait_time = 30  # 最多等待30秒
         for thread in instance_threads:
             thread.join(timeout=max_wait_time)
-            # [2026-02-22] 删除超时日志：不需要显示给用户
+            if thread.is_alive():
+                self.root.after(0, lambda t=thread: self._log(f"⚠️ 线程 {t.name} 超时未结束"))
         
         # 检查是否所有线程都已结束
         alive_threads = [t for t in instance_threads if t.is_alive()]
         if alive_threads:
-            pass  # [2026-02-22] 删除警告日志：静默处理
+            self.root.after(0, lambda c=len(alive_threads): self._log(f"⚠️ 仍有 {c} 个线程未结束,但继续执行清理"))
         else:
             self.root.after(0, lambda: self._log("✓ 所有实例线程已完成"))
         
@@ -3503,7 +3501,10 @@ class AutomationGUI:
                 'enable_transfer': getattr(self.config, 'workflow_enable_transfer', True),
             }
             
-            # [2026-02-22] 删除调试日志
+            # [2026-02-22] 调试：输出工作流配置
+            log_callback(f"[调试] workflow_config = {workflow_config}")
+            log_callback(f"[调试] has_valid_cache = {has_valid_cache}")
+            log_callback(f"[调试] 准备调用 run_full_workflow")
             
             if has_valid_cache:
                 # 使用缓存登录

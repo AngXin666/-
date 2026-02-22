@@ -192,8 +192,7 @@ class ProfileReader:
             # 优先使用智能检测器（与get_balance相同的策略）
             use_yolo_fallback = True
             
-            self._silent_log.log(f"  [调试] _get_dynamic_data_only 开始执行")
-            self._silent_log.log(f"  [调试] _integrated_detector 是否存在: {self._integrated_detector is not None}")
+            # [2026-02-22] 删除调试日志
             
             # [2026-02-21] 删除学习器：移除 OCRRegionLearner
             
@@ -422,12 +421,11 @@ class ProfileReader:
             
             # 最后降级：使用区域OCR
             if result['balance'] is None or result['points'] is None or result['vouchers'] is None or result['coupons'] is None:
-                self._silent_log.log(f"  [调试] 进入区域OCR降级方案")
-                self._silent_log.log(f"  [调试] 当前状态 - balance: {result['balance']}, points: {result['points']}, vouchers: {result['vouchers']}, coupons: {result['coupons']}")
+                # [2026-02-22] 删除调试日志
                 
                 region_results = await self._recognize_regions(device_id, image)
                 
-                self._silent_log.log(f"  [调试] 区域OCR结果 - balance: {region_results.get('balance')}, points: {region_results.get('points')}, vouchers: {region_results.get('vouchers')}, coupons: {region_results.get('coupons')}")
+                # [2026-02-22] 删除调试日志
                 
                 if result['balance'] is None and region_results.get('balance') is not None:
                     result['balance'] = region_results['balance']
@@ -445,8 +443,7 @@ class ProfileReader:
                     result['coupons'] = region_results['coupons']
                     self._silent_log.log(f"  [区域OCR] 优惠券: {result['coupons']}")
             
-            self._silent_log.log(f"  [调试] _get_dynamic_data_only 最终返回:")
-            self._silent_log.log(f"  [调试] balance: {result['balance']}, points: {result['points']}, vouchers: {result['vouchers']}, coupons: {result['coupons']}")
+            # [2026-02-22] 删除调试日志
             self._silent_log.log(f"  [_get_dynamic_data_only] ========== 执行完成 ==========")
             
             return result
@@ -780,7 +777,7 @@ class ProfileReader:
                 
                 yolo_start = time.time()
                 print(f"  [智能检测器] 开始检测页面元素...")
-                print(f"  [调试] 页面类型: {page_result.state.chinese_name}")
+                # [2026-02-22] 删除调试日志
                 
                 # 使用智能检测器的detect_page方法，启用元素检测
                 detection_result = await self._integrated_detector.detect_page(
@@ -792,14 +789,14 @@ class ProfileReader:
                 yolo_time = time.time() - yolo_start
                 print(f"  [性能] 智能检测器耗时: {yolo_time:.3f}秒")
                 print(f"  [智能检测器] 检测到 {len(detection_result.elements)} 个元素")
-                print(f"  [调试] 使用的YOLO模型: {detection_result.yolo_model_used}")
+                # [2026-02-22] 删除调试日志
                 
                 # 打印检测到的元素详情
                 if detection_result.elements:
                     for elem in detection_result.elements:
-                        print(f"  [调试] 元素: {elem.class_name}, 置信度: {elem.confidence:.2f}")
+                        pass  # [2026-02-22] 删除调试日志
                 else:
-                    print(f"  [调试] ⚠️ 未检测到任何元素！")
+                    pass  # [2026-02-22] 删除调试日志
                 
                 # ===== 优化：全屏OCR一次，然后根据YOLO位置匹配文本 =====
                 if detection_result.elements:
@@ -1482,7 +1479,7 @@ class ProfileReader:
                 profile = await self.get_full_profile(device_id, account=account, gui_logger=gui_logger, step_number=step_number)
                 
                 # 静默记录OCR识别到的原始数据
-                self._silent_log.log(f"[调试] OCR识别结果:")
+                # [2026-02-22] 删除调试日志
                 self._silent_log.log(f"  - nickname: {profile.get('nickname')}")
                 self._silent_log.log(f"  - user_id: {profile.get('user_id')}")
                 self._silent_log.log(f"  - phone: {profile.get('phone')}")

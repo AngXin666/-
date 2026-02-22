@@ -83,7 +83,10 @@ class PageDetectorIntegrated:
             state_mapping_path: 页面状态映射配置路径
             log_callback: 日志回调函数
         """
-        # [2026-02-22] 删除初始化日志：不需要在客户端显示
+        # 强制输出，确保能看到初始化过程
+        import sys
+        print("[智能检测器] __init__ 开始初始化...")
+        sys.stdout.flush()
         
         # 【优化】移除PyTorch线程限制，让PyTorch自动管理线程
         # 检测器是单例，多个账号共享同一个实例，不需要限制线程数
@@ -91,7 +94,10 @@ class PageDetectorIntegrated:
         
         self.adb = adb
         self._log_callback = log_callback
-        self._verbose = False  # [2026-02-22] 禁用详细日志
+        self._verbose = True  # [2026-02-21] 临时启用详细日志，调试YOLO模型加载
+        
+        print("[智能检测器] 初始化成员变量...")
+        sys.stdout.flush()
         
         # 页面分类器相关
         self._classifier_model = None
@@ -113,11 +119,23 @@ class PageDetectorIntegrated:
         from .performance.detection_cache import DetectionCache
         self._detection_cache = DetectionCache(ttl=0.5)  # 缓存0.5秒，足够快速检测页面变化
         
+        print("[智能检测器] 开始加载配置和模型...")
+        sys.stdout.flush()
+        
         # 加载配置和模型
         self._load_state_mapping(state_mapping_path)  # 先加载状态映射
+        print("[智能检测器] 状态映射加载完成，开始加载分类器...")
+        sys.stdout.flush()
+        
         self._load_classifier(classifier_model_path, classes_path)
+        print("[智能检测器] 分类器加载完成，开始加载YOLO注册表...")
+        sys.stdout.flush()
+        
         self._load_yolo_registry(yolo_registry_path)
         self._load_mapping(mapping_path)
+        
+        print(f"[智能检测器] __init__ 完成 (model={self._classifier_model is not None}, classes={self._classes is not None})")
+        sys.stdout.flush()
     
     def _log(self, msg: str, level: str = "debug"):
         """输出日志
@@ -191,10 +209,10 @@ class PageDetectorIntegrated:
                         if state_obj:
                             self._class_to_state[class_name] = state_obj
             
-            print(f"✓ 已加载 {len(self._class_to_state)} 个页面状态映射")
+            print(f"[智能检测器] ✓ 已加载 {len(self._class_to_state)} 个页面状态映射")
             
         except Exception as e:
-            print(f"✗ 加载状态映射失败: {e}")
+            print(f"[智能检测器] ✗ 加载状态映射失败: {e}")
             # 使用默认映射
             self._class_to_state = {}
     
@@ -204,12 +222,26 @@ class PageDetectorIntegrated:
         model_path = str(model_path)
         classes_path = str(classes_path)
         
-        # [2026-02-22] 删除所有初始化日志
+        # 强制输出到文件，确保能看到
+        import sys
+        sys.stdout.flush()
+        sys.stderr.flush()
+        
+        print("[智能检测器] 开始加载页面分类器...")
+        sys.stdout.flush()
         
         if not HAS_TORCH or not HAS_PIL:
+            # 关键错误，强制输出
+            msg = "[智能检测器] ✗ PyTorch或PIL未安装"
+            print(msg)
+            sys.stdout.flush()
+            sys.stderr.write(msg + "\n")
+            sys.stderr.flush()
             return
         
         try:
+            print("[智能检测器] 开始加载类别列表...")
+            sys.stdout.flush()
             
             # 加载类别列表（尝试在models目录查找）
             if not os.path.exists(classes_path):
@@ -217,23 +249,48 @@ class PageDetectorIntegrated:
                 if os.path.exists(alt_classes_path):
                     classes_path = alt_classes_path
                 else:
+                    # 关键错误，强制输出
+                    msg = f"[智能检测器] ✗ 类别文件不存在: {classes_path}"
+                    print(msg)
+                    sys.stdout.flush()
+                    sys.stderr.write(msg + "\n")
+                    sys.stderr.flush()
                     return
             
             with open(classes_path, 'r', encoding='utf-8') as f:
                 self._classes = json.load(f)
             
+            print(f"[智能检测器] ✓ 类别列表已加载: {len(self._classes)} 个类别")
+            sys.stdout.flush()
+            
             # 加载模型（尝试在models目录查找）
+            print(f"[智能检测器] 开始加载模型文件: {model_path}")
+            sys.stdout.flush()
+            
             if not os.path.exists(model_path):
                 alt_model_path = os.path.join('models', model_path)
                 if os.path.exists(alt_model_path):
                     model_path = alt_model_path
                 else:
+                    # 关键错误，强制输出
+                    msg = f"[智能检测器] ✗ 模型文件不存在: {model_path}"
+                    print(msg)
+                    sys.stdout.flush()
+                    sys.stderr.write(msg + "\n")
+                    sys.stderr.flush()
                     return
             
             # 设置设备
+            print("[智能检测器] 检测计算设备...")
+            sys.stdout.flush()
             self._device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            print(f"[智能检测器] 使用设备: {self._device}")
+            sys.stdout.flush()
             
             # 定义模型架构
+            print("[智能检测器] 定义模型架构...")
+            sys.stdout.flush()
+            
             class PageClassifier(nn.Module):
                 def __init__(self, num_classes):
                     super(PageClassifier, self).__init__()
@@ -254,18 +311,26 @@ class PageDetectorIntegrated:
             
             # 创建并加载模型
             num_classes = len(self._classes)
+            print(f"[智能检测器] 创建模型实例 ({num_classes} 个类别)...")
+            sys.stdout.flush()
             model = PageClassifier(num_classes)
             
+            print("[智能检测器] 加载模型权重...")
+            sys.stdout.flush()
             checkpoint = torch.load(model_path, map_location=self._device)
             if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
                 model.load_state_dict(checkpoint['model_state_dict'])
             else:
                 model.load_state_dict(checkpoint)
             
+            print("[智能检测器] 将模型移至设备...")
+            sys.stdout.flush()
             model = model.to(self._device)
             model.eval()
             self._classifier_model = model
             
+            print("[智能检测器] 设置图片预处理...")
+            sys.stdout.flush()
             # 设置图片预处理
             self._transform = transforms.Compose([
                 transforms.Resize(self._img_size),
@@ -273,7 +338,20 @@ class PageDetectorIntegrated:
                 transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
             ])
             
+            self._log(f"[智能检测器] ✓ 页面分类器已加载 (设备: {self._device})")
+            
         except Exception as e:
+            # 关键错误，强制输出
+            import sys
+            msg = f"[智能检测器] ✗ 加载页面分类器失败: {e}"
+            print(msg)
+            sys.stdout.flush()
+            sys.stderr.write(msg + "\n")
+            sys.stderr.flush()
+            
+            import traceback
+            traceback.print_exc()
+            sys.stderr.flush()
             
             self._classifier_model = None
     
@@ -294,35 +372,54 @@ class PageDetectorIntegrated:
                 data = json.load(f)
                 self._yolo_registry = data.get('models', {})
             
+            self._log(f"[智能检测器] ✓ YOLO注册表已加载 ({len(self._yolo_registry)} 个模型)")
+            
         except Exception as e:
-            pass
+            self._log(f"[智能检测器] ✗ 加载YOLO注册表失败: {e}")
     
     def _load_mapping(self, mapping_path: str):
         """加载页面-YOLO映射配置"""
         try:
-            # [2026-02-22] 删除调试日志
+            # [2026-02-21] 调试：强制输出，确保能看到
+            print(f"[智能检测器] 开始加载映射配置: {mapping_path}")
+            import sys
+            sys.stdout.flush()
             
             # 如果路径不是绝对路径，尝试在多个目录中查找
             if not os.path.isabs(mapping_path) and not os.path.exists(mapping_path):
                 # 尝试在config目录中查找
                 config_mapping_path = os.path.join('config', mapping_path)
+                print(f"[智能检测器] 尝试config目录: {config_mapping_path}, 存在={os.path.exists(config_mapping_path)}")
+                sys.stdout.flush()
                 if os.path.exists(config_mapping_path):
                     mapping_path = config_mapping_path
                 else:
                     # 尝试在models目录中查找
                     models_mapping_path = os.path.join('models', mapping_path)
+                    print(f"[智能检测器] 尝试models目录: {models_mapping_path}, 存在={os.path.exists(models_mapping_path)}")
+                    sys.stdout.flush()
                     if os.path.exists(models_mapping_path):
                         mapping_path = models_mapping_path
             
+            print(f"[智能检测器] 最终路径: {mapping_path}, 存在={os.path.exists(mapping_path)}")
+            sys.stdout.flush()
+            
             if not os.path.exists(mapping_path):
+                print(f"[智能检测器] ✗ 映射配置不存在: {mapping_path}")
+                sys.stdout.flush()
+                self._log(f"[智能检测器] ✗ 映射配置不存在: {mapping_path}")
                 return
             
             with open(mapping_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 self._page_yolo_mapping = data.get('mapping', {})
             
+            print(f"[智能检测器] ✓ 页面-YOLO映射已加载 ({len(self._page_yolo_mapping)} 个页面)")
+            sys.stdout.flush()
+            self._log(f"[智能检测器] ✓ 页面-YOLO映射已加载 ({len(self._page_yolo_mapping)} 个页面)")
+            
         except Exception as e:
-            pass
+            self._log(f"[智能检测器] ✗ 加载映射配置失败: {e}")
     
     def _load_yolo_model(self, model_key: str) -> Optional[YOLO]:
         """加载YOLO模型（带缓存）
@@ -360,16 +457,23 @@ class PageDetectorIntegrated:
                 model_path = models_path
             # 如果models/路径不存在，尝试原路径（兼容旧版本）
             elif not os.path.exists(model_path):
-                # [2026-02-22] 删除警告日志：文件不存在时静默降级
+                # [2026-02-21] 降级：文件不存在时只记录警告，不影响页面分类
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"YOLO模型文件不存在: {model_path} (也尝试了 {models_path})，将使用OCR降级方案"
+                )
                 return None
         
         if not os.path.exists(model_path):
-            # [2026-02-22] 删除警告日志：文件不存在时静默降级
+            # [2026-02-21] 降级：文件不存在时只记录警告，不影响页面分类
+            import logging
+            logging.getLogger(__name__).warning(f"YOLO模型文件不存在: {model_path}，将使用OCR降级方案")
             return None
         
         try:
             model = YOLO(model_path)
             self._yolo_models[model_key] = model
+            self._log(f"[智能检测器] ✓ YOLO模型已加载: {model_key} ({model_path})")
             return model
         except Exception as e:
             # [2026-02-21] 降级：加载失败时只记录警告，不影响页面分类
@@ -416,6 +520,7 @@ class PageDetectorIntegrated:
             return class_name, confidence_value
             
         except Exception as e:
+            self._log(f"[智能检测器] ✗ 页面分类失败: {e}")
             return None, 0.0
     
     async def _ocr_assisted_detection(self, device_id: str, image: Image.Image, 
@@ -500,6 +605,7 @@ class PageDetectorIntegrated:
             return None
             
         except Exception as e:
+            self._log(f"[智能检测器] ✗ OCR辅助判断失败: {e}")
             return None
     
     def _detect_elements(self, image: Image.Image, page_class: str) -> List[PageElement]:
@@ -553,6 +659,7 @@ class PageDetectorIntegrated:
                         elements.append(element)
                 
             except Exception as e:
+                self._log(f"[智能检测器] ✗ YOLO检测失败 {model_key}: {e}")
                 import traceback
                 traceback.print_exc()
         
@@ -588,6 +695,7 @@ class PageDetectorIntegrated:
         
         # 检查分类器是否加载
         if not self._classifier_model or not self._classes:
+            print(f"[智能检测器] ✗ 页面分类器未加载: model={self._classifier_model is not None}, classes={self._classes is not None}")
             return IntegratedDetectionResult(
                 state=PageState.UNKNOWN,
                 confidence=0.0,
@@ -621,6 +729,7 @@ class PageDetectorIntegrated:
             print(f"  [性能警告] detect_page耗时{total_time:.3f}秒 (截图:{screenshot_time:.3f}秒, 分类:{classify_time:.3f}秒)")
         
         if not page_class:
+            print(f"[智能检测器] ✗ 页面分类失败: page_class=None, confidence={confidence}")
             return IntegratedDetectionResult(
                 state=PageState.UNKNOWN,
                 confidence=0.0,
@@ -632,6 +741,7 @@ class PageDetectorIntegrated:
         # 如果置信度低于70%，使用OCR辅助判断
         ocr_text = None
         if confidence < 0.70:
+            print(f"[智能检测器] ⚠️ 置信度较低 ({confidence:.2%})，使用OCR辅助判断...")
             try:
                 # 使用asyncio.wait_for添加超时保护（5秒，必须大于内层OCR的3秒超时）
                 ocr_result = await asyncio.wait_for(
@@ -640,13 +750,21 @@ class PageDetectorIntegrated:
                 )
                 if ocr_result:
                     page_class, confidence, ocr_text = ocr_result
+                    print(f"[智能检测器] ✓ OCR辅助判断完成: {page_class} (置信度: {confidence:.2%})")
             except asyncio.TimeoutError:
-                pass
+                print(f"[智能检测器] ⚠️ OCR辅助判断超时（5秒），使用原始预测")
             except Exception as e:
-                pass
+                print(f"[智能检测器] ⚠️ OCR辅助判断出错: {e}，使用原始预测")
         
         # 映射到PageState
         state = self._class_to_state.get(page_class, PageState.UNKNOWN)
+        
+        # 如果映射失败，输出警告日志
+        if state == PageState.UNKNOWN:
+            print(f"[智能检测器] ⚠️ 未找到页面类别映射: '{page_class}' (置信度: {confidence:.2%})")
+            print(f"[智能检测器] 当前已加载的映射数量: {len(self._class_to_state)}")
+            print(f"[智能检测器] 提示: 请检查 config/page_state_mapping.json 中是否包含此类别")
+            print(f"[智能检测器] 或点击'🔄 注册新模型'按钮自动注册")
         
         # 2. 使用YOLO检测页面元素（可选）
         elements = []
@@ -730,11 +848,13 @@ class PageDetectorIntegrated:
         """
         element = await self.get_element(device_id, element_name)
         if not element:
+            self._log(f"[智能检测器] ✗ 未找到元素: {element_name}")
             return False
         
         # 点击元素中心点
         x, y = element.center
         await self.adb.tap(device_id, x, y)
+        self._log(f"[智能检测器] ✓ 点击元素: {element_name} at ({x}, {y})")
         return True
     
     async def detect_page_with_priority(self, device_id: str, expected_pages: List[str], use_cache: bool = True) -> IntegratedDetectionResult:
@@ -775,19 +895,25 @@ class PageDetectorIntegrated:
             按钮中心点坐标 (x, y)，如果未找到返回None
         """
         if not HAS_YOLO:
+            self._log("[智能检测器] ✗ YOLO未安装")
             return None
         
         try:
             # 获取截图
             image = await self._get_screenshot(device_id)
             if not image:
+                self._log("[智能检测器] ✗ 无法获取截图")
                 return None
             
             # 直接使用 page_type 作为 model_key（注册表中的键）
+            self._log(f"[智能检测器] 尝试加载模型: {page_type}")
             model = self._load_yolo_model(page_type)
             
             if not model:
+                self._log(f"[智能检测器] ✗ 无法加载模型: {page_type}")
                 return None
+            
+            self._log(f"[智能检测器] ✓ 模型已加载，开始检测...")
             
             # 使用YOLO检测
             results = model.predict(image, conf=conf_threshold, verbose=False)
@@ -795,11 +921,14 @@ class PageDetectorIntegrated:
             # 查找指定按钮
             for result in results:
                 boxes = result.boxes
+                self._log(f"[智能检测器] 检测到 {len(boxes)} 个对象")
                 
                 for box in boxes:
                     cls = int(box.cls[0])
                     class_name = result.names[cls]
                     conf = float(box.conf[0])
+                    
+                    self._log(f"[智能检测器] 检测到: {class_name} (置信度: {conf:.2%})")
                     
                     # 检查是否是目标按钮
                     if button_name in class_name or class_name in button_name:
@@ -810,12 +939,16 @@ class PageDetectorIntegrated:
                         center_x = int((x1 + x2) / 2)
                         center_y = int((y1 + y2) / 2)
                         
+                        self._log(f"[智能检测器] ✓ YOLO检测到按钮: {class_name} at ({center_x}, {center_y}), 置信度: {conf:.2%}")
+                        
                         return (center_x, center_y)
             
             # 未找到按钮
+            self._log(f"[智能检测器] ✗ 未找到按钮: {button_name}")
             return None
             
         except Exception as e:
+            self._log(f"[智能检测器] ✗ YOLO按钮检测失败: {e}")
             import traceback
             traceback.print_exc()
             return None
