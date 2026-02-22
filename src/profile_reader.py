@@ -62,15 +62,15 @@ class ProfileReader:
         # 初始化账号缓存
         self._cache = get_account_cache()
         
-        # 初始化检测器（支持整合检测器和旧的YOLO检测器）
+        # 初始化检测器（支持智能检测器和旧的YOLO检测器）
         self._integrated_detector = None
         self._yolo_detector = None
         
         if yolo_detector:
-            # 检查是否是整合检测器（PageDetectorIntegrated）
+            # 检查是否是智能检测器（PageDetectorIntegrated）
             if hasattr(yolo_detector, 'detect_page') and hasattr(yolo_detector, '_detect_elements'):
                 self._integrated_detector = yolo_detector
-                print(f"[ProfileReader] ✓ 整合检测器已初始化")
+                print(f"[ProfileReader] ✓ 智能检测器已初始化")
             # 检查是否是PageDetector对象，提取其中的_yolo_detector
             elif hasattr(yolo_detector, '_yolo_detector'):
                 self._yolo_detector = yolo_detector._yolo_detector
@@ -84,9 +84,7 @@ class ProfileReader:
         # 初始化静默日志记录器
         self._silent_log = get_silent_logger()
         
-        # 初始化OCR区域学习器（延迟初始化，在使用时根据device_id创建）
-        from .ocr_region_learner import OCRRegionLearner
-        self._region_learner = None
+        # [2026-02-21] 删除学习器：移除 OCRRegionLearner
     
     async def get_profile_info(self, device_id: str) -> Dict[str, any]:
         """获取个人信息（积分、抵扣券、总抽奖次数等）
@@ -191,15 +189,13 @@ class ProfileReader:
             
             image = Image.open(BytesIO(screenshot_data))
             
-            # 优先使用整合检测器（与get_balance相同的策略）
+            # 优先使用智能检测器（与get_balance相同的策略）
             use_yolo_fallback = True
             
             self._silent_log.log(f"  [调试] _get_dynamic_data_only 开始执行")
             self._silent_log.log(f"  [调试] _integrated_detector 是否存在: {self._integrated_detector is not None}")
             
-            # 创建设备专属的OCR区域学习器
-            from .ocr_region_learner import OCRRegionLearner
-            learner = OCRRegionLearner(device_id=device_id)
+            # [2026-02-21] 删除学习器：移除 OCRRegionLearner
             
             if self._integrated_detector:
                 detection_result = await self._integrated_detector.detect_page(
@@ -208,19 +204,19 @@ class ProfileReader:
                     detect_elements=True
                 )
                 
-                self._silent_log.log(f"  [整合检测器] 检测到 {len(detection_result.elements) if detection_result.elements else 0} 个元素")
+                self._silent_log.log(f"  [智能检测器] 检测到 {len(detection_result.elements) if detection_result.elements else 0} 个元素")
                 if detection_result.elements:
                     for elem in detection_result.elements:
-                        self._silent_log.log(f"  [整合检测器] 元素: {elem.class_name}, 置信度: {elem.confidence:.2f}, 位置: {elem.bbox}")
+                        self._silent_log.log(f"  [智能检测器] 元素: {elem.class_name}, 置信度: {elem.confidence:.2f}, 位置: {elem.bbox}")
                 else:
-                    self._silent_log.log(f"  [整合检测器] ⚠️ 未检测到任何元素，将使用降级方案")
+                    self._silent_log.log(f"  [智能检测器] ⚠️ 未检测到任何元素，将使用降级方案")
                 
                 if detection_result.elements:
                     # 全屏OCR识别（只调用一次）
                     enhanced_image = enhance_for_ocr(image)
                     full_ocr_result = await self._ocr_pool.recognize(enhanced_image)
                     
-                    self._silent_log.log(f"  [整合检测器] OCR识别到 {len(full_ocr_result.texts) if full_ocr_result and full_ocr_result.texts else 0} 个文本")
+                    self._silent_log.log(f"  [智能检测器] OCR识别到 {len(full_ocr_result.texts) if full_ocr_result and full_ocr_result.texts else 0} 个文本")
                     
                     # 记录检测到的元素类型，用于后续判断
                     detected_elements = set()
@@ -234,14 +230,14 @@ class ProfileReader:
                         elif '优惠' in element.class_name:
                             detected_elements.add('coupons')
                     
-                    self._silent_log.log(f"  [整合检测器] 检测到的元素类型: {detected_elements}")
+                    self._silent_log.log(f"  [智能检测器] 检测到的元素类型: {detected_elements}")
                     
                     if full_ocr_result and full_ocr_result.texts and full_ocr_result.boxes is not None:
                         # 根据YOLO检测到的元素位置，从全屏OCR结果中匹配文本
                         for element in detection_result.elements:
                             x1, y1, x2, y2 = element.bbox
                             
-                            self._silent_log.log(f"  [整合检测器] 处理元素: {element.class_name}, 位置: ({x1}, {y1}, {x2}, {y2})")
+                            self._silent_log.log(f"  [智能检测器] 处理元素: {element.class_name}, 位置: ({x1}, {y1}, {x2}, {y2})")
                             
                             # 查找与元素位置重叠的OCR文本
                             matched_texts = []
@@ -261,9 +257,9 @@ class ProfileReader:
                                 if x1 <= ocr_center_x <= x2 and y1 <= ocr_center_y <= y2:
                                     matched_texts.append(text)
                                     matched_boxes.append((ocr_x1, ocr_y1, ocr_x2, ocr_y2))
-                                    self._silent_log.log(f"  [整合检测器]   匹配到文本: '{text}' (中心点: {ocr_center_x:.0f}, {ocr_center_y:.0f})")
+                                    self._silent_log.log(f"  [智能检测器]   匹配到文本: '{text}' (中心点: {ocr_center_x:.0f}, {ocr_center_y:.0f})")
                             
-                            self._silent_log.log(f"  [整合检测器] 元素 {element.class_name} 匹配到 {len(matched_texts)} 个文本: {matched_texts}")
+                            self._silent_log.log(f"  [智能检测器] 元素 {element.class_name} 匹配到 {len(matched_texts)} 个文本: {matched_texts}")
                             
                             if matched_texts:
                                 # 合并所有匹配的文本
@@ -272,7 +268,7 @@ class ProfileReader:
                                 # 查找所有数字（包括小数）
                                 all_numbers = re.findall(r'(\d+\.?\d*)', combined_text)
                                 
-                                self._silent_log.log(f"  [整合检测器] 从文本中提取到的所有数字: {all_numbers}")
+                                self._silent_log.log(f"  [智能检测器] 从文本中提取到的所有数字: {all_numbers}")
                                 
                                 if all_numbers:
                                     # 转换为浮点数，选择第一个合理值（不使用max，避免误选其他区域的数字）
@@ -310,7 +306,7 @@ class ProfileReader:
                                         except ValueError:
                                             continue
                                     
-                                    self._silent_log.log(f"  [整合检测器] 合理的候选值: {valid_numbers}")
+                                    self._silent_log.log(f"  [智能检测器] 合理的候选值: {valid_numbers}")
                                     
                                     if valid_numbers:
                                         # 使用第一个合理值，而不是最大值
@@ -660,13 +656,13 @@ class ProfileReader:
             screenshot_time = time.time() - screenshot_start
             print(f"  [性能] 截图耗时: {screenshot_time:.3f}秒")
             
-            # ===== 优先使用整合检测器检测页面类型 =====
-            # ===== 优先使用整合检测器检测页面类型 =====
+            # ===== 优先使用智能检测器检测页面类型 =====
+            # ===== 优先使用智能检测器检测页面类型 =====
             use_yolo_fallback = True  # 标记是否需要降级到YOLO检测器
             
             if self._integrated_detector:
                 detect_start = time.time()
-                print(f"  [整合检测器] 检测页面类型...")
+                print(f"  [智能检测器] 检测页面类型...")
                 
                 # 先检测页面类型（不检测元素，只判断是什么页面）
                 from .page_detector import PageState
@@ -678,11 +674,11 @@ class ProfileReader:
                 
                 detect_time = time.time() - detect_start
                 print(f"  [性能] 页面类型检测耗时: {detect_time:.3f}秒")
-                print(f"  [整合检测器] 页面类型: {page_result.state.chinese_name} (置信度: {page_result.confidence:.2%})")
+                print(f"  [智能检测器] 页面类型: {page_result.state.chinese_name} (置信度: {page_result.confidence:.2%})")
                 
                 # 如果检测到弹窗，需要处理
                 if page_result.state in [PageState.POPUP, PageState.PROFILE_AD]:
-                    print(f"  [整合检测器] ⚠️ 检测到弹窗页面: {page_result.state.chinese_name}")
+                    print(f"  [智能检测器] ⚠️ 检测到弹窗页面: {page_result.state.chinese_name}")
                     
                     # 记录操作：关闭提示弹窗
                     concise_logger.action("关闭提示弹窗")
@@ -783,10 +779,10 @@ class ProfileReader:
                 concise_logger.action("获取详细资料")
                 
                 yolo_start = time.time()
-                print(f"  [整合检测器] 开始检测页面元素...")
+                print(f"  [智能检测器] 开始检测页面元素...")
                 print(f"  [调试] 页面类型: {page_result.state.chinese_name}")
                 
-                # 使用整合检测器的detect_page方法，启用元素检测
+                # 使用智能检测器的detect_page方法，启用元素检测
                 detection_result = await self._integrated_detector.detect_page(
                     device_id, 
                     use_cache=False, 
@@ -794,8 +790,8 @@ class ProfileReader:
                 )
                 
                 yolo_time = time.time() - yolo_start
-                print(f"  [性能] 整合检测器耗时: {yolo_time:.3f}秒")
-                print(f"  [整合检测器] 检测到 {len(detection_result.elements)} 个元素")
+                print(f"  [性能] 智能检测器耗时: {yolo_time:.3f}秒")
+                print(f"  [智能检测器] 检测到 {len(detection_result.elements)} 个元素")
                 print(f"  [调试] 使用的YOLO模型: {detection_result.yolo_model_used}")
                 
                 # 打印检测到的元素详情
@@ -954,12 +950,12 @@ class ProfileReader:
                                         result['coupons'] = 0
                                         print(f"  [降级] 优惠券区域没有数字，设置为0")
                 
-                # 如果整合检测器成功检测到元素，则不需要降级到YOLO
+                # 如果智能检测器成功检测到元素，则不需要降级到YOLO
                 if detection_result.elements:
                     use_yolo_fallback = False
             
             # ===== 降级：使用旧的YOLO检测器 =====
-            # 修复：当整合检测器未检测到元素时，也应该尝试YOLO检测器
+            # 修复：当智能检测器未检测到元素时，也应该尝试YOLO检测器
             if use_yolo_fallback and self._yolo_detector:
                 # 创建并行YOLO检测任务（降低置信度阈值以提高检测成功率）
                 yolo_start = time.time()
@@ -2896,7 +2892,7 @@ class ProfileReader:
             
             image = Image.open(BytesIO(screenshot_data))
             
-            # 优先使用整合检测器（全屏OCR优化）
+            # 优先使用智能检测器（全屏OCR优化）
             use_yolo_fallback = True  # 标记是否需要降级到YOLO检测器
             
             if self._integrated_detector:

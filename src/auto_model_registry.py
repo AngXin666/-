@@ -1,4 +1,4 @@
-"""
+﻿"""
 自动模型检测和注册模块
 Auto Model Detection and Registration Module
 

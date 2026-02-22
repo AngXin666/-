@@ -1336,10 +1336,18 @@
         "height": 22,
         "confidence": 0.9,
         "timestamp": "2026-02-20T22:23:19.512019"
+      },
+      {
+        "x": 84,
+        "y": 258,
+        "width": 375,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-20T22:55:44.329351"
       }
     ],
-    "total_count": 167,
-    "last_updated": "2026-02-20T22:23:19.512019"
+    "total_count": 168,
+    "last_updated": "2026-02-20T22:55:44.329351"
   },
   "checkin_remaining_times": {
     "regions": [
@@ -2678,9 +2686,17 @@
         "height": 22,
         "confidence": 0.9,
         "timestamp": "2026-02-20T22:23:19.518770"
+      },
+      {
+        "x": 84,
+        "y": 258,
+        "width": 375,
+        "height": 22,
+        "confidence": 0.9,
+        "timestamp": "2026-02-20T22:55:44.336851"
       }
     ],
-    "total_count": 167,
-    "last_updated": "2026-02-20T22:23:19.518770"
+    "total_count": 168,
+    "last_updated": "2026-02-20T22:55:44.336851"
   }
 }

@@ -9,7 +9,7 @@
       "_comment": "深度学习页面分类器 - 使用PyTorch模型进行页面识别",
       "enabled": true,
       "model_path": "page_classifier_pytorch_best.pth",
-      "classes_path": "page_classes.json",
+      "classes_path": "../config/page_classes.json",
       "device": "auto",
       "_device_options": "auto (自动选择), cuda (强制GPU), cpu (强制CPU)",
       "quantize": false,

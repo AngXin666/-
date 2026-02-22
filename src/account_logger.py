@@ -1,4 +1,4 @@
-"""
+﻿"""
 账号日志管理器 - 为每个账号创建独立的日志文件
 Account Logger Manager - Create separate log files for each account
 """

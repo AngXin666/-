@@ -272,4 +272,18 @@ def get_logger(name: str = "NoxAutomation",
     global _logger
     if _logger is None:
         _logger = Logger(name, log_dir, log_level)
+        
+        # [2026-02-22] 配置logging模块的基础设置，让logging.getLogger()也能写入日志
+        # 这样其他模块使用logging.getLogger(__name__)时也能正确记录日志
+        log_path = Path(log_dir) / f"{name}_{datetime.now().strftime('%Y%m%d')}.log"
+        logging.basicConfig(
+            level=getattr(logging, log_level.upper(), logging.INFO),
+            format='%(asctime)s | %(levelname)-8s | %(name)-20s | %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S',
+            handlers=[
+                logging.FileHandler(log_path, encoding='utf-8'),
+                logging.StreamHandler(sys.stdout)
+            ],
+            force=True  # 强制重新配置，覆盖已有配置
+        )
     return _logger

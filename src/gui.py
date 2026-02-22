@@ -648,6 +648,9 @@ class AutomationGUI:
         self.checked_items = {}  # {item_id: True/False}
         self.selection_history = []  # 最多保存5个历史状态
         self.all_tree_items = []  # 存储所有表格项目ID（用于筛选恢复）
+        
+        # [2026-02-22] 添加：勾选操作计数器,每5次保存一次
+        self.selection_change_count = 0
     
     def _create_checkbox_images(self):
         """创建勾选框图标(使用对称的Unicode字符)"""
@@ -1550,12 +1553,11 @@ class AutomationGUI:
         else:
             self.results_tree.item(item, text=self.checkbox_unchecked_text)
         
-        # 勾选状态变化后，延迟保存（防抖）
-        if hasattr(self, '_save_timer'):
-            self.root.after_cancel(self._save_timer)
-        
-        # 300毫秒后保存
-        self._save_timer = self.root.after(300, self._save_selections_to_file)
+        # [2026-02-22] 修改：每5次勾选操作保存一次
+        self.selection_change_count += 1
+        if self.selection_change_count >= 5:
+            self._save_selections_to_file()
+            self.selection_change_count = 0
     
     def _select_all_results(self):
         """全选或取消全选（只操作当前显示的账户）"""
@@ -1583,12 +1585,9 @@ class AutomationGUI:
         action = "全选" if new_state else "取消全选"
         self._log(f"✓ 已{action} {len(all_items)} 个显示的账户")
         
-        # 勾选状态变化后，延迟保存（防抖）
-        if hasattr(self, '_save_timer'):
-            self.root.after_cancel(self._save_timer)
-        
-        # 300毫秒后保存
-        self._save_timer = self.root.after(300, self._save_selections_to_file)
+        # [2026-02-22] 修改：全选/取消全选操作立即保存
+        self._save_selections_to_file()
+        self.selection_change_count = 0
     
     def _invert_selection(self):
         """反选：选中未选中的，取消选中已选中的（只操作当前显示的账户）"""
@@ -1616,12 +1615,9 @@ class AutomationGUI:
         # 记录日志
         self._log(f"✓ 已反选 {len(all_items)} 个显示的账户（勾选 {checked_count} 个，取消 {unchecked_count} 个）")
         
-        # 勾选状态变化后，延迟保存（防抖）
-        if hasattr(self, '_save_timer'):
-            self.root.after_cancel(self._save_timer)
-        
-        # 300毫秒后保存
-        self._save_timer = self.root.after(300, self._save_selections_to_file)
+        # [2026-02-22] 修改：反选操作立即保存
+        self._save_selections_to_file()
+        self.selection_change_count = 0
     
     def _save_selection_state(self):
         """保存当前选择状态到历史(最多5个)"""
@@ -2576,7 +2572,10 @@ class AutomationGUI:
             self._log("⏸ 已暂停，点击'继续'按钮恢复运行")
     
     def _stop_automation(self):
-        """停止自动化（强制终止）"""
+        """停止自动化（等待当前账号完成后停止）"""
+        # [2026-02-22] 修改：提示用户会等待当前账号完成
+        self._log("⏹ 正在停止...（等待当前账号完成）")
+        
         self.is_running = False
         self.is_paused = False
         self.stop_event.set()  # 设置停止标志
@@ -2598,27 +2597,12 @@ class AutomationGUI:
                     new_values[13] = "手动停止"  # 状态列（索引13）
                     self.results_tree.item(item_id, values=tuple(new_values))
         
-        # 取消所有未开始的任务
-        if self.pending_futures:
-            cancelled_count = 0
-            for future in self.pending_futures:
-                if future.cancel():  # 尝试取消任务
-                    cancelled_count += 1
-            if cancelled_count > 0:
-                self._log(f"⏹ 取消了 {cancelled_count} 个未开始的任务")
+        # [2026-02-22] 修改：不立即取消任务,让当前账号完成
+        # 线程会在完成当前账号后检查 stop_event 并退出
+        # 线程池会在主执行函数中通过 thread.join(timeout) 等待
         
-        # 强制终止线程池中的所有任务
-        if self.executor:
-            self._log("⏹ 强制终止所有运行中的任务...")
-            try:
-                # 立即关闭线程池，不等待任务完成
-                self.executor.shutdown(wait=False, cancel_futures=True)
-                self._log("✓ 线程池已强制关闭")
-            except Exception as e:
-                self._log(f"⚠️ 关闭线程池时出错: {e}")
-            finally:
-                self.executor = None
-        
+        self._log("⏹ 等待当前正在处理的账号完成...")
+
         # 更新统计（从表格重新统计，确保数据准确）
         self._update_stats_from_table()
         
@@ -2898,11 +2882,7 @@ class AutomationGUI:
             
             # 持续从队列获取账号处理
             while True:
-                # 检查是否需要停止
-                if self.stop_event.is_set():
-                    instance_log_callback("收到停止信号，退出")
-                    break
-                
+                # [2026-02-22] 修改：只在获取账号前检查停止标志,处理中的账号会完成
                 # 从队列获取账号（非阻塞，超时1秒）
                 try:
                     account_index, account = account_queue.get(timeout=1)
@@ -2913,14 +2893,21 @@ class AutomationGUI:
                         break
                     else:
                         # 队列暂时为空，继续等待
+                        # 在等待期间检查停止标志
+                        if self.stop_event.is_set():
+                            instance_log_callback("收到停止信号，退出")
+                            break
                         continue
                 
                 # 检查是否暂停
                 while self.pause_event.is_set():
                     time.sleep(0.1)
                     if self.stop_event.is_set():
+                        # 暂停期间收到停止信号,不处理当前账号
+                        instance_log_callback("暂停期间收到停止信号，退出")
                         break
                 
+                # 如果在暂停期间收到停止信号,跳出外层循环
                 if self.stop_event.is_set():
                     break
                 
@@ -3086,6 +3073,11 @@ class AutomationGUI:
                 
                 # 标记任务完成
                 account_queue.task_done()
+                
+                # [2026-02-22] 修改：账号处理完成后检查停止标志
+                if self.stop_event.is_set():
+                    instance_log_callback("✓ 当前账号已完成，收到停止信号，退出")
+                    break
             
             # 实例处理完成
             instance_log_callback(f"实例 {instance_id} 已完成所有任务")
@@ -3103,8 +3095,20 @@ class AutomationGUI:
         
         # 等待所有线程完成
         self.root.after(0, lambda: self._log(f"等待 {len(instance_threads)} 个实例线程完成..."))
+        
+        # [2026-02-22] 修改：添加超时机制,避免无限等待
+        max_wait_time = 30  # 最多等待30秒
         for thread in instance_threads:
-            thread.join()
+            thread.join(timeout=max_wait_time)
+            if thread.is_alive():
+                self.root.after(0, lambda t=thread: self._log(f"⚠️ 线程 {t.name} 超时未结束"))
+        
+        # 检查是否所有线程都已结束
+        alive_threads = [t for t in instance_threads if t.is_alive()]
+        if alive_threads:
+            self.root.after(0, lambda c=len(alive_threads): self._log(f"⚠️ 仍有 {c} 个线程未结束,但继续执行清理"))
+        else:
+            self.root.after(0, lambda: self._log("✓ 所有实例线程已完成"))
         
         # 处理失败账号的重试
         if failed_accounts and not self.stop_event.is_set():
@@ -3305,7 +3309,7 @@ class AutomationGUI:
             integrated_detector = model_manager.get_page_detector_integrated()
             
             # 创建AutoLogin，传递integrated_detector
-            # AutoLogin会从ModelManager获取整合检测器，不需要手动设置
+            # AutoLogin会从ModelManager获取智能检测器，不需要手动设置
             auto_login = AutoLogin(ui_automation, screen_capture, adb, 
                                   emulator_type=emulator_type_str,
                                   integrated_detector=integrated_detector)
@@ -4034,6 +4038,13 @@ class AutomationGUI:
     def _on_closing(self):
         """安全关闭窗口"""
         try:
+            # [2026-02-22] 修复：程序关闭时立即保存勾选状态
+            try:
+                self._save_selections_to_file()
+                print("✓ 已保存账号勾选状态")
+            except Exception as e:
+                print(f"保存勾选状态失败: {e}")
+            
             # 如果正在运行，先停止
             if self.is_running:
                 self._log("正在停止运行中的任务...")

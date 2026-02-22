@@ -1,4 +1,4 @@
-"""
+﻿"""
 窗口自动排列模块
 Window Auto Arrangement Module
 

@@ -1,4 +1,4 @@
-"""
+﻿"""
 动态页面状态类
 Dynamic Page State Class
 

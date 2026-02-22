@@ -1,4 +1,4 @@
-"""
+﻿"""
 页面检测缓存管理器
 Page Detector Cache Manager
 

@@ -7,6 +7,7 @@ import asyncio
 import os
 import subprocess
 import sys
+import threading
 import time
 import winreg
 from typing import Dict, List, Optional, Tuple
@@ -1058,3 +1059,5 @@ class EmulatorController:
         if self.emulator_type == EmulatorType.MUMU:
             return f"MuMu模拟器: {self.emulator_path}"
         return "未检测到模拟器"
+
+
