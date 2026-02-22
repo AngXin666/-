@@ -1,0 +1,94 @@
+{
+  "mapping": {
+    "首页": {
+      "yolo_models": [
+        {
+          "model_key": "首页",
+          "priority": 1,
+          "description": "检测首页的'我的按钮'和'每日签到按钮'"
+        }
+      ]
+    },
+    "签到页": {
+      "yolo_models": [
+        {
+          "model_key": "签到页",
+          "priority": 1,
+          "description": "检测签到页的'签到按钮'和'签到次数'"
+        }
+      ]
+    },
+    "签到弹窗": {
+      "yolo_models": [
+        {
+          "model_key": "签到成功弹窗",
+          "priority": 1,
+          "description": "检测签到成功弹窗的'关闭按钮'、'签到成功文本'和'签到金额'"
+        }
+      ]
+    },
+    "个人页_已登录": {
+      "yolo_models": [
+        {
+          "model_key": "profile_detailed",
+          "priority": 1,
+          "description": "检测个人页的8个区域（首页按钮、我的按钮、余额、积分、抵扣券、优惠券、昵称、ID）"
+        }
+      ]
+    },
+    "转账页": {
+      "yolo_models": [
+        {
+          "model_key": "transfer",
+          "priority": 1,
+          "description": "检测转账页的'全部转账按钮'、'ID输入框'、'转账金额输入框'、'提交按钮'和'转账明细文本'"
+        }
+      ]
+    },
+    "转账确认弹窗": {
+      "yolo_models": [
+        {
+          "model_key": "transfer_confirm",
+          "priority": 1,
+          "description": "检测转账确认弹窗的'转账确认ID'、'转账确认昵称'、'转账确认金额'和'确认按钮'"
+        }
+      ]
+    },
+    "登录页": {
+      "yolo_models": [
+        {
+          "model_key": "login",
+          "priority": 1,
+          "description": "检测登录页的'登陆按钮'、'账号输入框'、'密码输入框'和'协议勾选框'"
+        }
+      ]
+    },
+    "温馨提示": {
+      "yolo_models": [
+        {
+          "model_key": "温馨提示",
+          "priority": 1,
+          "description": "检测温馨提示的'确认按钮'"
+        }
+      ]
+    },
+    "首页公告": {
+      "yolo_models": [
+        {
+          "model_key": "首页公告",
+          "priority": 1,
+          "description": "检测首页公告的'确认按钮'"
+        }
+      ]
+    },
+    "钱包页": {
+      "yolo_models": [
+        {
+          "model_key": "wallet",
+          "priority": 1,
+          "description": "检测钱包页的'余额数字'和'转增按钮'"
+        }
+      ]
+    }
+  }
+}
