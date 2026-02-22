@@ -1,4 +1,4 @@
-"""
+﻿"""
 整合页面检测器 - 页面分类器 + YOLO模型
 Integrated Page Detector - Page Classifier + YOLO Models
 
@@ -72,7 +72,7 @@ class PageDetectorIntegrated:
                  mapping_path='page_yolo_mapping.json',
                  state_mapping_path='page_state_mapping.json',
                  log_callback=None):
-        """初始化整合检测器
+        """初始化智能检测器
         
         Args:
             adb: ADB 桥接器实例
@@ -85,7 +85,7 @@ class PageDetectorIntegrated:
         """
         # 强制输出，确保能看到初始化过程
         import sys
-        print("[整合检测器] __init__ 开始初始化...")
+        print("[智能检测器] __init__ 开始初始化...")
         sys.stdout.flush()
         
         # 【优化】移除PyTorch线程限制，让PyTorch自动管理线程
@@ -94,9 +94,9 @@ class PageDetectorIntegrated:
         
         self.adb = adb
         self._log_callback = log_callback
-        self._verbose = False  # 默认关闭详细日志，只输出关键信息
+        self._verbose = True  # [2026-02-21] 临时启用详细日志，调试YOLO模型加载
         
-        print("[整合检测器] 初始化成员变量...")
+        print("[智能检测器] 初始化成员变量...")
         sys.stdout.flush()
         
         # 页面分类器相关
@@ -119,22 +119,22 @@ class PageDetectorIntegrated:
         from .performance.detection_cache import DetectionCache
         self._detection_cache = DetectionCache(ttl=0.5)  # 缓存0.5秒，足够快速检测页面变化
         
-        print("[整合检测器] 开始加载配置和模型...")
+        print("[智能检测器] 开始加载配置和模型...")
         sys.stdout.flush()
         
         # 加载配置和模型
         self._load_state_mapping(state_mapping_path)  # 先加载状态映射
-        print("[整合检测器] 状态映射加载完成，开始加载分类器...")
+        print("[智能检测器] 状态映射加载完成，开始加载分类器...")
         sys.stdout.flush()
         
         self._load_classifier(classifier_model_path, classes_path)
-        print("[整合检测器] 分类器加载完成，开始加载YOLO注册表...")
+        print("[智能检测器] 分类器加载完成，开始加载YOLO注册表...")
         sys.stdout.flush()
         
         self._load_yolo_registry(yolo_registry_path)
         self._load_mapping(mapping_path)
         
-        print(f"[整合检测器] __init__ 完成 (model={self._classifier_model is not None}, classes={self._classes is not None})")
+        print(f"[智能检测器] __init__ 完成 (model={self._classifier_model is not None}, classes={self._classes is not None})")
         sys.stdout.flush()
     
     def _log(self, msg: str, level: str = "debug"):
@@ -146,7 +146,7 @@ class PageDetectorIntegrated:
                 - "info": 关键信息，总是输出
                 - "debug": 调试信息，只在verbose模式下输出
         """
-        # 默认禁用所有整合检测器的详细日志
+        # 默认禁用所有智能检测器的详细日志
         # 如果需要调试，可以设置 self._verbose = True
         if not self._verbose:
             return
@@ -209,26 +209,30 @@ class PageDetectorIntegrated:
                         if state_obj:
                             self._class_to_state[class_name] = state_obj
             
-            print(f"[整合检测器] ✓ 已加载 {len(self._class_to_state)} 个页面状态映射")
+            print(f"[智能检测器] ✓ 已加载 {len(self._class_to_state)} 个页面状态映射")
             
         except Exception as e:
-            print(f"[整合检测器] ✗ 加载状态映射失败: {e}")
+            print(f"[智能检测器] ✗ 加载状态映射失败: {e}")
             # 使用默认映射
             self._class_to_state = {}
     
     def _load_classifier(self, model_path: str, classes_path: str):
         """加载页面分类器"""
+        # [2026-02-21] 修复：将Path对象转换为字符串
+        model_path = str(model_path)
+        classes_path = str(classes_path)
+        
         # 强制输出到文件，确保能看到
         import sys
         sys.stdout.flush()
         sys.stderr.flush()
         
-        print("[整合检测器] 开始加载页面分类器...")
+        print("[智能检测器] 开始加载页面分类器...")
         sys.stdout.flush()
         
         if not HAS_TORCH or not HAS_PIL:
             # 关键错误，强制输出
-            msg = "[整合检测器] ✗ PyTorch或PIL未安装"
+            msg = "[智能检测器] ✗ PyTorch或PIL未安装"
             print(msg)
             sys.stdout.flush()
             sys.stderr.write(msg + "\n")
@@ -236,7 +240,7 @@ class PageDetectorIntegrated:
             return
         
         try:
-            print("[整合检测器] 开始加载类别列表...")
+            print("[智能检测器] 开始加载类别列表...")
             sys.stdout.flush()
             
             # 加载类别列表（尝试在models目录查找）
@@ -246,7 +250,7 @@ class PageDetectorIntegrated:
                     classes_path = alt_classes_path
                 else:
                     # 关键错误，强制输出
-                    msg = f"[整合检测器] ✗ 类别文件不存在: {classes_path}"
+                    msg = f"[智能检测器] ✗ 类别文件不存在: {classes_path}"
                     print(msg)
                     sys.stdout.flush()
                     sys.stderr.write(msg + "\n")
@@ -256,11 +260,11 @@ class PageDetectorIntegrated:
             with open(classes_path, 'r', encoding='utf-8') as f:
                 self._classes = json.load(f)
             
-            print(f"[整合检测器] ✓ 类别列表已加载: {len(self._classes)} 个类别")
+            print(f"[智能检测器] ✓ 类别列表已加载: {len(self._classes)} 个类别")
             sys.stdout.flush()
             
             # 加载模型（尝试在models目录查找）
-            print(f"[整合检测器] 开始加载模型文件: {model_path}")
+            print(f"[智能检测器] 开始加载模型文件: {model_path}")
             sys.stdout.flush()
             
             if not os.path.exists(model_path):
@@ -269,7 +273,7 @@ class PageDetectorIntegrated:
                     model_path = alt_model_path
                 else:
                     # 关键错误，强制输出
-                    msg = f"[整合检测器] ✗ 模型文件不存在: {model_path}"
+                    msg = f"[智能检测器] ✗ 模型文件不存在: {model_path}"
                     print(msg)
                     sys.stdout.flush()
                     sys.stderr.write(msg + "\n")
@@ -277,14 +281,14 @@ class PageDetectorIntegrated:
                     return
             
             # 设置设备
-            print("[整合检测器] 检测计算设备...")
+            print("[智能检测器] 检测计算设备...")
             sys.stdout.flush()
             self._device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-            print(f"[整合检测器] 使用设备: {self._device}")
+            print(f"[智能检测器] 使用设备: {self._device}")
             sys.stdout.flush()
             
             # 定义模型架构
-            print("[整合检测器] 定义模型架构...")
+            print("[智能检测器] 定义模型架构...")
             sys.stdout.flush()
             
             class PageClassifier(nn.Module):
@@ -307,11 +311,11 @@ class PageDetectorIntegrated:
             
             # 创建并加载模型
             num_classes = len(self._classes)
-            print(f"[整合检测器] 创建模型实例 ({num_classes} 个类别)...")
+            print(f"[智能检测器] 创建模型实例 ({num_classes} 个类别)...")
             sys.stdout.flush()
             model = PageClassifier(num_classes)
             
-            print("[整合检测器] 加载模型权重...")
+            print("[智能检测器] 加载模型权重...")
             sys.stdout.flush()
             checkpoint = torch.load(model_path, map_location=self._device)
             if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
@@ -319,13 +323,13 @@ class PageDetectorIntegrated:
             else:
                 model.load_state_dict(checkpoint)
             
-            print("[整合检测器] 将模型移至设备...")
+            print("[智能检测器] 将模型移至设备...")
             sys.stdout.flush()
             model = model.to(self._device)
             model.eval()
             self._classifier_model = model
             
-            print("[整合检测器] 设置图片预处理...")
+            print("[智能检测器] 设置图片预处理...")
             sys.stdout.flush()
             # 设置图片预处理
             self._transform = transforms.Compose([
@@ -334,12 +338,12 @@ class PageDetectorIntegrated:
                 transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
             ])
             
-            self._log(f"[整合检测器] ✓ 页面分类器已加载 (设备: {self._device})")
+            self._log(f"[智能检测器] ✓ 页面分类器已加载 (设备: {self._device})")
             
         except Exception as e:
             # 关键错误，强制输出
             import sys
-            msg = f"[整合检测器] ✗ 加载页面分类器失败: {e}"
+            msg = f"[智能检测器] ✗ 加载页面分类器失败: {e}"
             print(msg)
             sys.stdout.flush()
             sys.stderr.write(msg + "\n")
@@ -361,42 +365,69 @@ class PageDetectorIntegrated:
                     registry_path = models_registry_path
             
             if not os.path.exists(registry_path):
-                self._log(f"[整合检测器] ✗ YOLO注册表不存在: {registry_path}")
+                self._log(f"[智能检测器] ✗ YOLO注册表不存在: {registry_path}")
                 return
             
             with open(registry_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 self._yolo_registry = data.get('models', {})
             
-            self._log(f"[整合检测器] ✓ YOLO注册表已加载 ({len(self._yolo_registry)} 个模型)")
+            self._log(f"[智能检测器] ✓ YOLO注册表已加载 ({len(self._yolo_registry)} 个模型)")
             
         except Exception as e:
-            self._log(f"[整合检测器] ✗ 加载YOLO注册表失败: {e}")
+            self._log(f"[智能检测器] ✗ 加载YOLO注册表失败: {e}")
     
     def _load_mapping(self, mapping_path: str):
         """加载页面-YOLO映射配置"""
         try:
-            # 如果路径不是绝对路径，尝试在models目录中查找
+            # [2026-02-21] 调试：强制输出，确保能看到
+            print(f"[智能检测器] 开始加载映射配置: {mapping_path}")
+            import sys
+            sys.stdout.flush()
+            
+            # 如果路径不是绝对路径，尝试在多个目录中查找
             if not os.path.isabs(mapping_path) and not os.path.exists(mapping_path):
-                models_mapping_path = os.path.join('models', mapping_path)
-                if os.path.exists(models_mapping_path):
-                    mapping_path = models_mapping_path
+                # 尝试在config目录中查找
+                config_mapping_path = os.path.join('config', mapping_path)
+                print(f"[智能检测器] 尝试config目录: {config_mapping_path}, 存在={os.path.exists(config_mapping_path)}")
+                sys.stdout.flush()
+                if os.path.exists(config_mapping_path):
+                    mapping_path = config_mapping_path
+                else:
+                    # 尝试在models目录中查找
+                    models_mapping_path = os.path.join('models', mapping_path)
+                    print(f"[智能检测器] 尝试models目录: {models_mapping_path}, 存在={os.path.exists(models_mapping_path)}")
+                    sys.stdout.flush()
+                    if os.path.exists(models_mapping_path):
+                        mapping_path = models_mapping_path
+            
+            print(f"[智能检测器] 最终路径: {mapping_path}, 存在={os.path.exists(mapping_path)}")
+            sys.stdout.flush()
             
             if not os.path.exists(mapping_path):
-                self._log(f"[整合检测器] ✗ 映射配置不存在: {mapping_path}")
+                print(f"[智能检测器] ✗ 映射配置不存在: {mapping_path}")
+                sys.stdout.flush()
+                self._log(f"[智能检测器] ✗ 映射配置不存在: {mapping_path}")
                 return
             
             with open(mapping_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 self._page_yolo_mapping = data.get('mapping', {})
             
-            self._log(f"[整合检测器] ✓ 页面-YOLO映射已加载 ({len(self._page_yolo_mapping)} 个页面)")
+            print(f"[智能检测器] ✓ 页面-YOLO映射已加载 ({len(self._page_yolo_mapping)} 个页面)")
+            sys.stdout.flush()
+            self._log(f"[智能检测器] ✓ 页面-YOLO映射已加载 ({len(self._page_yolo_mapping)} 个页面)")
             
         except Exception as e:
-            self._log(f"[整合检测器] ✗ 加载映射配置失败: {e}")
+            self._log(f"[智能检测器] ✗ 加载映射配置失败: {e}")
     
     def _load_yolo_model(self, model_key: str) -> Optional[YOLO]:
-        """加载YOLO模型（带缓存）"""
+        """加载YOLO模型（带缓存）
+        
+        # [2026-02-21] 修复：YOLO模型文件不存在时优雅降级
+        # 原因：YOLO模型文件(.pt)被.gitignore排除，可能未训练或被误删
+        # 解决：返回None而不是抛异常，让页面分类器继续工作
+        """
         if not HAS_YOLO:
             return None
         
@@ -407,12 +438,15 @@ class PageDetectorIntegrated:
         # 从注册表获取模型路径
         model_info = self._yolo_registry.get(model_key)
         if not model_info:
-            self._log(f"[整合检测器] ✗ YOLO模型未注册: {model_key}")
+            # [2026-02-21] 降级：模型未注册时只记录警告，不影响页面分类
+            import logging
+            logging.getLogger(__name__).warning(f"YOLO模型未注册: {model_key}，将使用OCR降级方案")
             return None
         
         model_path = model_info.get('model_path')
         if not model_path:
-            self._log(f"[整合检测器] ✗ YOLO模型路径为空: {model_key}")
+            import logging
+            logging.getLogger(__name__).warning(f"YOLO模型路径为空: {model_key}，将使用OCR降级方案")
             return None
         
         # 如果路径不是绝对路径，添加models/前缀
@@ -423,20 +457,28 @@ class PageDetectorIntegrated:
                 model_path = models_path
             # 如果models/路径不存在，尝试原路径（兼容旧版本）
             elif not os.path.exists(model_path):
-                self._log(f"[整合检测器] ✗ YOLO模型文件不存在: {model_path} (也尝试了 {models_path})")
+                # [2026-02-21] 降级：文件不存在时只记录警告，不影响页面分类
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"YOLO模型文件不存在: {model_path} (也尝试了 {models_path})，将使用OCR降级方案"
+                )
                 return None
         
         if not os.path.exists(model_path):
-            self._log(f"[整合检测器] ✗ YOLO模型文件不存在: {model_path}")
+            # [2026-02-21] 降级：文件不存在时只记录警告，不影响页面分类
+            import logging
+            logging.getLogger(__name__).warning(f"YOLO模型文件不存在: {model_path}，将使用OCR降级方案")
             return None
         
         try:
             model = YOLO(model_path)
             self._yolo_models[model_key] = model
-            self._log(f"[整合检测器] ✓ YOLO模型已加载: {model_key} ({model_path})")
+            self._log(f"[智能检测器] ✓ YOLO模型已加载: {model_key} ({model_path})")
             return model
         except Exception as e:
-            self._log(f"[整合检测器] ✗ 加载YOLO模型失败 {model_key}: {e}")
+            # [2026-02-21] 降级：加载失败时只记录警告，不影响页面分类
+            import logging
+            logging.getLogger(__name__).warning(f"加载YOLO模型失败 {model_key}: {e}，将使用OCR降级方案")
             return None
     
     async def _get_screenshot(self, device_id: str) -> Optional[Image.Image]:
@@ -478,7 +520,7 @@ class PageDetectorIntegrated:
             return class_name, confidence_value
             
         except Exception as e:
-            self._log(f"[整合检测器] ✗ 页面分类失败: {e}")
+            self._log(f"[智能检测器] ✗ 页面分类失败: {e}")
             return None, 0.0
     
     async def _ocr_assisted_detection(self, device_id: str, image: Image.Image, 
@@ -563,7 +605,7 @@ class PageDetectorIntegrated:
             return None
             
         except Exception as e:
-            self._log(f"[整合检测器] ✗ OCR辅助判断失败: {e}")
+            self._log(f"[智能检测器] ✗ OCR辅助判断失败: {e}")
             return None
     
     def _detect_elements(self, image: Image.Image, page_class: str) -> List[PageElement]:
@@ -617,7 +659,7 @@ class PageDetectorIntegrated:
                         elements.append(element)
                 
             except Exception as e:
-                self._log(f"[整合检测器] ✗ YOLO检测失败 {model_key}: {e}")
+                self._log(f"[智能检测器] ✗ YOLO检测失败 {model_key}: {e}")
                 import traceback
                 traceback.print_exc()
         
@@ -625,7 +667,7 @@ class PageDetectorIntegrated:
     
     async def detect_page(self, device_id: str, use_cache: bool = True, 
                          detect_elements: bool = True,
-                         use_ocr: bool = False,  # 兼容参数，整合检测器不使用OCR
+                         use_ocr: bool = False,  # 兼容参数，智能检测器不使用OCR
                          use_template: bool = True,  # 兼容参数
                          use_dl: bool = True) -> IntegratedDetectionResult:  # 兼容参数
         """检测当前页面状态和元素
@@ -634,9 +676,9 @@ class PageDetectorIntegrated:
             device_id: 设备 ID
             use_cache: 是否使用缓存
             detect_elements: 是否检测页面元素（使用YOLO）
-            use_ocr: 兼容参数（整合检测器不使用OCR，忽略此参数）
-            use_template: 兼容参数（整合检测器不使用模板匹配，忽略此参数）
-            use_dl: 兼容参数（整合检测器始终使用深度学习，忽略此参数）
+            use_ocr: 兼容参数（智能检测器不使用OCR，忽略此参数）
+            use_template: 兼容参数（智能检测器不使用模板匹配，忽略此参数）
+            use_dl: 兼容参数（智能检测器始终使用深度学习，忽略此参数）
             
         Returns:
             整合检测结果
@@ -653,7 +695,7 @@ class PageDetectorIntegrated:
         
         # 检查分类器是否加载
         if not self._classifier_model or not self._classes:
-            print(f"[整合检测器] ✗ 页面分类器未加载: model={self._classifier_model is not None}, classes={self._classes is not None}")
+            print(f"[智能检测器] ✗ 页面分类器未加载: model={self._classifier_model is not None}, classes={self._classes is not None}")
             return IntegratedDetectionResult(
                 state=PageState.UNKNOWN,
                 confidence=0.0,
@@ -687,7 +729,7 @@ class PageDetectorIntegrated:
             print(f"  [性能警告] detect_page耗时{total_time:.3f}秒 (截图:{screenshot_time:.3f}秒, 分类:{classify_time:.3f}秒)")
         
         if not page_class:
-            print(f"[整合检测器] ✗ 页面分类失败: page_class=None, confidence={confidence}")
+            print(f"[智能检测器] ✗ 页面分类失败: page_class=None, confidence={confidence}")
             return IntegratedDetectionResult(
                 state=PageState.UNKNOWN,
                 confidence=0.0,
@@ -699,7 +741,7 @@ class PageDetectorIntegrated:
         # 如果置信度低于70%，使用OCR辅助判断
         ocr_text = None
         if confidence < 0.70:
-            print(f"[整合检测器] ⚠️ 置信度较低 ({confidence:.2%})，使用OCR辅助判断...")
+            print(f"[智能检测器] ⚠️ 置信度较低 ({confidence:.2%})，使用OCR辅助判断...")
             try:
                 # 使用asyncio.wait_for添加超时保护（5秒，必须大于内层OCR的3秒超时）
                 ocr_result = await asyncio.wait_for(
@@ -708,27 +750,37 @@ class PageDetectorIntegrated:
                 )
                 if ocr_result:
                     page_class, confidence, ocr_text = ocr_result
-                    print(f"[整合检测器] ✓ OCR辅助判断完成: {page_class} (置信度: {confidence:.2%})")
+                    print(f"[智能检测器] ✓ OCR辅助判断完成: {page_class} (置信度: {confidence:.2%})")
             except asyncio.TimeoutError:
-                print(f"[整合检测器] ⚠️ OCR辅助判断超时（5秒），使用原始预测")
+                print(f"[智能检测器] ⚠️ OCR辅助判断超时（5秒），使用原始预测")
             except Exception as e:
-                print(f"[整合检测器] ⚠️ OCR辅助判断出错: {e}，使用原始预测")
+                print(f"[智能检测器] ⚠️ OCR辅助判断出错: {e}，使用原始预测")
         
         # 映射到PageState
         state = self._class_to_state.get(page_class, PageState.UNKNOWN)
         
         # 如果映射失败，输出警告日志
         if state == PageState.UNKNOWN:
-            print(f"[整合检测器] ⚠️ 未找到页面类别映射: '{page_class}' (置信度: {confidence:.2%})")
-            print(f"[整合检测器] 当前已加载的映射数量: {len(self._class_to_state)}")
-            print(f"[整合检测器] 提示: 请检查 config/page_state_mapping.json 中是否包含此类别")
-            print(f"[整合检测器] 或点击'🔄 注册新模型'按钮自动注册")
+            print(f"[智能检测器] ⚠️ 未找到页面类别映射: '{page_class}' (置信度: {confidence:.2%})")
+            print(f"[智能检测器] 当前已加载的映射数量: {len(self._class_to_state)}")
+            print(f"[智能检测器] 提示: 请检查 config/page_state_mapping.json 中是否包含此类别")
+            print(f"[智能检测器] 或点击'🔄 注册新模型'按钮自动注册")
         
         # 2. 使用YOLO检测页面元素（可选）
         elements = []
         yolo_model_used = None
         if detect_elements:
             elements = self._detect_elements(image, page_class)
+            
+            # [2026-02-22] 修复：当页面被误识别为广告页时，尝试使用转账页YOLO模型
+            # 广告页不应该有元素检测需求，如果detect_elements=True但识别为广告页，
+            # 很可能是页面分类错误，尝试用转账页YOLO模型检测
+            if not elements and page_class == '广告页':
+                self._log("[智能检测器] ⚠️ 广告页但需要检测元素，尝试使用转账页YOLO模型...")
+                elements = self._detect_elements(image, '转账页')
+                if elements:
+                    self._log(f"[智能检测器] ✓ 转账页YOLO检测到 {len(elements)} 个元素")
+            
             if elements:
                 # 记录使用的YOLO模型
                 mapping = self._page_yolo_mapping.get(page_class, {})
@@ -796,19 +848,19 @@ class PageDetectorIntegrated:
         """
         element = await self.get_element(device_id, element_name)
         if not element:
-            self._log(f"[整合检测器] ✗ 未找到元素: {element_name}")
+            self._log(f"[智能检测器] ✗ 未找到元素: {element_name}")
             return False
         
         # 点击元素中心点
         x, y = element.center
         await self.adb.tap(device_id, x, y)
-        self._log(f"[整合检测器] ✓ 点击元素: {element_name} at ({x}, {y})")
+        self._log(f"[智能检测器] ✓ 点击元素: {element_name} at ({x}, {y})")
         return True
     
     async def detect_page_with_priority(self, device_id: str, expected_pages: List[str], use_cache: bool = True) -> IntegratedDetectionResult:
         """使用优先级检测页面（兼容混合检测器的接口）
         
-        整合检测器不使用模板匹配，所以忽略expected_pages参数，直接调用detect_page
+        智能检测器不使用模板匹配，所以忽略expected_pages参数，直接调用detect_page
         
         Args:
             device_id: 设备 ID
@@ -843,25 +895,25 @@ class PageDetectorIntegrated:
             按钮中心点坐标 (x, y)，如果未找到返回None
         """
         if not HAS_YOLO:
-            self._log("[整合检测器] ✗ YOLO未安装")
+            self._log("[智能检测器] ✗ YOLO未安装")
             return None
         
         try:
             # 获取截图
             image = await self._get_screenshot(device_id)
             if not image:
-                self._log("[整合检测器] ✗ 无法获取截图")
+                self._log("[智能检测器] ✗ 无法获取截图")
                 return None
             
             # 直接使用 page_type 作为 model_key（注册表中的键）
-            self._log(f"[整合检测器] 尝试加载模型: {page_type}")
+            self._log(f"[智能检测器] 尝试加载模型: {page_type}")
             model = self._load_yolo_model(page_type)
             
             if not model:
-                self._log(f"[整合检测器] ✗ 无法加载模型: {page_type}")
+                self._log(f"[智能检测器] ✗ 无法加载模型: {page_type}")
                 return None
             
-            self._log(f"[整合检测器] ✓ 模型已加载，开始检测...")
+            self._log(f"[智能检测器] ✓ 模型已加载，开始检测...")
             
             # 使用YOLO检测
             results = model.predict(image, conf=conf_threshold, verbose=False)
@@ -869,14 +921,14 @@ class PageDetectorIntegrated:
             # 查找指定按钮
             for result in results:
                 boxes = result.boxes
-                self._log(f"[整合检测器] 检测到 {len(boxes)} 个对象")
+                self._log(f"[智能检测器] 检测到 {len(boxes)} 个对象")
                 
                 for box in boxes:
                     cls = int(box.cls[0])
                     class_name = result.names[cls]
                     conf = float(box.conf[0])
                     
-                    self._log(f"[整合检测器] 检测到: {class_name} (置信度: {conf:.2%})")
+                    self._log(f"[智能检测器] 检测到: {class_name} (置信度: {conf:.2%})")
                     
                     # 检查是否是目标按钮
                     if button_name in class_name or class_name in button_name:
@@ -887,16 +939,16 @@ class PageDetectorIntegrated:
                         center_x = int((x1 + x2) / 2)
                         center_y = int((y1 + y2) / 2)
                         
-                        self._log(f"[整合检测器] ✓ YOLO检测到按钮: {class_name} at ({center_x}, {center_y}), 置信度: {conf:.2%}")
+                        self._log(f"[智能检测器] ✓ YOLO检测到按钮: {class_name} at ({center_x}, {center_y}), 置信度: {conf:.2%}")
                         
                         return (center_x, center_y)
             
             # 未找到按钮
-            self._log(f"[整合检测器] ✗ 未找到按钮: {button_name}")
+            self._log(f"[智能检测器] ✗ 未找到按钮: {button_name}")
             return None
             
         except Exception as e:
-            self._log(f"[整合检测器] ✗ YOLO按钮检测失败: {e}")
+            self._log(f"[智能检测器] ✗ YOLO按钮检测失败: {e}")
             import traceback
             traceback.print_exc()
             return None
@@ -904,7 +956,7 @@ class PageDetectorIntegrated:
     async def close_popup(self, device_id: str, timeout: float = 15.0, known_popup_type: str = None, max_attempts: int = 3) -> bool:
         """自动关闭弹窗（带超时保护和重试机制）
         
-        从混合检测器复制的完整实现，适配整合检测器
+        从混合检测器复制的完整实现，适配智能检测器
         
         Args:
             device_id: 设备ID
@@ -925,7 +977,7 @@ class PageDetectorIntegrated:
                 timeout=timeout
             )
         except asyncio.TimeoutError:
-            self._log(f"[整合检测器] ✗ 关闭弹窗超时（{timeout}秒）")
+            self._log(f"[智能检测器] ✗ 关闭弹窗超时（{timeout}秒）")
             return False
     
     async def _close_popup_impl(self, device_id: str, known_popup_type: str = None, max_attempts: int = 3) -> bool:
@@ -961,14 +1013,14 @@ class PageDetectorIntegrated:
         
         # 如果已知弹窗类型，直接使用
         if known_popup_type:
-            self._log(f"[整合检测器] 使用已知弹窗类型: {known_popup_type}")
+            self._log(f"[智能检测器] 使用已知弹窗类型: {known_popup_type}")
             if known_popup_type in POPUP_BUTTONS:
                 button_pos = POPUP_BUTTONS[known_popup_type]
         else:
             # 检查当前页面状态
             result = await self.detect_page(device_id, use_cache=False)
             if result.state != PageState.POPUP and result.state != PageState.CHECKIN_POPUP:
-                self._log(f"[整合检测器] 当前不是弹窗页面，无需关闭")
+                self._log(f"[智能检测器] 当前不是弹窗页面，无需关闭")
                 return True
             
             # 如果还没有截图，获取当前截图用于OCR识别
@@ -988,35 +1040,35 @@ class PageDetectorIntegrated:
                     
                     if texts:
                         text_str = " ".join(texts) if texts else ""
-                        self._log(f"[整合检测器] OCR识别到: {texts[:5] if texts else '无'}...")
+                        self._log(f"[智能检测器] OCR识别到: {texts[:5] if texts else '无'}...")
                         
                         # 登录错误弹窗（最高优先级）
                         if "友情提示" in text_str:
                             popup_type = "login_error"
                             button_pos = POPUP_BUTTONS['login_error']
-                            self._log(f"[整合检测器] 类型: {popup_type} (OCR检测)")
+                            self._log(f"[智能检测器] 类型: {popup_type} (OCR检测)")
                         # 用户协议弹窗
                         elif any(kw in text_str for kw in ["用户协议", "隐私政策", "服务协议", "隐私协议"]):
                             if "登录" not in text_str or "同意并接受" in text_str:
                                 popup_type = "user_agreement"
                                 button_pos = POPUP_BUTTONS['user_agreement']
-                                self._log(f"[整合检测器] 类型: {popup_type} (OCR检测)")
+                                self._log(f"[智能检测器] 类型: {popup_type} (OCR检测)")
                         # 主页公告弹窗
                         elif any(kw in text_str for kw in ["公告", "活动", "恭喜", "领取", "×"]):
                             popup_type = "home_announcement"
                             button_pos = POPUP_BUTTONS['home_announcement']
-                            self._log(f"[整合检测器] 类型: {popup_type} (OCR检测)")
+                            self._log(f"[智能检测器] 类型: {popup_type} (OCR检测)")
                         # 通用弹窗
                         elif any(kw in text_str for kw in ["确定", "关闭", "取消", "知道了", "我知道了"]):
                             popup_type = "generic"
                             button_pos = POPUP_BUTTONS['generic']
-                            self._log(f"[整合检测器] 类型: {popup_type} (OCR检测)")
+                            self._log(f"[智能检测器] 类型: {popup_type} (OCR检测)")
                         else:
                             popup_type = "unknown"
                             button_pos = POPUP_BUTTONS['generic']
-                            self._log(f"[整合检测器] 类型: {popup_type} (OCR检测)")
+                            self._log(f"[智能检测器] 类型: {popup_type} (OCR检测)")
                 except Exception as e:
-                    self._log(f"[整合检测器] OCR检测失败: {e}")
+                    self._log(f"[智能检测器] OCR检测失败: {e}")
                     popup_type = "generic"
                     button_pos = POPUP_BUTTONS['generic']
             else:
@@ -1025,15 +1077,15 @@ class PageDetectorIntegrated:
         
         # 如果是首页公告弹窗，点击弹窗外部关闭
         if popup_type == "home_announcement":
-            self._log(f"[整合检测器] 首页公告弹窗，点击顶部区域关闭...")
+            self._log(f"[智能检测器] 首页公告弹窗，点击顶部区域关闭...")
             
             # 使用 POPUP_BUTTONS 中配置的坐标（不要硬编码）
             close_x, close_y = button_pos if button_pos else POPUP_BUTTONS['home_announcement']
             
             # 使用传入的重试次数（从GUI配置）
-            self._log(f"[整合检测器] 最多尝试 {max_attempts} 次")
+            self._log(f"[智能检测器] 最多尝试 {max_attempts} 次")
             for attempt in range(1, max_attempts + 1):
-                self._log(f"[整合检测器] 第 {attempt}/{max_attempts} 次点击 ({close_x}, {close_y})...")
+                self._log(f"[智能检测器] 第 {attempt}/{max_attempts} 次点击 ({close_x}, {close_y})...")
                 await self.adb.tap(device_id, close_x, close_y)
                 await asyncio.sleep(1.0)  # 等待页面响应
                 
@@ -1042,11 +1094,11 @@ class PageDetectorIntegrated:
                 # 成功条件：到达首页
                 if result.state == PageState.HOME:
                     # 成功关闭弹窗并到达首页
-                    self._log(f"[整合检测器] ✓ 成功关闭首页公告弹窗，当前页面: {result.state.value}")
+                    self._log(f"[智能检测器] ✓ 成功关闭首页公告弹窗，当前页面: {result.state.value}")
                     return True
                 elif result.state == PageState.CATEGORY:
                     # 如果误点进入分类页，点击首页按钮回到首页
-                    self._log(f"[整合检测器] ✗ 点击误触进入分类页，点击首页按钮...")
+                    self._log(f"[智能检测器] ✗ 点击误触进入分类页，点击首页按钮...")
                     # 分类页必须点击首页按钮，不能按返回键
                     await self.adb.tap(device_id, 90, 920)  # 首页按钮坐标
                     await asyncio.sleep(0.5)  # 等待页面切换
@@ -1054,30 +1106,30 @@ class PageDetectorIntegrated:
                     self.clear_cache(device_id)
                     result = await self.detect_page(device_id)
                     if result.state == PageState.HOME:
-                        self._log(f"[整合检测器] ✓ 已返回首页")
+                        self._log(f"[智能检测器] ✓ 已返回首页")
                         return True
                     # 如果还没回到首页，继续下一次尝试
                     continue
                 elif result.state == PageState.POPUP:
                     # 仍然是弹窗，继续下一次尝试
-                    self._log(f"[整合检测器] 仍是弹窗，继续尝试...")
+                    self._log(f"[智能检测器] 仍是弹窗，继续尝试...")
                     continue
                 else:
                     # 其他异常状态（退出应用、UNKNOWN等），返回失败让上层处理
-                    self._log(f"[整合检测器] ✗ 点击后页面状态异常: {result.state.value}，返回失败")
+                    self._log(f"[智能检测器] ✗ 点击后页面状态异常: {result.state.value}，返回失败")
                     return False
             
             # 所有尝试都失败，最后尝试按返回键
-            self._log(f"[整合检测器] {max_attempts} 次点击都失败，尝试按返回键...")
+            self._log(f"[智能检测器] {max_attempts} 次点击都失败，尝试按返回键...")
             await self.adb.press_back(device_id)
             await asyncio.sleep(1.0)
             
             result = await self.detect_page(device_id)
             if result.state == PageState.HOME:
-                self._log(f"[整合检测器] ✓ 返回键成功关闭首页公告弹窗，当前页面: {result.state.value}")
+                self._log(f"[智能检测器] ✓ 返回键成功关闭首页公告弹窗，当前页面: {result.state.value}")
                 return True
             else:
-                self._log(f"[整合检测器] ✗ 无法关闭首页公告弹窗，当前页面: {result.state.value}")
+                self._log(f"[智能检测器] ✗ 无法关闭首页公告弹窗，当前页面: {result.state.value}")
                 return False
         
         # 检查是否是签到奖励弹窗
@@ -1092,24 +1144,24 @@ class PageDetectorIntegrated:
                     text_str = ''.join(texts)
                     if ("恭喜" in text_str and "成功" in text_str) or "知道了" in text_str:
                         is_checkin_popup = True
-                        self._log(f"[整合检测器] 检测到签到奖励弹窗 (OCR确认)")
+                        self._log(f"[智能检测器] 检测到签到奖励弹窗 (OCR确认)")
             except:
                 pass
         
         # 如果是签到弹窗，使用专用坐标
         if is_checkin_popup:
-            self._log(f"[整合检测器] 使用签到弹窗专用坐标...")
+            self._log(f"[智能检测器] 使用签到弹窗专用坐标...")
             for i, (x, y) in enumerate(CHECKIN_POPUP_CLOSE, 1):
-                self._log(f"[整合检测器] 尝试位置 {i}/3: ({x}, {y})")
+                self._log(f"[智能检测器] 尝试位置 {i}/3: ({x}, {y})")
                 await self.adb.tap(device_id, x, y)
                 await asyncio.sleep(2)
                 
                 result = await self.detect_page(device_id)
                 if result.state != PageState.POPUP and result.state != PageState.CHECKIN_POPUP:
-                    self._log(f"[整合检测器] ✓ 成功关闭签到弹窗")
+                    self._log(f"[智能检测器] ✓ 成功关闭签到弹窗")
                     return True
             
-            self._log(f"[整合检测器] ⚠️ 签到弹窗专用坐标都失败，尝试其他方法...")
+            self._log(f"[智能检测器] ⚠️ 签到弹窗专用坐标都失败，尝试其他方法...")
         
         # 使用预设位置
         if button_pos:
@@ -1118,14 +1170,14 @@ class PageDetectorIntegrated:
             
             result = await self.detect_page(device_id)
             if result.state != PageState.POPUP:
-                self._log(f"[整合检测器] ✓ 成功关闭")
+                self._log(f"[智能检测器] ✓ 成功关闭")
                 return True
             else:
-                self._log(f"[整合检测器] ⚠️ 预设位置点击失败，仍是弹窗")
+                self._log(f"[智能检测器] ⚠️ 预设位置点击失败，仍是弹窗")
             
             # 尝试其他预设位置
             if popup_type in ["unknown", "home_announcement", "user_agreement"]:
-                self._log(f"[整合检测器] 尝试其他预设位置...")
+                self._log(f"[智能检测器] 尝试其他预设位置...")
                 alternative_positions = [
                     (270, 608),  # 备用位置1
                     (270, 620),  # 稍微靠下
@@ -1139,21 +1191,21 @@ class PageDetectorIntegrated:
                     
                     result = await self.detect_page(device_id)
                     if result.state != PageState.POPUP:
-                        self._log(f"[整合检测器] ✓ 成功关闭（位置: {pos}）")
+                        self._log(f"[智能检测器] ✓ 成功关闭（位置: {pos}）")
                         return True
                 
                 # 尝试按返回键
-                self._log(f"[整合检测器] 所有位置都失败，尝试按返回键...")
+                self._log(f"[智能检测器] 所有位置都失败，尝试按返回键...")
                 await self.adb.press_back(device_id)
                 await asyncio.sleep(1.5)
                 
                 result = await self.detect_page(device_id)
                 if result.state != PageState.POPUP:
-                    self._log(f"[整合检测器] ✓ 成功关闭（返回键）")
+                    self._log(f"[智能检测器] ✓ 成功关闭（返回键）")
                     return True
                 else:
-                    self._log(f"[整合检测器] ✗ 返回键也失败，弹窗无法关闭")
+                    self._log(f"[智能检测器] ✗ 返回键也失败，弹窗无法关闭")
                     return False
         
-        self._log(f"[整合检测器] ✗ 无法关闭弹窗")
+        self._log(f"[智能检测器] ✗ 无法关闭弹窗")
         return False

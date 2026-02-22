@@ -1,4 +1,4 @@
-"""
+﻿"""
 加密账号文件管理器
 Encrypted Accounts File Manager
 

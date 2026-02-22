@@ -52,7 +52,7 @@ class DailyCheckin:
         
         Args:
             adb: ADB桥接对象
-            detector: 页面检测器（整合检测器或混合检测器，应该是从ModelManager获取的共享实例）
+            detector: 页面检测器（智能检测器或混合检测器，应该是从ModelManager获取的共享实例）
             navigator: 导航器
         """
         self.adb = adb
@@ -63,12 +63,7 @@ class DailyCheckin:
         # 缓存首次成功的签到按钮坐标（用于后续点击）
         self._cached_home_checkin_button = None
         
-        # 初始化智能按钮点击器
-        from .smart_button_clicker import SmartButtonClicker
-        from .model_manager import ModelManager
-        model_manager = ModelManager.get_instance()
-        ocr_pool = model_manager.get_ocr_thread_pool() if HAS_OCR else None
-        self._smart_clicker = SmartButtonClicker(adb, detector, ocr_pool)
+        # [2026-02-21] 删除学习器：移除 SmartButtonClicker 初始化
         
         # 初始化页面检测缓存管理器
         from .page_detector_cache import PageDetectorCache
@@ -769,18 +764,8 @@ class DailyCheckin:
             if pre_click_result:
                 log(f"  [签到] 点击前页面状态: {pre_click_result.state.value} (置信度: {pre_click_result.confidence:.2%})")
             
-            # 使用智能按钮点击器（自动学习坐标）
-            success, used_pos = await self._smart_clicker.click_button(
-                device_id=device_id,
-                button_name="home_checkin_button",
-                valid_range=self.CHECKIN_BUTTON_VALID_RANGE,
-                default_position=checkin_button_pos,
-                cached_position=checkin_button_pos,
-                log_callback=lambda msg: log(msg)
-            )
-            if not success:
-                log(f"  [签到] ⚠️ 智能点击器失败，使用直接点击")
-                await self.adb.tap(device_id, checkin_button_pos[0], checkin_button_pos[1])
+            # [2026-02-21] 删除学习器：直接点击签到按钮
+            await self.adb.tap(device_id, checkin_button_pos[0], checkin_button_pos[1])
             
             # 点击后短暂等待，让页面开始变化
             await asyncio.sleep(0.3)
@@ -967,31 +952,13 @@ class DailyCheckin:
                 
                 # 点击首页按钮或返回按钮
                 if page_result.state == PageState.CATEGORY:
-                    # 分类页：使用智能按钮点击器点击首页按钮
-                    log(f"  [签到] 使用智能按钮点击器点击首页按钮...")
-                    success, home_pos = await self._smart_clicker.click_button(
-                        device_id=device_id,
-                        button_name="nav_home_button",
-                        valid_range=(50, 150, 850, 950),
-                        default_position=(90, 920),
-                        log_callback=lambda msg: log(msg)
-                    )
-                    if not success:
-                        log(f"  [签到] ⚠️ 智能点击器失败，使用默认坐标")
-                        await self.adb.tap(device_id, 90, 920)
+                    # [2026-02-21] 删除学习器：直接点击首页按钮
+                    log(f"  [签到] 点击首页按钮...")
+                    await self.adb.tap(device_id, 90, 920)
                 else:
-                    # 其他页面：使用智能按钮点击器点击返回按钮
-                    log(f"  [签到] 使用智能按钮点击器点击返回按钮...")
-                    success, back_pos = await self._smart_clicker.click_button(
-                        device_id=device_id,
-                        button_name="back_button",
-                        valid_range=(10, 80, 10, 80),
-                        default_position=(40, 40),
-                        log_callback=lambda msg: log(msg)
-                    )
-                    if not success:
-                        log(f"  [签到] ⚠️ 智能点击器失败，按返回键")
-                        await self.adb.press_back(device_id)
+                    # [2026-02-21] 删除学习器：直接按返回键
+                    log(f"  [签到] 按返回键...")
+                    await self.adb.press_back(device_id)
                 
                 await asyncio.sleep(0.5)  # 优化：1秒→0.5秒
                 self.detector.clear_cache(device_id)
@@ -1015,19 +982,9 @@ class DailyCheckin:
                 
                 # 已返回首页，重新点击签到按钮
                 log(f"  [签到] ✓ 已返回首页，重新点击签到按钮...")
-                # 已返回首页，重新点击签到按钮
-                # 使用智能按钮点击器重新点击签到按钮
-                success, used_pos = await self._smart_clicker.click_button(
-                    device_id=device_id,
-                    button_name="home_checkin_button",
-                    valid_range=self.CHECKIN_BUTTON_VALID_RANGE,
-                    default_position=checkin_button_pos,
-                    cached_position=checkin_button_pos,
-                    log_callback=lambda msg: log(msg)
-                )
-                if not success:
-                    log(f"  [签到] ⚠️ 智能点击器失败，使用直接点击")
-                    await self.adb.tap(device_id, checkin_button_pos[0], checkin_button_pos[1])
+                # [2026-02-21] 删除学习器：直接点击签到按钮
+                log(f"  [签到] ✓ 已返回首页，重新点击签到按钮...")
+                await self.adb.tap(device_id, checkin_button_pos[0], checkin_button_pos[1])
                 
                 await asyncio.sleep(0.3)  # 优化：1秒→0.3秒
                 
@@ -1265,7 +1222,7 @@ class DailyCheckin:
                         log(f"  [签到 {attempt + 1}] 剩余次数: {remaining_times if remaining_times is not None else '未知'}，继续签到...")
                 
                 # 5.4 执行签到（每次都重新检测按钮位置，不使用缓存）
-                log(f"  [签到 {attempt + 1}] 使用整合检测器检测签到按钮...")
+                log(f"  [签到 {attempt + 1}] 使用智能检测器检测签到按钮...")
                 checkin_button = None
                 try:
                     detection_result = await self._detect_page_cached(
@@ -1280,15 +1237,15 @@ class DailyCheckin:
                         for element in detection_result.elements:
                             if '签到按钮' in element.class_name or '签到' in element.class_name:
                                 checkin_button = element.center
-                                log(f"  [签到 {attempt + 1}] 整合检测器检测到签到按钮: {checkin_button} (置信度: {element.confidence:.2%})")
+                                log(f"  [签到 {attempt + 1}] 智能检测器检测到签到按钮: {checkin_button} (置信度: {element.confidence:.2%})")
                                 break
                     
                     if checkin_button is None:
-                        log(f"  [签到 {attempt + 1}] 整合检测器未检测到按钮，使用默认坐标...")
+                        log(f"  [签到 {attempt + 1}] 智能检测器未检测到按钮，使用默认坐标...")
                 except Exception as e:
-                    log(f"  [签到 {attempt + 1}] 整合检测器检测失败: {e}，使用默认坐标...")
+                    log(f"  [签到 {attempt + 1}] 智能检测器检测失败: {e}，使用默认坐标...")
                 
-                # 如果整合检测器失败，使用默认签到按钮坐标
+                # 如果智能检测器失败，使用默认签到按钮坐标
                 if checkin_button is None:
                     checkin_button = (270, 800)
                     log(f"  [签到 {attempt + 1}] 使用默认坐标: {checkin_button}")
@@ -1310,17 +1267,8 @@ class DailyCheckin:
                 concise.action(f"第{attempt + 1}次签到")
                 
                 # 使用智能按钮点击器（自动学习坐标）
-                success, used_pos = await self._smart_clicker.click_button(
-                    device_id=device_id,
-                    button_name="checkin_page_button",
-                    valid_range=(200, 350, 750, 850),
-                    default_position=(x, y),
-                    cached_position=(x, y),
-                    log_callback=lambda msg: log(msg)
-                )
-                if not success:
-                    log(f"  [签到 {attempt + 1}] ⚠️ 智能点击器失败，使用直接点击")
-                    await self.adb.tap(device_id, x, y)
+                # [2026-02-21] 删除学习器：直接点击签到按钮
+                await self.adb.tap(device_id, x, y)
                 
                 # 5.4.3 优化：根据当日剩余次数决定是否等待弹窗
                 # 
@@ -1368,18 +1316,8 @@ class DailyCheckin:
                         button_pos = self.CHECKIN_BUTTON
                         log(f"  [签到 {attempt + 1}] 使用默认首页入口按钮坐标: {button_pos}")
                     
-                    # 使用智能按钮点击器（自动学习坐标）
-                    success, used_pos = await self._smart_clicker.click_button(
-                        device_id=device_id,
-                        button_name="home_checkin_button",
-                        valid_range=self.CHECKIN_BUTTON_VALID_RANGE,
-                        default_position=button_pos,
-                        cached_position=button_pos,
-                        log_callback=lambda msg: log(msg)
-                    )
-                    if not success:
-                        log(f"  [签到 {attempt + 1}] ⚠️ 智能点击器失败，使用直接点击")
-                        await self.adb.tap(device_id, button_pos[0], button_pos[1])
+                    # [2026-02-21] 删除学习器：直接点击签到按钮
+                    await self.adb.tap(device_id, button_pos[0], button_pos[1])
                     
                     # 使用SmartWaiter混合检测等待页面变化（快速感知）
                     log(f"  [签到 {attempt + 1}] 等待页面变化...")
@@ -1639,19 +1577,10 @@ class DailyCheckin:
                         close_button_pos = (270, 812)
                     
                     # 使用智能按钮点击器关闭弹窗（自动学习坐标）
+                    # [2026-02-21] 删除学习器：直接点击关闭按钮
                     log(f"  [签到] 关闭弹窗...")
                     log(f"  [签到] 点击关闭按钮: {close_button_pos}")
-                    success, used_pos = await self._smart_clicker.click_button(
-                        device_id=device_id,
-                        button_name="popup_close_button",
-                        valid_range=(200, 350, 750, 850),
-                        default_position=close_button_pos,
-                        cached_position=close_button_pos,
-                        log_callback=lambda msg: log(msg)
-                    )
-                    if not success:
-                        log(f"  [签到] ⚠️ 智能点击器失败，使用直接点击")
-                        await self.adb.tap(device_id, close_button_pos[0], close_button_pos[1])
+                    await self.adb.tap(device_id, close_button_pos[0], close_button_pos[1])
                     
                     # 等待0.5秒检查是否关闭成功（给足够时间让弹窗消失）
                     await asyncio.sleep(0.5)
@@ -1662,16 +1591,7 @@ class DailyCheckin:
                         backup_positions = [(278, 811), (274, 811)]
                         for backup_pos in backup_positions:
                             log(f"  [签到] 尝试备用坐标: {backup_pos}")
-                            success, used_pos = await self._smart_clicker.click_button(
-                                device_id=device_id,
-                                button_name="popup_close_button",
-                                valid_range=(200, 350, 750, 850),
-                                default_position=backup_pos,
-                                cached_position=backup_pos,
-                                log_callback=lambda msg: log(msg)
-                            )
-                            if not success:
-                                await self.adb.tap(device_id, backup_pos[0], backup_pos[1])
+                            await self.adb.tap(device_id, backup_pos[0], backup_pos[1])
                             await asyncio.sleep(0.3)
                             check_result = await self._detect_page_cached(device_id, use_cache=False, cache_key=f"backup_check_{attempt}")
                             if check_result and check_result.state != PageState.CHECKIN_POPUP:
@@ -1974,18 +1894,8 @@ class DailyCheckin:
                 # 如果OCR识别失败，使用预设坐标
                 checkin_button_pos = self.CHECKIN_BUTTON
             
-            # 使用智能按钮点击器进入签到页面（自动学习坐标）
-            success, used_pos = await self._smart_clicker.click_button(
-                device_id=device_id,
-                button_name="home_checkin_button",
-                valid_range=self.CHECKIN_BUTTON_VALID_RANGE,
-                default_position=checkin_button_pos,
-                cached_position=checkin_button_pos,
-                log_callback=lambda msg: print(msg)
-            )
-            if not success:
-                print(f"  [签到] ⚠️ 智能点击器失败，使用直接点击")
-                await self.adb.tap(device_id, checkin_button_pos[0], checkin_button_pos[1])
+            # [2026-02-21] 删除学习器：直接点击签到按钮
+            await self.adb.tap(device_id, checkin_button_pos[0], checkin_button_pos[1])
             
             # 优化：使用智能等待器等待进入签到页面
             await wait_for_page(
@@ -2015,33 +1925,30 @@ class DailyCheckin:
             }
     
     async def _find_checkin_button(self, device_id: str) -> Optional[Tuple[int, int]]:
-        """使用整合检测器或OCR识别首页的"每日签到"按钮位置
-        
-        使用智能按钮点击器的学习机制，但只返回坐标不点击
-        
+        """使用智能检测器或OCR识别首页的"每日签到"按钮位置
+
+        # [2026-02-21] 删除学习器：改用 YOLO 检测 + OCR 降级 + 默认坐标
+
         Args:
             device_id: 设备ID
-            
+
         Returns:
             tuple: 按钮中心点坐标 (x, y)，失败返回None
         """
         # 导入日志记录器
         from .logger import get_logger
         logger = get_logger()
-        
-        # 创建设备专属的学习器
-        from .button_position_learner import ButtonPositionLearner
-        learner = ButtonPositionLearner(device_id=device_id)
-        
-        button_name = "home_checkin_button"
+
+        # [2026-02-21] 删除学习器：移除 ButtonPositionLearner
+
         detected_position = None
         detection_confidence = 0.0
-        
-        # 步骤1: 优先使用整合检测器（YOLO）
+
+        # 步骤1: 优先使用智能检测器（YOLO）
         try:
-            logger.info(f"  [签到] 使用整合检测器检测'每日签到'按钮...")
-            
-            # 使用整合检测器的元素检测功能（不使用缓存，避免旧坐标问题）
+            logger.info(f"  [签到] 使用智能检测器检测'每日签到'按钮...")
+
+            # 使用智能检测器的元素检测功能（不使用缓存，避免旧坐标问题）
             detection_result = await self._detect_page_cached(
                 device_id,
                 use_cache=False,  # 修改：不使用缓存，每次都重新检测
@@ -2049,78 +1956,56 @@ class DailyCheckin:
                 cache_key="home_checkin_button",
                 ttl=0  # 不缓存
             )
-            
+
             if detection_result and detection_result.elements:
                 # 查找签到按钮元素
                 for element in detection_result.elements:
                     if '每日签到' in element.class_name or '签到按钮' in element.class_name:
                         detected_position = element.center
                         detection_confidence = element.confidence
-                        logger.info(f"  [签到] 整合检测器检测到'{element.class_name}': {detected_position} (置信度: {detection_confidence:.2%})")
+                        logger.info(f"  [签到] 智能检测器检测到'{element.class_name}': {detected_position} (置信度: {detection_confidence:.2%})")
                         break
-                
+
                 if detected_position is None:
-                    logger.info(f"  [签到] 整合检测器未检测到签到按钮")
+                    logger.info(f"  [签到] 智能检测器未检测到签到按钮")
             else:
-                logger.info(f"  [签到] 整合检测器未检测到元素")
+                logger.info(f"  [签到] 智能检测器未检测到元素")
         except Exception as e:
-            logger.info(f"  [签到] 整合检测器检测失败: {e}")
-        
+            logger.info(f"  [签到] 智能检测器检测失败: {e}")
+
         # 步骤2: 坐标合理性验证
         if detected_position:
             x, y = detected_position
             x_min, x_max, y_min, y_max = self.CHECKIN_BUTTON_VALID_RANGE
-            
+
             # 检查是否在固定合理范围内
             if x_min <= x <= x_max and y_min <= y <= y_max:
                 logger.info(f"  [签到] ✓ 坐标合理性验证通过: {detected_position}")
-                
-                # 记录成功坐标到学习器
-                learner.record_success(button_name, detected_position, detection_confidence)
-                
+
+                # [2026-02-21] 删除学习器：移除 learner.record_success()
+
                 # 缓存成功坐标
                 self._cached_home_checkin_button = detected_position
-                
+
                 return detected_position
             else:
                 logger.info(f"  [签到] ⚠️ 坐标不合理: {detected_position}，超出范围 {self.CHECKIN_BUTTON_VALID_RANGE}")
-                logger.info(f"  [签到] 尝试使用学习器推荐坐标...")
-        
-        # 步骤3: 使用学习器推荐坐标
-        learner_position = learner.get_best_position(
-            button_name,
-            min_samples=5,
-            prefer_device=True
-        )
-        
-        if learner_position:
-            logger.info(f"  [签到] ✓ 学习器推荐坐标: {learner_position}")
-            
-            # 验证学习器推荐的坐标是否合理
-            x, y = learner_position
-            x_min, x_max, y_min, y_max = self.CHECKIN_BUTTON_VALID_RANGE
-            if x_min <= x <= x_max and y_min <= y <= y_max:
-                logger.info(f"  [签到] ✓ 学习器坐标验证通过")
-                self._cached_home_checkin_button = learner_position
-                return learner_position
-            else:
-                logger.info(f"  [签到] ⚠️ 学习器坐标不合理，继续降级...")
-        else:
-            logger.info(f"  [签到] 学习器无足够数据（需要至少5个样本）")
-        
-        # 步骤4: 使用缓存坐标
+
+        # [2026-02-21] 删除学习器：移除"使用学习器推荐坐标"逻辑（原步骤3）
+
+        # 步骤3: 使用缓存坐标
         if self._cached_home_checkin_button:
             logger.info(f"  [签到] 使用缓存坐标: {self._cached_home_checkin_button}")
             return self._cached_home_checkin_button
-        
-        # 步骤5: 降级到OCR识别
+
+        # 步骤4: 降级到OCR识别
         if HAS_OCR and self._ocr_pool:
             logger.info(f"  [签到] 降级到OCR识别...")
             try:
                 screenshot = await self.adb.screencap(device_id)
                 if screenshot:
                     image = Image.open(BytesIO(screenshot))
-                    
+
                     # 使用OCR线程池识别（减少超时）
                     from .timeouts_config import TimeoutsConfig
                     ocr_result = await self._ocr_pool.recognize(image, timeout=TimeoutsConfig.OCR_TIMEOUT_SHORT)
@@ -2135,20 +2020,19 @@ class DailyCheckin:
                                 center_y = int(sum(y_coords) / len(y_coords))
                                 ocr_position = (center_x, center_y)
                                 logger.info(f"  [签到] OCR找到签到按钮: {ocr_position}")
-                                
+
                                 # 验证OCR坐标是否合理
                                 x_min, x_max, y_min, y_max = self.CHECKIN_BUTTON_VALID_RANGE
                                 if x_min <= center_x <= x_max and y_min <= center_y <= y_max:
                                     logger.info(f"  [签到] ✓ OCR坐标验证通过")
-                                    # 记录成功坐标
-                                    learner.record_success(button_name, ocr_position, 1.0)
+                                    # [2026-02-21] 删除学习器：移除 learner.record_success()
                                     self._cached_home_checkin_button = ocr_position
                                     return ocr_position
                                 else:
                                     logger.info(f"  [签到] ⚠️ OCR坐标不合理，继续查找...")
             except Exception as e:
                 logger.warning(f"  ⚠️ OCR识别签到按钮失败: {e}")
-        
-        # 步骤6: 最终降级到固定坐标
+
+        # 步骤5: 最终降级到固定坐标
         logger.info(f"  [签到] 使用默认固定坐标: {self.CHECKIN_BUTTON}")
         return self.CHECKIN_BUTTON

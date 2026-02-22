@@ -163,12 +163,6 @@
       "state_value": "home_error_popup",
       "chinese_name": "首页异常代码弹窗",
       "description": "首页异常代码弹窗"
-    },
-    "_标注错误_广告页": {
-      "state": "标注错误_AD_PAGE",
-      "state_value": "标注错误_ad_page",
-      "chinese_name": "_标注错误_广告页",
-      "description": "_标注错误_广告页（自动生成）"
     }
   },
   "auto_register": {

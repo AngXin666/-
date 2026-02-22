@@ -1,10 +1,10 @@
-"""
+﻿"""
 溪盟商城业务自动化模块
 Ximeng Mall Business Automation Module
 
 代码清理记录：
 - 2026-02-02: 删除废弃的启动流程函数（handle_startup_flow, handle_startup_flow_optimized）
-- 2026-02-08: 删除模板匹配相关代码，统一使用整合检测器（YOLO + 页面分类器）
+- 2026-02-08: 删除模板匹配相关代码，统一使用智能检测器（YOLO + 页面分类器）
 - 保留实际使用的函数（handle_startup_flow_integrated）
 - 文件从 3531 行减少到约 2000 行（减少 43%）
 """
@@ -62,7 +62,7 @@ class XimengAutomation:
         from .model_manager import ModelManager
         model_manager = ModelManager.get_instance()
         
-        # 获取共享的检测器实例（整合检测器：YOLO + 页面分类器）
+        # 获取共享的检测器实例（智能检测器：YOLO + 页面分类器）
         self.detector = model_manager.get_page_detector_integrated()
         
         # 初始化其他组件（使用共享检测器）
@@ -71,18 +71,18 @@ class XimengAutomation:
         from .daily_checkin import DailyCheckin
         from .profile_reader import ProfileReader
         
-        # 所有组件都使用整合检测器（深度学习）
+        # 所有组件都使用智能检测器（深度学习）
         self.navigator = Navigator(self.adb, self.detector)
         self.balance_reader = BalanceReader(self.adb)
         self.daily_checkin = DailyCheckin(self.adb, self.detector, self.navigator)
         
-        # 初始化ProfileReader，传入整合检测器
+        # 初始化ProfileReader，传入智能检测器
         self.profile_reader = ProfileReader(self.adb, yolo_detector=self.detector)
         
         # 从ModelManager获取OCR线程池
         self._ocr_enhancer = model_manager.get_ocr_thread_pool()
         
-        # 初始化转账模块（使用整合检测器）
+        # 初始化转账模块（使用智能检测器）
         from .balance_transfer import BalanceTransfer
         self.balance_transfer = BalanceTransfer(self.adb, self.detector)
     
@@ -135,10 +135,10 @@ class XimengAutomation:
     async def handle_startup_flow_integrated(self, device_id: str, log_callback=None, stop_check=None,
                                             package_name: str = "com.ry.xmsc", activity_name: str = None,
                                             max_retries: int = 3, file_logger=None) -> bool:
-        """处理应用启动流程 - 使用整合检测器和智能等待器（GPU加速）
+        """处理应用启动流程 - 使用智能检测器和智能等待器（GPU加速）
         
         优化点：
-        1. 使用整合检测器（PyTorch GPU加速，2.24ms）
+        1. 使用智能检测器（PyTorch GPU加速，2.24ms）
         2. 使用智能等待器（高频轮询0.3秒，即时响应）
         3. 替换所有固定等待为智能等待
         4. GPU加速页面分类，速度提升4.54倍
@@ -193,7 +193,7 @@ class XimengAutomation:
         # 简洁日志：步骤1 - 启动应用
         concise.step(1, "启动应用")
         
-        # 使用已初始化的整合检测器（GPU加速深度学习）
+        # 使用已初始化的智能检测器（GPU加速深度学习）
         detector = self.detector
         if file_logger:
             file_logger.debug("使用已初始化的深度学习检测器（GPU加速）")
@@ -345,7 +345,7 @@ class XimengAutomation:
                     # 简洁日志：关闭服务弹窗
                     concise.action("关闭服务弹窗")
                     
-                    # 使用整合检测器点击元素（YOLO会在这里自动加载）
+                    # 使用智能检测器点击元素（YOLO会在这里自动加载）
                     click_start = time.time()
                     success = await detector.click_element(device_id, "同意按钮")
                     click_time = time.time() - click_start
@@ -687,7 +687,7 @@ class XimengAutomation:
         ad_closed_count = 1  # 已经按了一次返回键（预防性关闭）
         
         while (asyncio.get_event_loop().time() - start_time) < max_scan_time:
-            # 检测当前页面状态（使用整合检测器）
+            # 检测当前页面状态（使用智能检测器）
             page_result = await self.detector.detect_page(
                 device_id, use_cache=False, detect_elements=False
             )
@@ -895,7 +895,7 @@ class XimengAutomation:
                 file_logger.info("登录后处理积分页跳转...")
                 await asyncio.sleep(2)
                 
-                # 检测当前页面 - 使用整合检测器（GPU加速深度学习）
+                # 检测当前页面 - 使用智能检测器（GPU加速深度学习）
                 page_result = await self.detector.detect_page(
                     device_id, use_cache=False, detect_elements=False
                 )
@@ -1053,7 +1053,7 @@ class XimengAutomation:
                             file_logger.info("缓存登录 - 验证当前页面状态...")
                             nav_success = True
                             
-                            # 立即检测页面状态（不等待）- 使用整合检测器（GPU加速）
+                            # 立即检测页面状态（不等待）- 使用智能检测器（GPU加速）
                             detect_start = time.time()
                             from .page_detector import PageState
                             page_result = await self.detector.detect_page(
@@ -1105,7 +1105,7 @@ class XimengAutomation:
                             if not nav_success:
                                 log(f"⚠️ 导航到个人资料页面失败")
                                 
-                                # 检查当前页面状态 - 使用整合检测器（GPU加速）
+                                # 检查当前页面状态 - 使用智能检测器（GPU加速）
                                 from .page_detector import PageState
                                 page_result = await self.detector.detect_page(
                                     device_id, use_cache=True, detect_elements=False

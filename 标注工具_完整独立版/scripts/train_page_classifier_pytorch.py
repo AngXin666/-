@@ -293,7 +293,7 @@ def main():
     print(f"  • Learning Rate: {LEARNING_RATE}")
     print(f"  • Image Size: {IMG_SIZE[0]}x{IMG_SIZE[1]}")
     print(f"  • 验证间隔: 每{VAL_INTERVAL}轮验证一次")
-    print(f"  • 数据加载: 4线程 (训练) / 2线程 (验证) + persistent_workers")
+    print(f"  • 数据加载: 8线程 (训练) / 4线程 (验证) + persistent_workers")
     
     # 数据变换
     transform = transforms.Compose([
@@ -320,10 +320,10 @@ def main():
     print(f"  • 验证集: {len(val_dataset)} 张")
     print(f"  • 类别数: {len(dataset.classes)}")
     
+    # [2026-02-22] 修改原因：提升数据加载速度，使用10线程训练/2线程验证
     # 创建数据加载器 - 使用多线程加速
-    # Windows上使用4线程，配合persistent_workers避免重复创建进程
     train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, 
-                             num_workers=4, pin_memory=True if device.type == 'cuda' else False,
+                             num_workers=10, pin_memory=True if device.type == 'cuda' else False,
                              persistent_workers=True)
     val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, 
                            num_workers=2, pin_memory=True if device.type == 'cuda' else False,

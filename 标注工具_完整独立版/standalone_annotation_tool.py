@@ -279,6 +279,14 @@ class AnnotationTool:
         # 类别选择
         tk.Label(left_frame, text="选择页面类别", font=('微软雅黑', 12, 'bold'), bg='#f0f0f0').pack(pady=10)
         
+        # [2026-02-21] 添加：创建新项目按钮
+        new_project_btn = tk.Button(left_frame, text="➕ 创建新项目", 
+                                    command=self.create_new_project,
+                                    font=('微软雅黑', 9, 'bold'), 
+                                    bg='#4CAF50', fg='white',
+                                    width=20)
+        new_project_btn.pack(padx=10, pady=(0, 10))
+        
         self.category_listbox = tk.Listbox(left_frame, font=('微软雅黑', 10), height=15)
         self.category_listbox.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
         self.category_listbox.bind('<<ListboxSelect>>', self.on_category_select)
@@ -426,6 +434,63 @@ class AnnotationTool:
         for i in range(1, 10):
             if i <= len(ELEMENT_CLASSES):
                 self.root.bind(str(i), lambda e, idx=i-1: self.quick_select_class(idx))
+    
+    def create_new_project(self):
+        """创建新项目
+        
+        # [2026-02-21] 新增功能：创建新项目
+        # 功能：输入项目名称，自动创建training_data下的文件夹
+        """
+        from tkinter import simpledialog
+        
+        # 弹出输入框
+        project_name = simpledialog.askstring(
+            "创建新项目",
+            "请输入项目名称（例如：个人页_已登录_详细）:",
+            parent=self.root
+        )
+        
+        if not project_name:
+            return
+        
+        # 清理项目名称（移除非法字符）
+        import re
+        project_name = re.sub(r'[<>:"/\\|?*]', '_', project_name)
+        project_name = project_name.strip()
+        
+        if not project_name:
+            messagebox.showerror("错误", "项目名称不能为空")
+            return
+        
+        # 创建项目文件夹
+        project_dir = self.data_dir / project_name
+        
+        if project_dir.exists():
+            messagebox.showerror("错误", f"项目已存在: {project_name}")
+            return
+        
+        try:
+            project_dir.mkdir(parents=True, exist_ok=True)
+            messagebox.showinfo("成功", f"项目创建成功: {project_name}\n\n请将截图放入文件夹:\n{project_dir}")
+            
+            # 刷新类别列表
+            self.category_listbox.delete(0, tk.END)
+            self.load_categories()
+            
+            # 自动选择新创建的项目
+            for i in range(self.category_listbox.size()):
+                if self.category_listbox.get(i) == project_name:
+                    self.category_listbox.selection_set(i)
+                    self.category_listbox.see(i)
+                    self.on_category_select(None)
+                    break
+            
+            # 打开项目文件夹
+            import subprocess
+            subprocess.Popen(f'explorer "{project_dir.absolute()}"')
+            
+        except Exception as e:
+            messagebox.showerror("错误", f"创建项目失败: {e}")
     
     def load_categories(self):
         """加载页面类别"""

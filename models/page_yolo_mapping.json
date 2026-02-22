@@ -37,11 +37,6 @@
           "model_key": "个人页广告_20260131_000131",
           "purpose": "检测按钮",
           "priority": 2
-        },
-        {
-          "model_key": "个人页广告_20260220_120310",
-          "purpose": "检测按钮",
-          "priority": 3
         }
       ]
     },
@@ -77,11 +72,6 @@
           "model_key": "category",
           "purpose": "检测按钮",
           "priority": 2
-        },
-        {
-          "model_key": "category_20260220_120310",
-          "purpose": "检测按钮",
-          "priority": 3
         }
       ]
     },
@@ -115,11 +105,6 @@
           "model_key": "search",
           "purpose": "检测返回按钮",
           "priority": 2
-        },
-        {
-          "model_key": "search_20260220_120310",
-          "purpose": "检测返回按钮",
-          "priority": 3
         }
       ]
     },
@@ -135,11 +120,6 @@
           "model_key": "article",
           "purpose": "检测按钮",
           "priority": 2
-        },
-        {
-          "model_key": "article_20260220_120310",
-          "purpose": "检测按钮",
-          "priority": 3
         }
       ]
     },
@@ -159,11 +139,6 @@
           "model_key": "warmtip_20260131_000131",
           "purpose": "检测确认按钮",
           "priority": 2
-        },
-        {
-          "model_key": "warmtip_20260220_120310",
-          "purpose": "检测确认按钮",
-          "priority": 3
         }
       ]
     },
@@ -194,11 +169,6 @@
           "model_key": "points",
           "purpose": "检测按钮",
           "priority": 2
-        },
-        {
-          "model_key": "points_20260220_120310",
-          "purpose": "检测按钮",
-          "priority": 3
         }
       ]
     },
@@ -239,11 +209,6 @@
           "model_key": "checkin_20260131_000413",
           "purpose": "检测签到按钮",
           "priority": 4
-        },
-        {
-          "model_key": "checkin_20260220_120310",
-          "purpose": "检测签到按钮",
-          "priority": 5
         }
       ]
     },
@@ -303,11 +268,6 @@
           "model_key": "wallet",
           "purpose": "检测余额数字, 转增按钮",
           "priority": 2
-        },
-        {
-          "model_key": "wallet_20260220_120310",
-          "purpose": "检测余额数字, 转增按钮",
-          "priority": 3
         }
       ]
     },
@@ -328,11 +288,6 @@
           "model_key": "home_20260131_000131",
           "purpose": "检测我的按钮, 签到按钮",
           "priority": 3
-        },
-        {
-          "model_key": "home_20260220_120310",
-          "purpose": "检测我的按钮, 签到按钮",
-          "priority": 4
         }
       ]
     },
@@ -348,11 +303,6 @@
           "model_key": "首页公告_20260131_000131",
           "purpose": "检测按钮",
           "priority": 2
-        },
-        {
-          "model_key": "首页公告_20260220_120310",
-          "purpose": "检测按钮",
-          "priority": 3
         }
       ]
     },
@@ -368,11 +318,6 @@
           "model_key": "首页异常代码弹窗_20260131_000131",
           "purpose": "检测按钮",
           "priority": 2
-        },
-        {
-          "model_key": "首页异常代码弹窗_20260220_120310",
-          "purpose": "检测按钮",
-          "priority": 3
         }
       ]
     },
@@ -393,11 +338,6 @@
           "model_key": "签到成功弹窗_20260131_000131",
           "purpose": "检测按钮",
           "priority": 1
-        },
-        {
-          "model_key": "签到成功弹窗_20260220_120310",
-          "purpose": "检测按钮",
-          "priority": 2
         }
       ]
     },
@@ -408,11 +348,6 @@
           "model_key": "签到成功弹窗_detector2",
           "purpose": "检测按钮",
           "priority": 1
-        },
-        {
-          "model_key": "签到成功弹窗_detector2_20260220_120310",
-          "purpose": "检测按钮",
-          "priority": 2
         }
       ]
     },
@@ -423,11 +358,6 @@
           "model_key": "签到页_detector2",
           "purpose": "检测按钮",
           "priority": 1
-        },
-        {
-          "model_key": "签到页_detector2_20260220_120310",
-          "purpose": "检测按钮",
-          "priority": 2
         }
       ]
     },
@@ -438,11 +368,6 @@
           "model_key": "首页_detector2",
           "purpose": "检测按钮",
           "priority": 1
-        },
-        {
-          "model_key": "首页_detector2_20260220_120310",
-          "purpose": "检测按钮",
-          "priority": 2
         }
       ]
     },
@@ -463,11 +388,6 @@
           "model_key": "train_20260131_000413",
           "purpose": "检测按钮",
           "priority": 3
-        },
-        {
-          "model_key": "train_20260220_120310",
-          "purpose": "检测按钮",
-          "priority": 4
         }
       ]
     },
@@ -508,6 +428,11 @@
           "model_key": "train4_20260208_022849",
           "purpose": "检测按钮",
           "priority": 2
+        },
+        {
+          "model_key": "train4_20260221_190840",
+          "purpose": "检测按钮",
+          "priority": 3
         }
       ]
     },
@@ -531,21 +456,11 @@
         }
       ]
     },
-    "个人页": {
-      "page_state": "PROFILE",
+    "个人页已登录_detector2": {
+      "page_state": "个人页已登录_DETECTOR2",
       "yolo_models": [
         {
-          "model_key": "profile",
-          "purpose": "检测昵称文本, 用户ID",
-          "priority": 1
-        }
-      ]
-    },
-    "startup_popup": {
-      "page_state": "STARTUP_POPUP",
-      "yolo_models": [
-        {
-          "model_key": "startup_popup_20260220_120310",
+          "model_key": "个人页已登录_detector2",
           "purpose": "检测按钮",
           "priority": 1
         }
@@ -558,5 +473,5 @@
     "example": "页面分类器识别为'首页' -> 加载homepage YOLO模型 -> 检测'每日签到按钮'和'我的按钮'"
   },
   "version": "1.0",
-  "last_updated": "2026-02-20"
+  "last_updated": "2026-02-21"
 }

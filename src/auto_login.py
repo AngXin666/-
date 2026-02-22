@@ -60,7 +60,7 @@ class AutoLogin:
             adb_bridge: ADB 桥接器实例
             enable_cache: 是否启用登录缓存
             emulator_type: 模拟器类型 (默认 "mumu")
-            integrated_detector: 整合检测器实例（可选，用于性能优化）
+            integrated_detector: 智能检测器实例（可选，用于性能优化）
         """
         self.ui_automation = ui_automation
         self.screen_capture = screen_capture
@@ -75,13 +75,13 @@ class AutoLogin:
         
         model_manager = ModelManager.get_instance()
         
-        # 使用整合检测器（YOLO + 页面分类器）
+        # 使用智能检测器（YOLO + 页面分类器）
         if integrated_detector:
             self.detector = integrated_detector
         else:
             self.detector = model_manager.get_page_detector_integrated()
         
-        print("[AutoLogin] 使用整合检测器（YOLO + 页面分类器）")
+        print("[AutoLogin] 使用智能检测器（YOLO + 页面分类器）")
         
         # 根据模拟器类型设置坐标
         self.set_emulator_type(emulator_type)

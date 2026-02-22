@@ -1,4 +1,4 @@
-"""
+﻿"""
 超时配置模块 - 统一管理所有超时时间
 Timeouts Configuration Module - Centralized timeout management
 """

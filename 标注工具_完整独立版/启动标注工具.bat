@@ -7,6 +7,9 @@ echo.
 echo 正在启动标注工具...
 echo.
 
+REM [2026-02-21] 修复：切换到脚本所在目录
+cd /d "%~dp0"
+
 python standalone_annotation_tool.py
 
 if errorlevel 1 (

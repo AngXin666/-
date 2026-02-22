@@ -30,12 +30,12 @@ class Navigator:
         """
         self.adb = adb
         
-        # 如果没有提供检测器，从ModelManager获取共享的整合检测器
+        # 如果没有提供检测器，从ModelManager获取共享的智能检测器
         if detector is None:
             from .model_manager import ModelManager
             model_manager = ModelManager.get_instance()
             self.detector = model_manager.get_page_detector_integrated()
-            print(f"[Navigator] 从ModelManager获取共享的整合检测器")
+            print(f"[Navigator] 从ModelManager获取共享的智能检测器")
         else:
             # 使用传入的检测器（应该是从ModelManager获取的共享实例）
             self.detector = detector

@@ -1,4 +1,4 @@
-"""
+﻿"""
 自动页面类型注册模块
 Auto Page Type Registration Module
 
