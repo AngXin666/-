@@ -36,7 +36,7 @@ class SilentLogger:
             level: 日志级别
         """
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        log_line = f"{timestamp} | {level:8s} | {message}\n"
+        log_line = f"{timestamp}  |  {level:8s}  |  {message}\n"
         
         try:
             with open(self.log_path, 'a', encoding='utf-8') as f:
@@ -107,9 +107,10 @@ class Logger:
         # 清除已有的处理器
         self.logger.handlers.clear()
         
+        # [2026-03-01] 优化日志格式：增加间距，提升可读性
         # 设置日志格式
         self.formatter = logging.Formatter(
-            '%(asctime)s | %(levelname)-8s | %(instance_id)-10s | %(message)s',
+            '%(asctime)s  |  %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
         )
         
@@ -273,16 +274,16 @@ def get_logger(name: str = "NoxAutomation",
     if _logger is None:
         _logger = Logger(name, log_dir, log_level)
         
-        # [2026-02-22] 配置logging模块的基础设置，让logging.getLogger()也能写入日志
+        # [2026-03-01] 优化日志：配置logging模块的基础设置，增加间距提升可读性
         # 这样其他模块使用logging.getLogger(__name__)时也能正确记录日志
         log_path = Path(log_dir) / f"{name}_{datetime.now().strftime('%Y%m%d')}.log"
         logging.basicConfig(
             level=getattr(logging, log_level.upper(), logging.INFO),
-            format='%(asctime)s | %(levelname)-8s | %(name)-20s | %(message)s',
+            format='%(asctime)s  |  %(message)s',  # 优化格式，增加间距
             datefmt='%Y-%m-%d %H:%M:%S',
             handlers=[
-                logging.FileHandler(log_path, encoding='utf-8'),
-                logging.StreamHandler(sys.stdout)
+                logging.FileHandler(log_path, encoding='utf-8')
+                # [2026-03-01] 删除StreamHandler，避免日志重复输出到控制台
             ],
             force=True  # 强制重新配置，覆盖已有配置
         )

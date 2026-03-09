@@ -85,13 +85,17 @@ class AutomationGUI:
         self.launch_timeout_var = tk.IntVar(value=120)
         self.switch_delay_var = tk.IntVar(value=3)
         
-        # 定时运行配置
-        self.scheduled_run_enabled = tk.BooleanVar(value=False)
-        self.scheduled_run_time = tk.StringVar(value="08:00")
-        self.scheduled_hour_var = tk.StringVar(value="08")
-        self.scheduled_minute_var = tk.StringVar(value="00")
+        # [2026-02-28] 修复：定时运行配置 - 不设置默认值，等加载配置时再设置
+        # 这样可以记住用户上次的配置，而不是每次都显示默认值
+        self.scheduled_run_enabled = tk.BooleanVar()
+        self.scheduled_run_time = tk.StringVar()
+        self.scheduled_hour_var = tk.StringVar()
+        self.scheduled_minute_var = tk.StringVar()
         self.last_scheduled_run_date = None  # 记录上次定时运行的日期
         self.schedule_check_thread = None  # 定时检查线程
+        
+        # [2026-02-28] 修复：标志位，控制是否允许自动保存（避免加载配置时触发保存）
+        self._allow_auto_save_scheduled_time = False
         
         # 线程控制事件(改进：使用Event对象，线程可以更快响应)
         self.stop_event = threading.Event()  # 停止事件
@@ -114,6 +118,9 @@ class AutomationGUI:
         # 模拟器实例池管理
         self.instance_pool = []  # 可用的实例编号池 [0, 1, 2, ...]
         self.instance_lock = threading.Lock()  # 实例池访问锁
+        
+        # [2026-03-03] 修复：初始化错误日志列表
+        self.all_error_logs = []  # 存储所有错误和警告日志
         
         # 设置窗口关闭协议
         self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
@@ -163,6 +170,30 @@ class AutomationGUI:
         
         def load_models_thread():
             """后台加载模型的线程函数"""
+            # [2026-02-28] 修复：临时重定向stdout，抑制RapidOCR的INFO日志
+            import sys
+            from io import StringIO
+            
+            # 创建一个过滤器，只保留非RapidOCR的输出
+            class FilteredOutput:
+                def __init__(self, original):
+                    self.original = original
+                
+                def write(self, text):
+                    # 过滤掉包含RapidOCR的INFO日志
+                    if '[RapidOCR]' not in text and 'rapidocr' not in text.lower():
+                        self.original.write(text)
+                        self.original.flush()
+                
+                def flush(self):
+                    self.original.flush()
+            
+            # 临时替换stdout和stderr
+            original_stdout = sys.stdout
+            original_stderr = sys.stderr
+            sys.stdout = FilteredOutput(original_stdout)
+            sys.stderr = FilteredOutput(original_stderr)
+            
             try:
                 from .model_manager import ModelManager
                 model_manager = ModelManager.get_instance()
@@ -192,6 +223,10 @@ class AutomationGUI:
                 self.root.after(0, lambda err=str(e): self._log(f"❌ 模型加载失败: {err}"))
                 import traceback
                 traceback.print_exc()
+            finally:
+                # 恢复原始输出
+                sys.stdout = original_stdout
+                sys.stderr = original_stderr
         
         # 启动后台线程
         thread = threading.Thread(target=load_models_thread, daemon=True)
@@ -476,81 +511,150 @@ class AutomationGUI:
         ttk.Label(progress_frame, textvariable=self.progress_label_var).pack(anchor=tk.W)
         
         # === 日志区域 ===
-        log_frame = ttk.LabelFrame(main_frame, text="运行日志 (双击清空)", padding="5")
-        log_frame.pack(fill=tk.X, expand=False, pady=(0, 10))
+        # [2026-03-03] 修改：使用 Notebook 标签页为每个实例创建独立日志
+        # [2026-03-03] 新增："全部"标签页显示所有账号的处理状态
+        # [2026-03-03] 修改：统计信息放在标题下面，标签页上面
+        log_frame = ttk.LabelFrame(main_frame, text="运行日志 (双击标签页激活模拟器)", padding="5")
+        log_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         
-        # 添加实例过滤器(在日志框上方)
-        filter_row = ttk.Frame(log_frame)
-        filter_row.pack(fill=tk.X, pady=(0, 5))
-        ttk.Label(filter_row, text="查看日志:", width=10).pack(side=tk.LEFT)
-        self.log_filter_var = tk.StringVar(value="全部")
-        log_filter_combo = ttk.Combobox(filter_row, textvariable=self.log_filter_var, 
-                                        state='readonly', width=15)
-        log_filter_combo['values'] = ('全部', '实例0', '实例1', '实例2', '实例3', '实例4')
-        log_filter_combo.pack(side=tk.LEFT, padx=(0, 10))
-        log_filter_combo.bind('<<ComboboxSelected>>', self._on_log_filter_changed)
-        
-        # 存储所有日志(用于过滤)
-        self.all_logs = []  # 存储所有日志消息
-        
-        self.log_text = scrolledtext.ScrolledText(log_frame, height=12, state=tk.DISABLED)
-        self.log_text.pack(fill=tk.BOTH, expand=False)
-        self.log_text.bind("<Double-Button-1>", lambda e: self._clear_log())
-        
-        # 添加右键复制功能
-        self._create_text_context_menu(self.log_text)
-        
-        # 日志自动滚动控制
-        self.log_auto_scroll = True  # 默认开启自动滚动
-        self._scroll_check_timer = None  # 防抖定时器
-        
-        # 绑定鼠标滚轮和滚动条事件，用户滑动时停止自动滚动
-        self.log_text.bind("<MouseWheel>", self._on_log_scroll)
-        self.log_text.bind("<Button-4>", self._on_log_scroll)  # Linux
-        self.log_text.bind("<Button-5>", self._on_log_scroll)  # Linux
-        
-        # 绑定滚动条拖动事件
-        log_scrollbar = self.log_text.vbar
-        if log_scrollbar:
-            log_scrollbar.bind("<B1-Motion>", self._on_log_scrollbar_drag)
-            log_scrollbar.bind("<ButtonRelease-1>", self._on_log_scrollbar_release)
-        
-        # === 错误日志区域 ===
-        error_log_frame = ttk.LabelFrame(main_frame, text="错误日志", padding="5")
-        error_log_frame.pack(fill=tk.X, expand=False, pady=(0, 10))
-        
-        # 存储所有错误日志
-        self.all_error_logs = []  # 存储所有错误日志消息
-        
-        self.error_log_text = scrolledtext.ScrolledText(error_log_frame, height=6, state=tk.DISABLED)
-        self.error_log_text.pack(fill=tk.BOTH, expand=False)
-        
-        # 添加右键复制功能
-        self._create_text_context_menu(self.error_log_text)
-        
-        # 配置错误日志文本颜色
-        self.error_log_text.tag_configure("error", foreground="red")
-        
-        
-        # === 统计区域 ===
-        stats_frame = ttk.LabelFrame(main_frame, text="统计", padding="5")
-        stats_frame.pack(fill=tk.X, pady=(0, 10))
+        # [2026-03-03] 统计信息放在标题下面
+        stats_container = tk.Frame(log_frame)
+        stats_container.pack(fill=tk.X, pady=(0, 5))
         
         # 单行统计：总计、成功、失败、总余额、总签到奖励
-        stats_row = ttk.Frame(stats_frame)
-        stats_row.pack(fill=tk.X, pady=2)
-        
         self.total_var = tk.StringVar(value="总计: 0")
         self.success_var = tk.StringVar(value="成功: 0")
         self.failed_var = tk.StringVar(value="失败: 0")
         self.total_balance_var = tk.StringVar(value="总余额: 0.00 元")
         self.total_checkin_reward_var = tk.StringVar(value="总签到奖励: 0.00 元")
         
-        ttk.Label(stats_row, textvariable=self.total_var, width=12, foreground="blue").pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Label(stats_row, textvariable=self.success_var, width=12, foreground="green").pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Label(stats_row, textvariable=self.failed_var, width=12, foreground="red").pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Label(stats_row, textvariable=self.total_balance_var, width=18, foreground="purple").pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Label(stats_row, textvariable=self.total_checkin_reward_var, width=20, foreground="darkgreen").pack(side=tk.LEFT)
+        tk.Label(stats_container, textvariable=self.total_var, font=("Microsoft YaHei UI", 9), fg="blue").pack(side=tk.LEFT, padx=(0, 10))
+        tk.Label(stats_container, textvariable=self.success_var, font=("Microsoft YaHei UI", 9), fg="green").pack(side=tk.LEFT, padx=(0, 10))
+        tk.Label(stats_container, textvariable=self.failed_var, font=("Microsoft YaHei UI", 9), fg="red").pack(side=tk.LEFT, padx=(0, 10))
+        tk.Label(stats_container, textvariable=self.total_balance_var, font=("Microsoft YaHei UI", 9), fg="purple").pack(side=tk.LEFT, padx=(0, 10))
+        tk.Label(stats_container, textvariable=self.total_checkin_reward_var, font=("Microsoft YaHei UI", 9), fg="darkgreen").pack(side=tk.LEFT)
+        
+        # 创建 Notebook（标签页容器）
+        self.log_notebook = ttk.Notebook(log_frame)
+        self.log_notebook.pack(fill=tk.BOTH, expand=True)
+        
+        # [2026-03-03] 禁用标签页关闭按钮
+        # 绑定标签页关闭事件，阻止关闭
+        self.log_notebook.bind("<<NotebookTabClosed>>", lambda e: "break")
+        
+        # [2026-03-03] 调整标签页高度：使用 Style 设置更大的标签页
+        style = ttk.Style()
+        style.configure('TNotebook.Tab', padding=[20, 10])  # 增加标签页的内边距（宽度, 高度）
+        
+        # [2026-03-03] 隐藏标签页关闭按钮
+        try:
+            # 尝试配置样式以隐藏关闭按钮
+            style.layout('TNotebook.Tab', [
+                ('Notebook.tab', {
+                    'sticky': 'nswe',
+                    'children': [
+                        ('Notebook.padding', {
+                            'side': 'top',
+                            'sticky': 'nswe',
+                            'children': [
+                                ('Notebook.label', {'side': 'left', 'sticky': ''})
+                            ]
+                        })
+                    ]
+                })
+            ])
+        except:
+            # 如果样式配置失败，忽略错误
+            pass
+        
+        # 为每个实例创建独立的日志文本框（全部 + 实例0-5，共7个标签页）
+        self.instance_log_texts = {}  # {instance_id: text_widget}，-1表示"全部"标签页
+        self.instance_tab_ids = {}  # {instance_id: tab_id} 用于更新标签页颜色
+        self.instance_has_error = {}  # {instance_id: bool} 记录实例是否有错误
+        self.instance_auto_scroll = {}  # {instance_id: bool} 记录实例是否自动滚动
+        
+        # [2026-03-03] 新增：创建"全部"标签页（索引-1）
+        all_tab_frame = ttk.Frame(self.log_notebook)
+        self.log_notebook.add(all_tab_frame, text="全部")
+        
+        # 创建"全部"标签页的日志文本框
+        all_log_text = scrolledtext.ScrolledText(all_tab_frame, height=12, state=tk.DISABLED)
+        all_log_text.pack(fill=tk.BOTH, expand=True)
+        
+        # 添加右键复制功能
+        self._create_text_context_menu(all_log_text)
+        
+        # 双击清空"全部"标签页的日志
+        all_log_text.bind("<Double-Button-1>", lambda e: self._clear_instance_log(-1))
+        
+        # 绑定滚动事件
+        all_log_text.bind("<MouseWheel>", lambda e: self._on_instance_log_scroll(-1))
+        all_log_text.bind("<Button-4>", lambda e: self._on_instance_log_scroll(-1))  # Linux
+        all_log_text.bind("<Button-5>", lambda e: self._on_instance_log_scroll(-1))  # Linux
+        
+        # 绑定滚动条拖动事件
+        all_scrollbar = all_log_text.vbar
+        if all_scrollbar:
+            all_scrollbar.bind("<B1-Motion>", lambda e: self._on_instance_log_scroll(-1))
+            all_scrollbar.bind("<ButtonRelease-1>", lambda e: self._check_instance_scroll_position(-1))
+        
+        # 存储到字典（使用-1作为"全部"标签页的ID）
+        self.instance_log_texts[-1] = all_log_text
+        self.instance_tab_ids[-1] = 0  # "全部"标签页在索引0
+        self.instance_has_error[-1] = False
+        self.instance_auto_scroll[-1] = True  # 默认开启自动滚动
+        
+        # [2026-03-03] 修改：不再固定创建6个实例标签页，改为动态创建
+        # 实例标签页将在检测到运行中的实例后动态创建
+        
+        # [2026-03-03] 新增：创建"错误"标签页（在实例标签页后面）
+        error_tab_frame = ttk.Frame(self.log_notebook)
+        self.log_notebook.add(error_tab_frame, text="错误")
+        
+        # 创建"错误"标签页的日志文本框
+        error_log_text = scrolledtext.ScrolledText(error_tab_frame, height=12, state=tk.DISABLED)
+        error_log_text.pack(fill=tk.BOTH, expand=True)
+        
+        # [2026-03-03] 修复：保存到实例属性，供 _log_warning 使用
+        self.error_log_text = error_log_text
+        
+        # 配置错误日志文本颜色
+        error_log_text.tag_configure("error", foreground="red")
+        
+        # 添加右键复制功能
+        self._create_text_context_menu(error_log_text)
+        
+        # 双击清空"错误"标签页的日志
+        error_log_text.bind("<Double-Button-1>", lambda e: self._clear_instance_log(-2))
+        
+        # 绑定滚动事件
+        error_log_text.bind("<MouseWheel>", lambda e: self._on_instance_log_scroll(-2))
+        error_log_text.bind("<Button-4>", lambda e: self._on_instance_log_scroll(-2))  # Linux
+        error_log_text.bind("<Button-5>", lambda e: self._on_instance_log_scroll(-2))  # Linux
+        
+        # 绑定滚动条拖动事件
+        error_scrollbar = error_log_text.vbar
+        if error_scrollbar:
+            error_scrollbar.bind("<B1-Motion>", lambda e: self._on_instance_log_scroll(-2))
+            error_scrollbar.bind("<ButtonRelease-1>", lambda e: self._check_instance_scroll_position(-2))
+        
+        # 存储到字典（使用-2作为"错误"标签页的ID）
+        self.instance_log_texts[-2] = error_log_text
+        self.instance_tab_ids[-2] = 7  # "错误"标签页在索引7
+        self.instance_has_error[-2] = False
+        self.instance_auto_scroll[-2] = True  # 默认开启自动滚动
+        
+        # 绑定双击标签页事件（激活对应模拟器）
+        self.log_notebook.bind("<Double-Button-1>", self._on_tab_double_click)
+        
+        # 存储所有日志(用于调试)
+        self.all_logs = []  # 存储所有日志消息
+        
+        # [2026-03-03] 新增：临时日志管理（用于自动删除）
+        self.temp_logs = []  # 存储临时日志 {log_id, message, timestamp, delete_after}
+        
+        # [2026-03-03] 新增：账号状态分类管理（用于"全部"标签页）
+        self.account_status_map = {}  # {phone: {'status': 'success/failed/processing/pending', 'message': '...', 'tag': 'tag_name'}}
         
         # === 结果表格区域 ===
         results_frame = ttk.LabelFrame(main_frame, text="账号处理结果汇总", padding="5")
@@ -579,14 +683,17 @@ class AutomationGUI:
         ttk.Button(button_row, text="🔍 搜索", command=self._search_main_table, width=8).pack(side=tk.LEFT, padx=(0, 5))
         
         # 创建Treeview表格 (带勾选框)
+        # [2026-03-01] 删除优惠券：个人页已经没有优惠券了
+        # [2026-03-01] 删除优惠券列：个人页已经没有优惠券了
         columns = (
-            "phone", "nickname", "user_id", "balance_before", "points", "vouchers", "coupons",
+            "phone", "nickname", "user_id", "balance_before", "points",
             "checkin_reward", "checkin_total_times", 
             "balance_after", "transfer_amount", "transfer_recipient", "duration", "status", "login_method", "owner"
         )
         
         # show="tree headings" 显示勾选框列和数据列
-        self.results_tree = ttk.Treeview(results_frame, columns=columns, show="tree headings", height=15)
+        # [2026-03-03] 修改：增加表格高度从15到22，因为删除了错误日志框
+        self.results_tree = ttk.Treeview(results_frame, columns=columns, show="tree headings", height=22)
         
         # 配置勾选框列(第一列) - 使用自定义绘制
         self.results_tree.heading("#0", text="", anchor=tk.CENTER)
@@ -595,6 +702,7 @@ class AutomationGUI:
         # 创建勾选框图标(使用 PhotoImage)
         self._create_checkbox_images()
         
+        # [2026-03-01] 删除优惠券列：个人页已经没有优惠券了
         # 定义列标题和宽度(手机号移到最前面，管理员列在最后)
         column_config = {
             "phone": ("手机号", 100),
@@ -602,8 +710,6 @@ class AutomationGUI:
             "user_id": ("ID", 80),
             "balance_before": ("余额前", 70),
             "points": ("积分", 60),
-            "vouchers": ("抵扣券", 60),
-            "coupons": ("优惠券", 60),
             "checkin_reward": ("签到奖励", 80),
             "checkin_total_times": ("签到次数", 70),
             "balance_after": ("余额", 70),
@@ -624,6 +730,9 @@ class AutomationGUI:
         
         # 绑定双击事件(用于快速勾选/取消勾选)
         self.results_tree.bind("<Double-Button-1>", self._on_tree_double_click)
+        
+        # [2026-02-28] 添加右键菜单功能
+        self.results_tree.bind("<Button-3>", self._show_account_context_menu)
         
         # 添加滚动条
         results_scrollbar_y = ttk.Scrollbar(results_frame, orient=tk.VERTICAL, command=self.results_tree.yview)
@@ -719,6 +828,9 @@ class AutomationGUI:
     
     def _load_config_to_ui(self):
         """加载配置到界面"""
+        # [2026-02-28] 修复：加载配置时禁用自动保存，避免触发保存
+        self._allow_auto_save_scheduled_time = False
+        
         self.emulator_path_var.set(self.config.nox_path)
         self.accounts_file_var.set(self.config.accounts_file)
         self.instance_count_var.set(self.config.max_concurrent_instances)
@@ -735,9 +847,25 @@ class AutomationGUI:
         transfer_config = get_transfer_config()
         self.auto_transfer_switch.set_state(transfer_config.enabled)
         
-        # 加载定时运行配置
+        # [2026-02-28] 修复：加载定时运行配置 - 处理空字符串的情况
         scheduled_enabled = getattr(self.config, 'scheduled_run_enabled', False)
         scheduled_time = getattr(self.config, 'scheduled_run_time', '08:00')
+        
+        # [2026-02-28] 调试：打印加载的值
+        # [2026-03-01] 删除DEBUG日志：减少启动时的冗余输出
+        # print(f"[DEBUG] 加载配置: scheduled_run_time = {scheduled_time}")
+        
+        # 如果配置中的时间是空字符串，使用默认值
+        if not scheduled_time or scheduled_time.strip() == '':
+            scheduled_time = '08:00'
+            # [2026-03-01] 删除DEBUG日志：减少启动时的冗余输出
+            # print(f"[DEBUG] 时间为空，使用默认值: {scheduled_time}")
+        
+        # [2026-02-28] 修复：在设置值之前先添加监听，但标志位保持False
+        # 这样可以避免加载时触发保存
+        self.scheduled_hour_var.trace_add('write', lambda *args: self._on_scheduled_time_changed())
+        self.scheduled_minute_var.trace_add('write', lambda *args: self._on_scheduled_time_changed())
+        
         self.scheduled_run_enabled.set(scheduled_enabled)
         self.scheduled_run_time.set(scheduled_time)
         
@@ -746,11 +874,22 @@ class AutomationGUI:
             hour, minute = scheduled_time.split(':')
             self.scheduled_hour_var.set(f"{int(hour):02d}")
             self.scheduled_minute_var.set(f"{int(minute):02d}")
-        except:
+            # [2026-03-01] 删除DEBUG日志：减少启动时的冗余输出
+            # print(f"[DEBUG] 解析时间成功: hour={hour}, minute={minute}")
+        except Exception as e:
+            # 解析失败，使用默认值
+            # [2026-03-01] 删除DEBUG日志：减少启动时的冗余输出
+            # print(f"[DEBUG] 解析时间失败: {e}")
             self.scheduled_hour_var.set("08")
             self.scheduled_minute_var.set("00")
+            self.scheduled_run_time.set("08:00")
         
         self.scheduled_run_switch.set_state(scheduled_enabled)
+        
+        # [2026-02-28] 修复：在设置完所有值后才启用自动保存
+        self._allow_auto_save_scheduled_time = True
+        # [2026-03-01] 删除DEBUG日志：减少启动时的冗余输出
+        # print(f"[DEBUG] 配置加载完成，启用自动保存")
         
         # 如果启用了定时运行，启动定时检查线程
         if scheduled_enabled:
@@ -886,9 +1025,28 @@ class AutomationGUI:
                         import traceback
                         traceback.print_exc()
             
-            # ===== 步骤3: 只显示账号文件中的账号（不显示历史记录中的其他账号）=====
-            if not current_accounts:
+            # ===== 步骤3: 合并账号文件和历史记录中的账号 =====
+            # [2026-03-05] 修改原因：显示所有账号（账号文件 + 数据库历史记录）
+            # 从数据库获取所有历史账号
+            all_history_phones = set(history_dict.keys()) if history_dict else set()
+            
+            # 合并：账号文件中的账号 + 历史记录中的账号
+            all_phones_to_display = current_phones | all_history_phones
+            
+            # 如果没有任何账号，直接返回
+            if not all_phones_to_display:
                 return
+            
+            # 为历史记录中但不在账号文件中的账号创建 Account 对象
+            for phone in all_history_phones:
+                if phone not in current_phones:
+                    # 从历史记录中获取密码（如果有）
+                    hist_record = history_dict.get(phone, {})
+                    password = hist_record.get('密码', '')
+                    # 创建 Account 对象
+                    from .account_manager import Account
+                    account = Account(phone=phone, password=password)
+                    current_accounts.append(account)
             
             # ===== 步骤4: 清空表格并重新填充 =====
             
@@ -986,14 +1144,13 @@ class AutomationGUI:
                             return '0' if is_number else default
                         return str_value
                     
+                    # [2026-03-01] 删除优惠券列：个人页已经没有优惠券了
                     values = (
                         phone,
                         format_value(hist.get('昵称'), '待处理'),
                         format_value(hist.get('用户ID'), '待处理'),
                         format_value(hist.get('余额前(元)'), '0.0', True),
                         format_value(hist.get('积分'), '0', True),
-                        format_value(hist.get('抵扣券(张)'), '0', True),
-                        format_value(hist.get('优惠券(张)'), '0', True),
                         format_value(hist.get('签到奖励(元)'), '0.0', True),
                         format_value(hist.get('签到总次数'), '0', True),
                         format_value(hist.get('余额(元)'), '0.0', True),
@@ -1013,21 +1170,19 @@ class AutomationGUI:
                                 total_balance += float(hist.get('余额(元)', 0))
                             if hist.get('积分') and hist.get('积分') != '-':
                                 total_points += int(hist.get('积分', 0))
-                            if hist.get('抵扣券(张)') and hist.get('抵扣券(张)') != '-':
-                                total_vouchers += float(hist.get('抵扣券(张)', 0))
-                            if hist.get('优惠券(张)') and hist.get('优惠券(张)') != '-':
-                                total_coupons += int(hist.get('优惠券(张)', 0))
+                            # [2026-03-01] 删除优惠券列：不再统计抵扣券和优惠券
                             if hist.get('签到奖励(元)') and hist.get('签到奖励(元)') != '-':
                                 total_checkin_reward += float(hist.get('签到奖励(元)', 0))
                         except (ValueError, TypeError):
                             pass
                 else:
+                    # [2026-03-01] 删除优惠券列：个人页已经没有优惠券了
                     # 没有历史数据，显示为待处理
                     values = (
                         phone,
                         "待处理",
                         "待处理",
-                        "-", "-", "-", "-", "-", "-", "-", "-", "-", "-",
+                        "-", "-", "-", "-", "-", "-", "-", "-",
                         "待处理",
                         "-",
                         owner_name  # 管理员（从数据库读取，放在最后）
@@ -1262,6 +1417,12 @@ class AutomationGUI:
                     final_concurrent = count if auto_adjust else concurrent_count
                     self.root.after(0, lambda c=final_concurrent, t=count: 
                                   self.running_instances_var.set(f"✅ 并发{c}/{t}个实例"))
+                    
+                    # [2026-03-03] 新增：动态创建实例标签页
+                    self.root.after(0, lambda instances=running_instances: self._create_instance_tabs(instances))
+                    
+                    # [2026-03-03] 新增：检测到实例后自动平铺排列窗口
+                    self.root.after(0, lambda: self._auto_arrange_windows())
                 
             except Exception as e:
                 self.root.after(0, lambda: self._log(f"❌ 检测失败: {e}"))
@@ -1270,6 +1431,118 @@ class AutomationGUI:
         # 启动后台线程
         thread = threading.Thread(target=detect_task, daemon=True)
         thread.start()
+    
+    def _auto_arrange_windows(self):
+        """自动平铺排列模拟器窗口
+        
+        [2026-03-03] 新增：检测到实例后自动调用窗口平铺排列
+        """
+        try:
+            from .window_arranger import WindowArranger
+            
+            arranger = WindowArranger()
+            
+            # 查找模拟器窗口
+            windows = arranger.find_emulator_windows()
+            
+            if not windows:
+                self._log("⚠️ 未找到模拟器窗口，跳过自动排列")
+                return
+            
+            # 平铺排列窗口
+            self._log(f"正在自动平铺排列 {len(windows)} 个窗口...")
+            result = arranger.arrange_windows(
+                layout_name="tile",
+                window_count=len(windows),
+                keep_size=True,
+                minimize_others=False
+            )
+            
+            if result['success']:
+                self._log(f"✅ 窗口已自动平铺排列")
+            else:
+                self._log(f"⚠️ 窗口排列部分失败: {result.get('message', '未知错误')}")
+                
+        except Exception as e:
+            self._log(f"⚠️ 自动排列窗口失败: {e}")
+    
+    def _create_instance_tabs(self, running_instances: List[int]):
+        """动态创建实例标签页
+        
+        [2026-03-03] 新增：根据检测到的运行中实例动态创建标签页
+        
+        Args:
+            running_instances: 运行中的实例编号列表，例如 [0, 1, 2]
+        """
+        try:
+            # 获取"错误"标签页的索引（最后一个）
+            error_tab_index = self.log_notebook.index("end") - 1
+            
+            # 删除所有现有的实例标签页（保留"全部"和"错误"）
+            existing_instance_ids = [i for i in self.instance_log_texts.keys() if i >= 0]
+            for instance_id in existing_instance_ids:
+                if instance_id in self.instance_tab_ids:
+                    tab_index = self.instance_tab_ids[instance_id]
+                    try:
+                        self.log_notebook.forget(tab_index)
+                    except:
+                        pass
+                # 清理字典
+                self.instance_log_texts.pop(instance_id, None)
+                self.instance_tab_ids.pop(instance_id, None)
+                self.instance_has_error.pop(instance_id, None)
+                self.instance_auto_scroll.pop(instance_id, None)
+            
+            # 为每个运行中的实例创建标签页
+            for idx, instance_id in enumerate(sorted(running_instances)):
+                # 创建标签页框架
+                tab_frame = ttk.Frame(self.log_notebook)
+                
+                # 插入到"错误"标签页之前
+                insert_index = 1 + idx  # "全部"在索引0，实例从索引1开始
+                self.log_notebook.insert(insert_index, tab_frame, text=f"实例{instance_id}")
+                
+                # 创建日志文本框
+                log_text = scrolledtext.ScrolledText(tab_frame, height=12, state=tk.DISABLED)
+                log_text.pack(fill=tk.BOTH, expand=True)
+                
+                # 添加右键复制功能
+                self._create_text_context_menu(log_text)
+                
+                # 双击日志文本框清空该标签页的日志
+                log_text.bind("<Double-Button-1>", lambda e, inst=instance_id: self._clear_instance_log(inst))
+                
+                # 绑定滚动事件，检测用户是否手动滚动
+                log_text.bind("<MouseWheel>", lambda e, inst=instance_id: self._on_instance_log_scroll(inst))
+                log_text.bind("<Button-4>", lambda e, inst=instance_id: self._on_instance_log_scroll(inst))  # Linux
+                log_text.bind("<Button-5>", lambda e, inst=instance_id: self._on_instance_log_scroll(inst))  # Linux
+                
+                # 绑定滚动条拖动事件
+                log_scrollbar = log_text.vbar
+                if log_scrollbar:
+                    log_scrollbar.bind("<B1-Motion>", lambda e, inst=instance_id: self._on_instance_log_scroll(inst))
+                    log_scrollbar.bind("<ButtonRelease-1>", lambda e, inst=instance_id: self._check_instance_scroll_position(inst))
+                
+                # 存储到字典
+                self.instance_log_texts[instance_id] = log_text
+                self.instance_tab_ids[instance_id] = insert_index
+                self.instance_has_error[instance_id] = False
+                self.instance_auto_scroll[instance_id] = True  # 默认开启自动滚动
+            
+            # [2026-03-03] 修复：更新"错误"标签页的索引（在所有实例标签页之后）
+            error_tab_new_index = 1 + len(running_instances)  # "全部"(0) + 实例数量
+            self.instance_tab_ids[-2] = error_tab_new_index
+            
+            # [2026-03-03] 修复：创建标签页后立即显示绿色圆点（表示无错误状态）
+            for instance_id in running_instances:
+                self._update_instance_tab_color(instance_id, 'green')
+            
+            self._log(f"✅ 已创建 {len(running_instances)} 个实例标签页")
+            
+        except Exception as e:
+            self._log(f"⚠️ 创建实例标签页失败: {e}")
+            import traceback
+            traceback.print_exc()
     
     def _on_emulator_type_changed(self, event=None):
         """模拟器类型选择变化时的处理"""
@@ -1394,6 +1667,12 @@ class AutomationGUI:
     
     def _auto_save_config(self):
         """自动保存配置（静默，不显示日志）"""
+        # [2026-02-28] 修复：加载配置时不自动保存
+        if not self._allow_auto_save_scheduled_time:
+            # [2026-03-01] 删除DEBUG日志：减少启动时的冗余输出
+            # print(f"[DEBUG] _auto_save_config: 跳过保存（加载配置中）")
+            return
+        
         try:
             self.config.nox_path = self.emulator_path_var.get()
             self.config.accounts_file = self.accounts_file_var.get()
@@ -1404,46 +1683,147 @@ class AutomationGUI:
             self.config.scheduled_run_enabled = self.scheduled_run_enabled.get()
             self.config.scheduled_run_time = self.scheduled_run_time.get()
             
+            # [2026-02-28] 调试：打印保存的值
+            # [2026-03-01] 删除DEBUG日志：减少启动时的冗余输出
+            # print(f"[DEBUG] _auto_save_config: scheduled_run_time = {self.config.scheduled_run_time}")
+            
             self.config_loader.save(self.config)
         except Exception as e:
             # 静默失败，避免干扰用户
             print(f"自动保存配置失败: {e}")
     
     def _log(self, message: str):
-        """添加日志(支持实例过滤)"""
-        import datetime
-        timestamp = datetime.datetime.now().strftime("%H:%M:%S")
-        log_entry = f"[{timestamp}] {message}"
+        """添加日志(输出到对应实例的标签页)
         
-        # 存储到所有日志列表
-        self.all_logs.append(log_entry)
-        
-        # 根据当前过滤器决定是否显示
-        current_filter = self.log_filter_var.get()
-        should_display = False
-        
-        if current_filter == "全部":
-            should_display = True
-        elif current_filter.startswith("实例"):
-            # 提取实例编号(例如"实例0" -> "0")
-            instance_num = current_filter.replace("实例", "")
-            # 检查消息是否包含该实例的标记
-            if f"[实例{instance_num}]" in message:
-                should_display = True
-        
-        # 只显示符合过滤条件的日志
-        if should_display:
-            self.log_text.config(state=tk.NORMAL)
-            self.log_text.insert(tk.END, f"{log_entry}\n")
+        [2026-03-03] 修改：解析 [实例X] 标记，输出到对应标签页，并更新标签页颜色
+        [2026-03-03] 新增：同时输出到"全部"标签页，显示账号处理状态
+        [2026-03-03] 修改：实例标签页只显示本实例相关的日志
+        [2026-03-03] 修改："全部"标签页只显示账号的4种状态（完成、错误、处理中、待处理）
+        [2026-03-03] 新增：通用日志在"全部"标签页显示10秒后自动删除
+        [2026-03-03] 新增："全部"标签页按状态分类显示，状态变化时更新位置
+        [2026-03-03] 修复：添加异常捕获，防止日志错误导致程序中断
+        """
+        try:
+            import datetime
+            import re
+            import uuid
             
-            # 只有在自动滚动开启时才滚动到底部
-            if self.log_auto_scroll:
-                self.log_text.see(tk.END)
+            timestamp = datetime.datetime.now().strftime("%H:%M:%S")
+            log_entry = f"[{timestamp}] {message}"
             
-            self.log_text.config(state=tk.DISABLED)
+            # 存储到所有日志列表（用于调试）
+            self.all_logs.append(log_entry)
+            
+            # 检测是否是账号状态信息（用于"全部"标签页）
+            # 提取手机号和状态类型
+            account_status_type = None
+            phone_number = None
+            
+            # [2026-03-03] 修复：匹配实际的日志格式
+            # 完成状态：✓ 账号 手机号 处理完成 (耗时: X秒)
+            if '✓ 账号' in message and '处理完成' in message:
+                account_status_type = 'success'
+                # 提取手机号（格式：✓ 账号 13800138000 处理完成）
+                phone_match = re.search(r'账号\s*(\d{11})', message)
+                if phone_match:
+                    phone_number = phone_match.group(1)
+            # 错误状态：✗ 账号处理失败 / ✗ 账号处理异常 / ✗ 账号 X 处理失败
+            elif '✗ 账号' in message and ('处理失败' in message or '处理异常' in message or '处理时发生异常' in message):
+                account_status_type = 'failed'
+                # 尝试提取手机号
+                phone_match = re.search(r'账号\s*(\d{11})', message)
+                if phone_match:
+                    phone_number = phone_match.group(1)
+            # 处理中状态：开始处理账号 X/Y: 手机号
+            elif '开始处理账号' in message:
+                account_status_type = 'processing'
+                # 提取手机号（格式：开始处理账号 1/10: 13800138000）
+                phone_match = re.search(r':\s*(\d{11})', message)
+                if phone_match:
+                    phone_number = phone_match.group(1)
+            # 待处理状态：✓ 已将 X 个账号加入处理队列
+            elif '加入处理队列' in message:
+                # 这是批量消息，不是单个账号状态，跳过
+                pass
+            
+            is_account_status = account_status_type is not None
+            
+            # 解析实例ID（从消息中提取 [实例X]）
+            instance_match = re.search(r'\[实例(\d+)\]', message)
+            
+            if instance_match:
+                # 有实例标记，只输出到对应实例的标签页
+                instance_id = int(instance_match.group(1))
+                
+                if instance_id in self.instance_log_texts:
+                    log_text = self.instance_log_texts[instance_id]
+                    
+                    # 添加日志
+                    log_text.config(state=tk.NORMAL)
+                    log_text.insert(tk.END, f"{log_entry}\n")
+                    
+                    # 只有在自动滚动开启时才滚动到底部
+                    if self.instance_auto_scroll.get(instance_id, True):
+                        log_text.see(tk.END)
+                    
+                    log_text.config(state=tk.DISABLED)
+                    
+                    # 检测错误关键词，更新标签页颜色
+                    error_keywords = ['✗', '错误', '失败', '异常', 'Error', 'error', 'Failed', 'failed']
+                    has_error = any(keyword in message for keyword in error_keywords)
+                    
+                    if has_error and not self.instance_has_error.get(instance_id, False):
+                        # 第一次出现错误，标记为红色
+                        self.instance_has_error[instance_id] = True
+                        self._update_instance_tab_color(instance_id, 'red')
+                
+                # [2026-03-03] 修复：即使有实例标记，账号状态也要输出到"全部"标签页
+                # [2026-03-03] 修复：去掉实例标记，只显示账号状态信息
+                if is_account_status and phone_number:
+                    if -1 in self.instance_log_texts:
+                        # 去掉 [实例X] 标记
+                        clean_message = re.sub(r'\[实例\d+\]\s*', '', message)
+                        clean_log_entry = f"[{timestamp}] {clean_message}"
+                        self._update_account_status_in_all_tab(phone_number, account_status_type, clean_log_entry)
+            else:
+                # [2026-03-03] 修改：没有实例标记的日志
+                if -1 in self.instance_log_texts:
+                    all_log_text = self.instance_log_texts[-1]
+                    
+                    if is_account_status and phone_number:
+                        # 账号状态：按分类显示
+                        self._update_account_status_in_all_tab(phone_number, account_status_type, log_entry)
+                    else:
+                        # 通用日志：显示10秒后自动删除
+                        all_log_text.config(state=tk.NORMAL)
+                        
+                        # 生成唯一标记
+                        tag_name = f"temp_log_{uuid.uuid4().hex}"
+                        
+                        # 插入日志并添加标记
+                        start_index = all_log_text.index("end-1c")
+                        all_log_text.insert(tk.END, f"{log_entry}\n")
+                        end_index = all_log_text.index("end-1c")
+                        all_log_text.tag_add(tag_name, start_index, end_index)
+                        
+                        # 只有在自动滚动开启时才滚动到底部
+                        if self.instance_auto_scroll.get(-1, True):
+                            all_log_text.see(tk.END)
+                        
+                        all_log_text.config(state=tk.DISABLED)
+                        
+                        # 10秒后删除这条日志
+                        self.root.after(10000, lambda tag=tag_name: self._delete_temp_log_by_tag(-1, tag))
+        except Exception as e:
+            # 日志错误不应该中断程序，打印到控制台用于调试
+            print(f"[ERROR] _log 方法出错: {e}")
+            import traceback
+            traceback.print_exc()
     
     def _log_error(self, phone: str, user_id: str, nickname: str, error_message: str):
         """添加错误日志（每个账号一行）
+        
+        [2026-03-03] 修改：输出到"错误"标签页，而不是下面的错误日志框
         
         Args:
             phone: 手机号
@@ -1465,75 +1845,399 @@ class AutomationGUI:
             'timestamp': timestamp
         })
         
-        # 显示错误日志
-        self.error_log_text.config(state=tk.NORMAL)
-        self.error_log_text.insert(tk.END, f"{error_entry}\n", "error")
-        self.error_log_text.see(tk.END)
-        self.error_log_text.config(state=tk.DISABLED)
+        # [2026-03-03] 修改：输出到"错误"标签页（instance_id=-2）
+        if -2 in self.instance_log_texts:
+            error_log_text = self.instance_log_texts[-2]
+            error_log_text.config(state=tk.NORMAL)
+            error_log_text.insert(tk.END, f"{error_entry}\n", "error")
+            
+            # 只有在自动滚动开启时才滚动到底部
+            if self.instance_auto_scroll.get(-2, True):
+                error_log_text.see(tk.END)
+            
+            error_log_text.config(state=tk.DISABLED)
+    
+    def _delete_temp_log(self, instance_id: int, line_start: str, line_end: str):
+        """删除临时日志（10秒后自动删除通用日志）- 已废弃，使用 _delete_temp_log_by_tag
+        
+        [2026-03-03] 新增：自动删除"全部"标签页中的通用日志
+        [2026-03-03] 废弃：改用基于标记的删除方法
+        
+        Args:
+            instance_id: 实例ID（-1表示"全部"标签页）
+            line_start: 日志起始行位置
+            line_end: 日志结束行位置
+        """
+        pass  # 已废弃
+    
+    def _delete_temp_log_by_tag(self, instance_id: int, tag_name: str):
+        """通过标记删除临时日志（10秒后自动删除通用日志）
+        
+        [2026-03-03] 新增：使用标记机制自动删除"全部"标签页中的通用日志
+        
+        Args:
+            instance_id: 实例ID（-1表示"全部"标签页）
+            tag_name: 日志的唯一标记名称
+        """
+        try:
+            if instance_id in self.instance_log_texts:
+                log_text = self.instance_log_texts[instance_id]
+                log_text.config(state=tk.NORMAL)
+                
+                # 获取标记的范围
+                ranges = log_text.tag_ranges(tag_name)
+                if ranges:
+                    # 删除标记范围内的内容
+                    log_text.delete(ranges[0], ranges[1])
+                    # 删除标记
+                    log_text.tag_delete(tag_name)
+                
+                log_text.config(state=tk.DISABLED)
+        except Exception as e:
+            # 忽略删除错误（可能日志已被清空）
+            pass
+    
+    def _update_account_status_in_all_tab(self, phone: str, status_type: str, message: str):
+        """在"全部"标签页中更新账号状态（按分类显示）
+        
+        [2026-03-03] 新增：按状态分类显示账号，状态变化时更新位置
+        [2026-03-03] 修复：添加异常捕获，防止更新错误导致程序中断
+        [2026-03-03] 新增：在不同状态分类之间添加分隔线
+        [2026-03-03] 新增：不同状态显示不同颜色
+        
+        Args:
+            phone: 手机号
+            status_type: 状态类型 ('success', 'failed', 'processing', 'pending')
+            message: 日志消息
+        """
+        try:
+            import uuid
+            
+            if -1 not in self.instance_log_texts:
+                return
+            
+            all_log_text = self.instance_log_texts[-1]
+            
+            # [2026-03-03] 配置颜色标记
+            all_log_text.tag_configure("success_color", foreground="green")
+            all_log_text.tag_configure("failed_color", foreground="red")
+            all_log_text.tag_configure("processing_color", foreground="blue")
+            all_log_text.tag_configure("pending_color", foreground="orange")
+            
+            all_log_text.config(state=tk.NORMAL)
+            
+            # 如果该账号已存在，先删除旧的状态
+            if phone in self.account_status_map:
+                old_tag = self.account_status_map[phone]['tag']
+                ranges = all_log_text.tag_ranges(old_tag)
+                if ranges:
+                    all_log_text.delete(ranges[0], ranges[1])
+                    all_log_text.tag_delete(old_tag)
+            
+            # 生成新的唯一标记
+            tag_name = f"account_{phone}_{uuid.uuid4().hex[:8]}"
+            
+            # 确定插入位置（按分类）
+            # 分类顺序：成功 -> 失败 -> 处理中 -> 待处理
+            insert_position = self._get_insert_position_for_status(all_log_text, status_type)
+            
+            # 插入新的状态
+            all_log_text.insert(insert_position, f"{message}\n")
+            # 获取插入后的实际范围
+            line_start = all_log_text.index(f"{insert_position} linestart")
+            line_end = all_log_text.index(f"{insert_position} lineend + 1c")
+            
+            # [2026-03-03] 添加位置标记和颜色标记
+            all_log_text.tag_add(tag_name, line_start, line_end)
+            
+            # 根据状态类型添加颜色
+            color_tag = f"{status_type}_color"
+            all_log_text.tag_add(color_tag, line_start, line_end)
+            
+            # 更新状态映射
+            self.account_status_map[phone] = {
+                'status': status_type,
+                'message': message,
+                'tag': tag_name
+            }
+            
+            # 更新分隔线
+            self._update_status_separators(all_log_text)
+            
+            # 只有在自动滚动开启时才滚动到底部
+            if self.instance_auto_scroll.get(-1, True):
+                all_log_text.see(tk.END)
+            
+            all_log_text.config(state=tk.DISABLED)
+        except Exception as e:
+            # 更新账号状态错误不应该中断程序
+            print(f"[ERROR] _update_account_status_in_all_tab 出错: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            # 插入新的状态
+            all_log_text.insert(insert_position, f"{message}\n")
+            # 获取插入后的实际范围
+            line_start = all_log_text.index(f"{insert_position} linestart")
+            line_end = all_log_text.index(f"{insert_position} lineend + 1c")
+            all_log_text.tag_add(tag_name, line_start, line_end)
+            
+            # 更新状态映射
+            self.account_status_map[phone] = {
+                'status': status_type,
+                'message': message,
+                'tag': tag_name
+            }
+            
+            # 更新分隔线
+            self._update_status_separators(all_log_text)
+            
+            # 只有在自动滚动开启时才滚动到底部
+            if self.instance_auto_scroll.get(-1, True):
+                all_log_text.see(tk.END)
+            
+            all_log_text.config(state=tk.DISABLED)
+        except Exception as e:
+            # 更新账号状态错误不应该中断程序
+            print(f"[ERROR] _update_account_status_in_all_tab 出错: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _get_insert_position_for_status(self, text_widget, status_type: str) -> str:
+        """获取指定状态类型的插入位置
+        
+        [2026-03-03] 新增：根据状态类型确定在"全部"标签页中的插入位置
+        
+        Args:
+            text_widget: 文本控件
+            status_type: 状态类型 ('success', 'failed', 'processing', 'pending')
+            
+        Returns:
+            插入位置索引（如 "1.0", "5.0"）
+        """
+        # 状态优先级：success(0) > failed(1) > processing(2) > pending(3)
+        status_priority = {
+            'success': 0,
+            'failed': 1,
+            'processing': 2,
+            'pending': 3
+        }
+        
+        current_priority = status_priority.get(status_type, 999)
+        
+        # 遍历现有账号，找到合适的插入位置
+        # 应该插入到同类型的最后，或者下一个优先级类型的前面
+        insert_line = 1  # 默认插入到开头
+        
+        for phone, info in self.account_status_map.items():
+            existing_priority = status_priority.get(info['status'], 999)
+            tag = info['tag']
+            
+            # 获取该标记的位置
+            ranges = text_widget.tag_ranges(tag)
+            if ranges:
+                line_num = int(text_widget.index(ranges[0]).split('.')[0])
+                
+                if existing_priority <= current_priority:
+                    # 如果现有优先级 <= 当前优先级，插入到它后面
+                    insert_line = max(insert_line, line_num + 1)
+        
+        return f"{insert_line}.0"
+    
+    def _update_status_separators(self, text_widget):
+        """更新状态分类之间的分隔线
+        
+        [2026-03-03] 新增：在不同状态分类之间添加分隔线
+        [2026-03-03] 修复：从后往前插入分隔线，避免行号变化导致位置错误
+        
+        Args:
+            text_widget: 文本控件
+        """
+        try:
+            # 删除所有现有的分隔线标记
+            for tag in text_widget.tag_names():
+                if tag.startswith("separator_"):
+                    ranges = text_widget.tag_ranges(tag)
+                    if ranges:
+                        text_widget.delete(ranges[0], ranges[1])
+                        text_widget.tag_delete(tag)
+            
+            # 统计每种状态的账号数量和最后一行
+            status_lines = {
+                'success': [],
+                'failed': [],
+                'processing': [],
+                'pending': []
+            }
+            
+            for phone, info in self.account_status_map.items():
+                status = info['status']
+                tag = info['tag']
+                ranges = text_widget.tag_ranges(tag)
+                if ranges:
+                    line_num = int(text_widget.index(ranges[0]).split('.')[0])
+                    status_lines[status].append(line_num)
+            
+            # 找到每个状态分类的最后一行
+            separator_line = "=" * 50 + "\n"  # [2026-03-03] 修改：根据账号日志长度调整为50个等号
+            
+            # 按优先级顺序处理：success -> failed -> processing -> pending
+            status_order = ['success', 'failed', 'processing']
+            
+            # [2026-03-03] 修复：收集需要插入分隔线的位置，然后从后往前插入
+            separator_positions = []  # [(line_num, status_name), ...]
+            
+            for status in status_order:
+                if status_lines[status]:
+                    # 找到该状态的最后一行
+                    max_line = max(status_lines[status])
+                    
+                    # [2026-03-03] 修复：检查后面是否还有其他状态（跳过空状态）
+                    has_next_status = False
+                    current_index = status_order.index(status)
+                    
+                    # 检查后面的所有状态（包括 pending）
+                    for next_status in status_order[current_index + 1:]:
+                        if status_lines[next_status]:
+                            has_next_status = True
+                            break
+                    
+                    # 如果后面的状态都没有账号，检查 pending
+                    if not has_next_status and status_lines['pending']:
+                        has_next_status = True
+                    
+                    # 如果有下一个状态，记录插入位置
+                    if has_next_status:
+                        separator_positions.append((max_line, status))
+            
+            # 从后往前插入分隔线（避免行号变化）
+            for line_num, status in reversed(separator_positions):
+                insert_pos = f"{line_num + 1}.0"
+                text_widget.insert(insert_pos, separator_line)
+                
+                # 添加标记以便后续删除
+                tag_name = f"separator_{status}"
+                line_start = text_widget.index(f"{insert_pos} linestart")
+                line_end = text_widget.index(f"{insert_pos} lineend + 1c")
+                text_widget.tag_add(tag_name, line_start, line_end)
+        
+        except Exception as e:
+            print(f"[ERROR] _update_status_separators 出错: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _update_instance_tab_color(self, instance_id: int, color: str):
+        """更新实例标签页的颜色
+        
+        [2026-03-03] 新增：根据实例状态更新标签页颜色
+        [2026-03-03] 说明：由于ttk.Notebook不支持单个标签页背景颜色，使用彩色圆圈表示状态
+        [2026-03-03] 修复：使用 instance_tab_ids 获取正确的标签页索引
+        [2026-03-03] 修改：删除圆点emoji，因为无法显示颜色
+        
+        Args:
+            instance_id: 实例ID (0-5)
+            color: 颜色 ('green' 无错误, 'red' 有错误) - 已废弃，保留参数以兼容现有代码
+        """
+        try:
+            # [2026-03-03] 修复：使用 instance_tab_ids 获取正确的标签页索引
+            if instance_id not in self.instance_tab_ids:
+                print(f"⚠️ 实例{instance_id}的标签页不存在")
+                return
+            
+            tab_index = self.instance_tab_ids[instance_id]
+            
+            # [2026-03-03] 修改：不再添加圆点，只显示实例编号
+            self.log_notebook.tab(tab_index, text=f"实例{instance_id}")
+                
+        except Exception as e:
+            print(f"更新标签页颜色失败: {e}")
+    
+    def _on_tab_double_click(self, event):
+        """双击标签页时激活对应的模拟器窗口
+        
+        [2026-03-03] 新增：双击标签页激活对应模拟器
+        [2026-03-03] 修改：适配"全部"标签页（索引0不激活模拟器）
+        """
+        try:
+            # 获取点击的标签页索引
+            clicked_tab = self.log_notebook.tk.call(self.log_notebook._w, "identify", "tab", event.x, event.y)
+            
+            if clicked_tab != '':
+                tab_index = int(clicked_tab)
+                
+                # 索引0是"全部"标签页，不激活模拟器
+                if tab_index == 0:
+                    return
+                
+                # 索引1-6对应实例0-5
+                instance_id = tab_index - 1
+                self._activate_emulator(instance_id)
+        except Exception as e:
+            print(f"激活模拟器失败: {e}")
+    
+    def _activate_emulator(self, instance_id: int):
+        """激活指定实例的模拟器窗口
+        
+        [2026-03-03] 新增：使用 Windows API 激活模拟器窗口
+        [2026-03-03] 修改：日志只输出到对应实例的标签页
+        
+        Args:
+            instance_id: 实例ID (0-5)
+        """
+        try:
+            import ctypes
+            from ctypes import wintypes
+            
+            # Windows API 函数
+            user32 = ctypes.windll.user32
+            
+            # 根据截图，MuMu模拟器窗口标题格式：
+            # 实例0: "MuMu安卓设备"
+            # 实例1: "MuMu安卓设备-1"
+            # 实例2: "MuMu安卓设备-2"
+            # ...
+            if instance_id == 0:
+                possible_titles = [
+                    "MuMu安卓设备",
+                    "MuMu模拟器12",
+                    "MuMu模拟器",
+                ]
+            else:
+                possible_titles = [
+                    f"MuMu安卓设备-{instance_id}",
+                    f"MuMu模拟器12-{instance_id}",
+                    f"MuMu模拟器-{instance_id}",
+                ]
+            
+            hwnd = None
+            found_title = None
+            
+            # 尝试所有可能的标题格式
+            for title in possible_titles:
+                hwnd = user32.FindWindowW(None, title)
+                if hwnd:
+                    found_title = title
+                    break
+            
+            if hwnd:
+                # 激活窗口
+                user32.ShowWindow(hwnd, 9)  # SW_RESTORE = 9
+                user32.SetForegroundWindow(hwnd)
+                # [2026-03-03] 修改：添加 [实例X] 标记，只输出到对应实例的标签页
+                self._log(f"[实例{instance_id}] ✓ 已激活模拟器窗口 ({found_title})")
+            else:
+                # [2026-03-03] 修改：添加 [实例X] 标记，只输出到对应实例的标签页
+                self._log(f"[实例{instance_id}] ⚠️ 未找到模拟器窗口（尝试的标题: {', '.join(possible_titles)}）")
+        except Exception as e:
+            # [2026-03-03] 修改：添加 [实例X] 标记，只输出到对应实例的标签页
+            self._log(f"[实例{instance_id}] ❌ 激活模拟器窗口失败: {e}")
     
     def _on_log_filter_changed(self, event=None):
-        """日志过滤器改变时重新显示日志"""
-        current_filter = self.log_filter_var.get()
+        """日志过滤器改变时重新显示日志
         
-        # 清空当前显示
-        self.log_text.config(state=tk.NORMAL)
-        self.log_text.delete(1.0, tk.END)
-        
-        # 根据过滤器重新显示日志
-        for log_entry in self.all_logs:
-            should_display = False
-            
-            if current_filter == "全部":
-                should_display = True
-            elif current_filter.startswith("实例"):
-                # 提取实例编号
-                instance_num = current_filter.replace("实例", "")
-                # 检查消息是否包含该实例的标记
-                if f"[实例{instance_num}]" in log_entry:
-                    should_display = True
-            
-            if should_display:
-                self.log_text.insert(tk.END, f"{log_entry}\n")
-        
-        # 滚动到底部
-        self.log_text.see(tk.END)
-        self.log_text.config(state=tk.DISABLED)
-        
-        # 重新启用自动滚动
-        self.log_auto_scroll = True
-    
-    def _on_log_scroll(self, event):
-        """用户滚动日志时检查是否在底部，决定是否自动滚动"""
-        # 延迟检查，等待滚动完成
-        self.root.after(100, self._check_log_scroll_position)
-        return None  # 允许事件继续传播
-    
-    def _on_log_scrollbar_drag(self, event):
-        """用户拖动滚动条时检查是否在底部，决定是否自动滚动"""
-        # 延迟检查，等待拖动完成
-        self.root.after(100, self._check_log_scroll_position)
-        return None
-    
-    def _on_log_scrollbar_release(self, event):
-        """用户释放滚动条时检查是否在底部，决定是否自动滚动"""
-        # 立即检查滚动位置
-        self._check_log_scroll_position()
-        return None
-    
-    def _check_log_scroll_position(self):
-        """检查日志文本框是否滚动到底部"""
-        try:
-            # 获取当前滚动位置
-            # yview() 返回 (top, bottom)，表示可见区域的相对位置（0.0-1.0）
-            yview = self.log_text.yview()
-            
-            # 如果底部位置接近1.0（允许小误差），认为在底部
-            if yview[1] >= 0.99:
-                self.log_auto_scroll = True
-            else:
-                self.log_auto_scroll = False
-        except Exception:
-            pass
+        [2026-03-03] 废弃：已改用标签页方式，此方法不再使用
+        """
+        pass
     
     def _on_tree_click(self, event):
         """处理表格点击事件(切换勾选状态)"""
@@ -1565,6 +2269,281 @@ class AutomationGUI:
         # 更新显示
         if new_state:
             self.results_tree.item(item, text=self.checkbox_checked_text)
+        else:
+            self.results_tree.item(item, text=self.checkbox_unchecked_text)
+        
+        # 更新统计
+        self._update_stats_from_table()
+    
+    def _show_account_context_menu(self, event):
+        """[2026-02-28] 显示账号列表的右键菜单"""
+        # 选中右键点击的项
+        item = self.results_tree.identify_row(event.y)
+        if not item:
+            return
+        
+        # 选中该项
+        self.results_tree.selection_set(item)
+        
+        # 获取账号信息
+        values = self.results_tree.item(item, "values")
+        if not values or len(values) < 3:
+            return
+        
+        phone = values[0]  # 手机号
+        user_id = values[2]  # 用户ID
+        
+        # 创建右键菜单
+        context_menu = tk.Menu(self.results_tree, tearoff=0)
+        
+        # 复制功能
+        context_menu.add_command(
+            label=f"📋 复制手机号: {phone}",
+            command=lambda: self._copy_to_clipboard(phone)
+        )
+        
+        if user_id and user_id != '-':
+            context_menu.add_command(
+                label=f"📋 复制用户ID: {user_id}",
+                command=lambda: self._copy_to_clipboard(user_id)
+            )
+        
+        context_menu.add_separator()
+        
+        # 单独运行功能
+        context_menu.add_command(
+            label="▶️ 单独运行此账号",
+            command=lambda: self._run_single_account(phone)
+        )
+        
+        context_menu.add_separator()
+        
+        # 清理缓存功能
+        context_menu.add_command(
+            label="🧹 清理登录缓存",
+            command=lambda: self._clear_account_cache(phone)
+        )
+        
+        context_menu.add_separator()
+        
+        # 删除功能
+        context_menu.add_command(
+            label="🗑️ 删除此账号",
+            command=lambda: self._delete_single_account(phone)
+        )
+        
+        # 显示菜单
+        context_menu.post(event.x_root, event.y_root)
+    
+    def _copy_to_clipboard(self, text):
+        """[2026-02-28] 复制文本到剪贴板"""
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+            self.root.update()
+            self._log(f"✓ 已复制到剪贴板: {text}")
+        except Exception as e:
+            self._log(f"✗ 复制失败: {e}")
+    
+    def _run_single_account(self, phone: str):
+        """[2026-02-28] 单独运行选中的账号"""
+        if self.is_running:
+            messagebox.showwarning("警告", "当前有任务正在运行，请等待完成后再试")
+            return
+        
+        # 确认操作
+        result = messagebox.askyesno(
+            "确认运行",
+            f"确定要单独运行账号 {phone} 吗？",
+            parent=self.root
+        )
+        
+        if not result:
+            return
+        
+        # 清空当前勾选状态
+        for item in self.checked_items:
+            self.checked_items[item] = False
+            self.results_tree.item(item, text=self.checkbox_unchecked_text)
+        
+        # 找到并勾选该账号
+        for item in self.results_tree.get_children():
+            values = self.results_tree.item(item, "values")
+            if values and values[0] == phone:
+                self.checked_items[item] = True
+                self.results_tree.item(item, text=self.checkbox_checked_text)
+                break
+        
+        # 更新统计
+        self._update_stats_from_table()
+        
+        # 启动自动化
+        self._log(f"开始单独运行账号: {phone}")
+        self._start_automation()
+    
+    def _clear_account_cache(self, phone: str):
+        """[2026-02-28] 清理选中账号的登录缓存"""
+        # 确认操作
+        result = messagebox.askyesno(
+            "确认清理",
+            f"确定要清理账号 {phone} 的登录缓存吗？\n\n"
+            "清理后该账号下次运行时需要重新登录。",
+            parent=self.root
+        )
+        
+        if not result:
+            return
+        
+        try:
+            # [2026-03-06] 修复：删除未使用的LoginCacheManager导入
+            # 清理登录缓存只需要直接删除目录，不需要LoginCacheManager
+            import shutil
+            from pathlib import Path
+            
+            cache_dir = Path("login_cache")
+            deleted_count = 0
+            
+            # 查找并删除该手机号的所有缓存目录
+            if cache_dir.exists():
+                for cache_folder in cache_dir.iterdir():
+                    if cache_folder.is_dir() and cache_folder.name.startswith(phone):
+                        try:
+                            shutil.rmtree(cache_folder)
+                            deleted_count += 1
+                            self._log(f"✓ 已删除登录缓存目录: {cache_folder.name}")
+                        except Exception as e:
+                            self._log(f"✗ 删除缓存目录失败 ({cache_folder.name}): {e}")
+            
+            # 清理账号信息缓存
+            try:
+                from .account_cache import get_account_cache
+                account_cache = get_account_cache()
+                account_cache.clear(phone)
+                self._log(f"✓ 已清理账号信息缓存: {phone}")
+            except Exception as e:
+                self._log(f"⚠️ 清理账号信息缓存失败: {e}")
+            
+            if deleted_count > 0:
+                messagebox.showinfo(
+                    "清理完成",
+                    f"已清理账号 {phone} 的登录缓存\n\n"
+                    f"删除了 {deleted_count} 个缓存目录",
+                    parent=self.root
+                )
+            else:
+                messagebox.showinfo(
+                    "清理完成",
+                    f"账号 {phone} 没有找到登录缓存",
+                    parent=self.root
+                )
+        
+        except Exception as e:
+            self._log(f"✗ 清理缓存失败: {e}")
+            messagebox.showerror("错误", f"清理缓存失败: {e}", parent=self.root)
+    
+    def _delete_single_account(self, phone: str):
+        """[2026-02-28] 删除选中的账号（从数据库和账号文件删除）"""
+        # 确认操作
+        result = messagebox.askyesno(
+            "确认删除",
+            f"确定要删除账号 {phone} 吗？\n\n"
+            "此操作将：\n"
+            "1. 从账号文件中删除\n"
+            "2. 从数据库中删除所有记录\n"
+            "3. 清理所有缓存\n"
+            "4. 取消管理员分配\n\n"
+            "此操作不可恢复！",
+            parent=self.root
+        )
+        
+        if not result:
+            return
+        
+        try:
+            # 1. 从账号文件删除
+            accounts_file = self.config.accounts_file
+            if not accounts_file:
+                messagebox.showerror("错误", "未配置账号文件路径", parent=self.root)
+                return
+            
+            from .encrypted_accounts_file import EncryptedAccountsFile
+            encrypted_file = EncryptedAccountsFile(accounts_file)
+            
+            if encrypted_file.delete_accounts([phone]):
+                self._log(f"✓ 已从账号文件删除: {phone}")
+            else:
+                self._log(f"⚠️ 账号文件中未找到: {phone}")
+            
+            # 2. 从数据库删除
+            # [2026-03-06] 修复导入错误：使用正确的LocalDatabase类
+            from .local_db import LocalDatabase
+            db = LocalDatabase()
+            deleted_db_count = db.delete_account_records(phone)
+            self._log(f"✓ 已从数据库删除 {deleted_db_count} 条记录: {phone}")
+            
+            # 3. 清理登录缓存
+            import shutil
+            from pathlib import Path
+            
+            cache_dir = Path("login_cache")
+            deleted_cache_count = 0
+            
+            if cache_dir.exists():
+                for cache_folder in cache_dir.iterdir():
+                    if cache_folder.is_dir() and cache_folder.name.startswith(phone):
+                        try:
+                            shutil.rmtree(cache_folder)
+                            deleted_cache_count += 1
+                        except Exception as e:
+                            self._log(f"⚠️ 删除登录缓存失败 ({cache_folder.name}): {e}")
+            
+            self._log(f"✓ 已删除 {deleted_cache_count} 个登录缓存目录: {phone}")
+            
+            # 4. 清理账号信息缓存
+            try:
+                from .account_cache import get_account_cache
+                account_cache = get_account_cache()
+                account_cache.clear(phone)
+                self._log(f"✓ 已清理账号信息缓存: {phone}")
+            except Exception as e:
+                self._log(f"⚠️ 清理账号信息缓存失败: {e}")
+            
+            # 5. 从用户管理器中移除账号分配
+            try:
+                from .user_manager import UserManager
+                user_manager = UserManager()
+                removed_assignments = user_manager.remove_account_assignment(phone)
+                if removed_assignments > 0:
+                    self._log(f"✓ 已取消管理员分配: {phone}")
+            except Exception as e:
+                self._log(f"⚠️ 取消管理员分配失败: {e}")
+            
+            # 6. 从表格中移除该行
+            for item in self.results_tree.get_children():
+                values = self.results_tree.item(item, "values")
+                if values and values[0] == phone:
+                    self.results_tree.delete(item)
+                    if item in self.checked_items:
+                        del self.checked_items[item]
+                    break
+            
+            # 更新统计
+            self._update_stats_from_table()
+            
+            messagebox.showinfo(
+                "删除完成",
+                f"已成功删除账号 {phone}\n\n"
+                f"- 账号文件: 已删除\n"
+                f"- 数据库记录: {deleted_db_count} 条\n"
+                f"- 登录缓存: {deleted_cache_count} 个目录\n"
+                f"- 账号信息缓存: 已清理\n"
+                f"- 管理员分配: 已取消",
+                parent=self.root
+            )
+        
+        except Exception as e:
+            self._log(f"✗ 删除账号失败: {e}")
+            messagebox.showerror("错误", f"删除账号失败: {e}", parent=self.root)
         else:
             self.results_tree.item(item, text=self.checkbox_unchecked_text)
         
@@ -1701,8 +2680,8 @@ class AutomationGUI:
         failed_count = 0
         for item in self.all_tree_items:
             values = self.results_tree.item(item, 'values')
-            if values and len(values) > 13:  # 确保有足够的列
-                status = values[13]  # 状态列是第14列（索引13）
+            if values and len(values) > 11:  # [2026-03-01] 删除优惠券后改为11
+                status = values[11]  # [2026-03-01] 状态列是第12列（索引11）
                 if '失败' in str(status):
                     self.results_tree.reattach(item, '', 'end')
                     failed_count += 1
@@ -1868,14 +2847,99 @@ class AutomationGUI:
         self._auto_load_accounts()
     
     def _clear_log(self):
-        """清空日志"""
-        self.log_text.config(state=tk.NORMAL)
-        self.log_text.delete(1.0, tk.END)
-        self.log_text.config(state=tk.DISABLED)
+        """清空日志
+        
+        [2026-03-03] 修改：清空所有实例标签页的日志，并重置错误状态
+        [2026-03-03] 修改：适配"全部"标签页（instance_id=-1）和"错误"标签页（instance_id=-2）
+        [2026-03-03] 修复：清空日志后显示绿色圆点（表示无错误状态）
+        """
+        # 清空所有实例的日志文本框
+        for instance_id, log_text in self.instance_log_texts.items():
+            log_text.config(state=tk.NORMAL)
+            log_text.delete(1.0, tk.END)
+            log_text.config(state=tk.DISABLED)
+            
+            # 重置错误状态和标签页颜色
+            self.instance_has_error[instance_id] = False
+            
+            # 更新标签页标题（显示绿色圆点）
+            if instance_id == -1:
+                self.log_notebook.tab(0, text="全部")
+            elif instance_id == -2:
+                self.log_notebook.tab(7, text="错误")
+            else:
+                # 实例0-5：显示绿色圆点（表示无错误）
+                self._update_instance_tab_color(instance_id, 'green')
+        
         # 清空所有日志存储
         self.all_logs = []
-        # 清空日志后恢复自动滚动
-        self.log_auto_scroll = True
+    
+    def _clear_instance_log(self, instance_id: int):
+        """清空指定实例的日志
+        
+        [2026-03-03] 新增：双击日志文本框清空该实例的日志
+        [2026-03-03] 修改：适配"全部"标签页（instance_id=-1）和"错误"标签页（instance_id=-2）
+        [2026-03-03] 修复：清空日志后显示绿色圆点（表示无错误状态）
+        
+        Args:
+            instance_id: 实例ID (-1表示"全部"标签页, -2表示"错误"标签页, 0-5表示实例0-5)
+        """
+        if instance_id in self.instance_log_texts:
+            log_text = self.instance_log_texts[instance_id]
+            log_text.config(state=tk.NORMAL)
+            log_text.delete(1.0, tk.END)
+            log_text.config(state=tk.DISABLED)
+            
+            # 重置该实例的错误状态和标签页颜色
+            self.instance_has_error[instance_id] = False
+            
+            # 更新标签页标题（显示绿色圆点）
+            if instance_id == -1:
+                self.log_notebook.tab(0, text="全部")
+            elif instance_id == -2:
+                self.log_notebook.tab(7, text="错误")
+            else:
+                # 实例0-5：显示绿色圆点（表示无错误）
+                self._update_instance_tab_color(instance_id, 'green')
+            
+            # 重置自动滚动状态
+            self.instance_auto_scroll[instance_id] = True
+    
+    def _on_instance_log_scroll(self, instance_id: int):
+        """用户滚动实例日志时检查是否在底部
+        
+        [2026-03-03] 新增：检测用户滚动，决定是否自动滚动
+        
+        Args:
+            instance_id: 实例ID (0-6)
+        """
+        # 延迟检查，等待滚动完成
+        self.root.after(100, lambda: self._check_instance_scroll_position(instance_id))
+    
+    def _check_instance_scroll_position(self, instance_id: int):
+        """检查实例日志文本框是否滚动到底部
+        
+        [2026-03-03] 新增：如果在底部则开启自动滚动，否则关闭
+        
+        Args:
+            instance_id: 实例ID (0-6)
+        """
+        if instance_id not in self.instance_log_texts:
+            return
+        
+        try:
+            log_text = self.instance_log_texts[instance_id]
+            # 获取当前滚动位置
+            # yview() 返回 (top, bottom)，表示可见区域的相对位置（0.0-1.0）
+            yview = log_text.yview()
+            
+            # 如果底部位置接近1.0（允许小误差），认为在底部，开启自动滚动
+            if yview[1] >= 0.99:
+                self.instance_auto_scroll[instance_id] = True
+            else:
+                self.instance_auto_scroll[instance_id] = False
+        except Exception:
+            pass
     
     def _clear_error_log(self):
         """清空错误日志"""
@@ -1951,9 +3015,9 @@ class AutomationGUI:
         for item_id in self.results_tree.get_children():
             values = self.results_tree.item(item_id, 'values')
             if values and len(values) > 13 and values[0] == phone:  # 确保至少有14列（索引0-13）
-                # 找到对应的行，更新状态列(第14列，索引13)
+                # [2026-03-01] 找到对应的行，更新状态列(第12列，索引11)
                 new_values = list(values)
-                new_values[13] = status  # 状态列（索引13）
+                new_values[11] = status  # 状态列（索引11）
                 self.results_tree.item(item_id, values=tuple(new_values))
                 break
     
@@ -2012,18 +3076,19 @@ class AutomationGUI:
         # 遍历表格中的所有行
         for item_id in self.results_tree.get_children():
             values = self.results_tree.item(item_id, 'values')
-            if not values or len(values) < 16:  # 现在有16列
+            if not values or len(values) < 14:  # [2026-03-01] 删除优惠券后现在有14列
                 continue
             
             total += 1
             
+            # [2026-03-01] 删除优惠券列：个人页已经没有优惠券了
             # 表格列顺序：
-            # 0:phone, 1:nickname, 2:user_id, 3:balance_before, 4:points, 5:vouchers, 6:coupons,
-            # 7:checkin_reward, 8:checkin_total_times, 9:balance_after, 10:transfer_amount, 
-            # 11:transfer_recipient, 12:duration, 13:status, 14:login_method, 15:owner
+            # 0:phone, 1:nickname, 2:user_id, 3:balance_before, 4:points,
+            # 5:checkin_reward, 6:checkin_total_times, 7:balance_after, 8:transfer_amount, 
+            # 9:transfer_recipient, 10:duration, 11:status, 12:login_method, 13:owner
             
-            # 状态列（索引13）
-            status = values[13]
+            # 状态列（索引11）
+            status = values[11]
             is_success = "成功" in status  # 使用in判断，因为状态可能是"✅ 成功"
             is_failed = "失败" in status or "❌" in status  # 包含失败和错误状态
             
@@ -2035,9 +3100,9 @@ class AutomationGUI:
             
             # 只统计成功账号的余额和签到奖励（避免混合历史数据）
             if is_success:
-                # 余额（索引9，balance_after）
+                # 余额（索引7，balance_after）
                 try:
-                    balance_str = values[9]
+                    balance_str = values[7]
                     if balance_str and balance_str != "N/A" and balance_str != "-" and balance_str != "待处理" and balance_str != "None":
                         total_balance += float(balance_str)
                 except (ValueError, IndexError, TypeError) as e:
@@ -2045,9 +3110,9 @@ class AutomationGUI:
                     phone = values[0] if values else 'unknown'
                     print(f"[统计] 解析余额失败 - 账号: {phone}, 值: {balance_str}, 错误: {e}")
                 
-                # 签到奖励（索引7）
+                # 签到奖励（索引5）
                 try:
-                    checkin_reward_str = values[7]
+                    checkin_reward_str = values[5]
                     if checkin_reward_str and checkin_reward_str != "N/A" and checkin_reward_str != "-" and checkin_reward_str != "待处理" and checkin_reward_str != "None":
                         total_checkin_reward += float(checkin_reward_str)
                 except (ValueError, IndexError, TypeError) as e:
@@ -2077,8 +3142,8 @@ class AutomationGUI:
             if not values or len(values) < 16:
                 continue
             
-            # 状态列（索引13）
-            status = values[13]
+            # [2026-03-01] 状态列（索引11）
+            status = values[11]
             is_success = "成功" in status
             is_failed = "失败" in status or "❌" in status
             
@@ -2151,17 +3216,17 @@ class AutomationGUI:
         # 积分
         points = str(account_result.points) if account_result.points is not None else "N/A"
         
-        # 抵扣券
-        vouchers = f"{account_result.vouchers:.2f}" if account_result.vouchers is not None else "N/A"
-        
-        # 优惠券
-        coupons = str(account_result.coupons) if account_result.coupons is not None else "N/A"
+        # [2026-03-01] 删除优惠券列：不再使用 vouchers 字段
         
         # 签到奖励
         checkin_reward = f"{account_result.checkin_reward:.2f}" if account_result.checkin_reward else "0"
         
+        # [2026-03-06] 修复原因：签到次数为0时应该显示"0"而不是"N/A"
         # 签到总次数
-        checkin_total_times = str(account_result.checkin_total_times) if account_result.checkin_total_times is not None else "N/A"
+        if account_result.checkin_total_times is not None:
+            checkin_total_times = str(account_result.checkin_total_times)
+        else:
+            checkin_total_times = "0"  # 默认为0而不是N/A
         
         # 余额（最终余额）
         balance_after = f"{account_result.balance_after:.2f}" if account_result.balance_after is not None else "N/A"
@@ -2181,9 +3246,10 @@ class AutomationGUI:
         # 登录方式
         login_method = account_result.login_method if account_result.login_method else "N/A"
         
+        # [2026-03-01] 删除优惠券列：个人页已经没有优惠券了
         # 准备新的值（包含owner和转账字段）- 注意顺序要与columns定义一致
         values = (
-            phone, nickname, user_id, balance_before, points, vouchers, coupons,
+            phone, nickname, user_id, balance_before, points,
             checkin_reward, checkin_total_times,
             balance_after, transfer_amount, transfer_recipient, duration, status, login_method, owner_name
         )
@@ -2275,7 +3341,7 @@ class AutomationGUI:
                 # 检查是否已经保存过（防止重复保存导致签到奖励累加）
                 with self.saved_accounts_lock:
                     if account_result.phone in self.saved_accounts:
-                        print(f"[历史记录] - 跳过重复保存: {account_result.phone} (已在 {self.saved_accounts[account_result.phone]} 保存)")
+                        # [2026-03-01] 删除日志：不显示"跳过重复保存"
                         return
                     
                     # 标记为已保存
@@ -2287,12 +3353,7 @@ class AutomationGUI:
                 # 获取当前日期
                 run_date = datetime.now().strftime('%Y-%m-%d')
                 
-                # 调试：检查account_result对象的转账属性
-                print(f"[历史记录] 账号 {account_result.phone} 状态: {account_result.success}")
-                print(f"[历史记录]   - hasattr transfer_amount: {hasattr(account_result, 'transfer_amount')}")
-                print(f"[历史记录]   - transfer_amount value: {getattr(account_result, 'transfer_amount', 'N/A')}")
-                print(f"[历史记录]   - hasattr transfer_recipient: {hasattr(account_result, 'transfer_recipient')}")
-                print(f"[历史记录]   - transfer_recipient value: {getattr(account_result, 'transfer_recipient', 'N/A')}")
+                # [2026-03-01] 删除调试日志：不显示账号状态和转账属性的详细信息
                 
                 # 准备记录数据（金额字段格式化为2位小数）
                 record = {
@@ -2315,19 +3376,17 @@ class AutomationGUI:
                     'run_date': run_date
                 }
                 
-                # 调试：打印转账信息
-                print(f"[历史记录]   - record transfer_amount: {record['transfer_amount']}")
-                print(f"[历史记录]   - record transfer_recipient: {record['transfer_recipient']}")
-                if record['transfer_amount'] and record['transfer_amount'] > 0:
-                    print(f"[历史记录] ✓ 账号 {account_result.phone} 转账信息: {record['transfer_amount']:.2f} 元 → {record['transfer_recipient']}")
+                # [2026-03-01] 精简日志：只显示保存成功或失败
                 
                 # 保存到数据库
                 if db.upsert_history_record(record):
-                    print(f"[历史记录] ✓ 已保存账号 {account_result.phone}")
+                    print(f"✓ 已保存: {account_result.phone}")
                 else:
-                    print(f"[历史记录] ✗ 保存失败: {account_result.phone}")
+                    # [2026-03-01] 失败时显示详细错误信息用于调试
+                    print(f"✗ 保存失败: {account_result.phone}")
+                    print(f"  错误详情: 数据库操作失败，请查看上方的详细错误日志")
             else:
-                print(f"[历史记录] - 跳过失败账号: {account_result.phone}")
+                pass  # [2026-03-01] 删除日志：不显示"跳过失败账号"
                     
         except Exception as e:
             # 静默失败，不影响主流程
@@ -2343,8 +3402,8 @@ class AutomationGUI:
         这样可以避免字段错位和数据丢失问题。
         """
         try:
-            # 不再需要批量保存，只输出提示信息
-            print(f"[历史记录] ✓ 所有账号的结果已在执行过程中实时保存到数据库")
+            # [2026-03-01] 删除日志：不显示"所有账号的结果已在执行过程中实时保存到数据库"
+            pass
             
         except Exception as e:
             # 静默失败，不影响主流程
@@ -2389,26 +3448,43 @@ class AutomationGUI:
             for phone, record in phone_dict.items():
                 # 处理昵称编码
                 nickname = record['nickname']
+                # [2026-03-05] 修复原因：避免将None转换为字符串'None'
                 if nickname:
                     # 如果是bytes，解码为str
                     if isinstance(nickname, bytes):
                         nickname = nickname.decode('utf-8', errors='replace')
-                    else:
-                        # 确保是字符串
+                    elif not isinstance(nickname, str):
+                        # 只有当不是字符串时才转换（避免None变成'None'）
                         nickname = str(nickname)
+                else:
+                    # None、空字符串等保持原样
+                    nickname = nickname
+                
+                # [2026-03-05] 修复原因：避免将None转换为字符串'None'
+                # 处理user_id
+                user_id = record['user_id']
+                if user_id is None or (isinstance(user_id, str) and user_id.lower() == 'none'):
+                    user_id = None
+                
+                # 处理其他字段，避免将None转换为'None'
+                def safe_str(value):
+                    """安全转换为字符串，None保持为None"""
+                    if value is None or (isinstance(value, str) and value.lower() == 'none'):
+                        return None
+                    return str(value)
                 
                 history_data.append({
                     '手机号': record['phone'],
                     '昵称': nickname,
-                    '用户ID': record['user_id'],
-                    '余额前(元)': str(record['balance_before']),
-                    '积分': str(record['points']),
-                    '抵扣券(张)': str(record['vouchers']),
-                    '优惠券(张)': str(record['coupons']),
-                    '签到奖励(元)': str(record['checkin_reward']),
-                    '签到总次数': str(record['checkin_total_times']),
-                    '余额(元)': str(record['balance_after']),
-                    '耗时(秒)': str(record['duration']),
+                    '用户ID': user_id,
+                    '余额前(元)': safe_str(record['balance_before']),
+                    '积分': safe_str(record['points']),
+                    '抵扣券(张)': safe_str(record['vouchers']),
+                    '优惠券(张)': safe_str(record['coupons']),
+                    '签到奖励(元)': safe_str(record['checkin_reward']),
+                    '签到总次数': safe_str(record['checkin_total_times']),
+                    '余额(元)': safe_str(record['balance_after']),
+                    '耗时(秒)': safe_str(record['duration']),
                     '状态': record['status'],
                     '登录方式': record['login_method']
                 })
@@ -2557,7 +3633,20 @@ class AutomationGUI:
         # 清空已保存账号集合（新的一次运行）
         with self.saved_accounts_lock:
             self.saved_accounts.clear()
-            print("[历史记录] 已清空已保存账号集合（新的一次运行）")
+            # [2026-03-01] 删除启动日志：不显示"已清空已保存账号集合"
+        
+        # [2026-03-03] 新增：记录运行开始时间
+        self.run_start_time = time.time()
+        
+        # [2026-03-03] 新增：重置所有实例的错误状态和标签页颜色
+        # [2026-03-03] 修复：只重置实例0-5的标签页，跳过"全部"(-1)和"错误"(-2)
+        # [2026-03-03] 修复：启动时显示绿色圆点（表示无错误状态）
+        for instance_id in self.instance_has_error.keys():
+            self.instance_has_error[instance_id] = False
+            # 只重置实例0-5的标签页（跳过负数索引）
+            if instance_id >= 0 and instance_id < 6:
+                # 显示绿色圆点（表示无错误）
+                self._update_instance_tab_color(instance_id, 'green')
         
         self.is_running = True
         self.is_paused = False
@@ -2604,12 +3693,12 @@ class AutomationGUI:
         # 将所有"执行中"的账号标记为"手动停止"
         for item_id in self.results_tree.get_children():
             values = self.results_tree.item(item_id, 'values')
-            if values and len(values) > 13:  # 至少要有14列（索引0-13）
-                status = values[13]  # 状态列（索引13）
+            if values and len(values) > 11:  # [2026-03-01] 至少要有12列（索引0-11）
+                status = values[11]  # [2026-03-01] 状态列（索引11）
                 if status == "执行中":
                     # 更新状态为"手动停止"
                     new_values = list(values)
-                    new_values[13] = "手动停止"  # 状态列（索引13）
+                    new_values[11] = "手动停止"  # [2026-03-01] 状态列（索引11）
                     self.results_tree.item(item_id, values=tuple(new_values))
         
         # [2026-02-22] 修改：不立即取消任务,让当前账号完成
@@ -3113,11 +4202,10 @@ class AutomationGUI:
         # 等待所有线程完成
         self.root.after(0, lambda: self._log(f"等待 {len(instance_threads)} 个实例线程完成..."))
         
-        # [2026-02-22] 修改：添加超时机制,避免无限等待
-        max_wait_time = 30  # 最多等待30秒
+        # [2026-03-02] 修复：等待所有线程真正完成，不设置超时
+        # 之前的30秒超时导致报告提前生成，账号还在处理中
         for thread in instance_threads:
-            thread.join(timeout=max_wait_time)
-            # [2026-02-22] 删除超时日志：不需要显示给用户
+            thread.join()  # 无限等待直到线程完成
         
         # 检查是否所有线程都已结束
         alive_threads = [t for t in instance_threads if t.is_alive()]
@@ -3222,6 +4310,10 @@ class AutomationGUI:
                 self.executor = None
                 self.pending_futures = []
         
+        # [2026-03-01] 添加步骤标题和分隔线
+        self.root.after(0, lambda: self._log("=" * 64))
+        self.root.after(0, lambda: self._log("步骤3: 生成报告"))
+        
         # 生成报告
         Path(self.config.report_dir).mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -3275,7 +4367,11 @@ class AutomationGUI:
             )
             return ('success', account, result)
         except Exception as e:
+            # [2026-03-05] 添加完整的堆栈跟踪，方便调试
+            import traceback
+            full_traceback = traceback.format_exc()
             log_callback(f"账号 {account.phone} 处理异常: {e}")
+            log_callback(f"完整错误堆栈:\n{full_traceback}")
             return ('error', account, str(e))
         finally:
             # 释放实例回池中
@@ -3325,7 +4421,7 @@ class AutomationGUI:
             integrated_detector = model_manager.get_page_detector_integrated()
             
             # 创建AutoLogin，传递integrated_detector
-            # AutoLogin会从ModelManager获取智能检测器，不需要手动设置
+            # AutoLogin会从ModelManager获取YOLO识别器，不需要手动设置
             auto_login = AutoLogin(ui_automation, screen_capture, adb, 
                                   emulator_type=emulator_type_str,
                                   integrated_detector=integrated_detector)
@@ -3377,7 +4473,7 @@ class AutomationGUI:
             success = await adb.start_app(device_id, target_app, target_activity)
             if not success:
                 raise Exception("应用启动失败")
-            await asyncio.sleep(1.5)  # 优化：减少等待时间从3秒到1.5秒，让启动流程智能检测
+            await asyncio.sleep(1.5)  # 优化：减少等待时间从3秒到1.5秒，让启动流程自动检测
             
             # 处理启动流程（跳过广告、弹窗等）
             # 获取文件日志记录器
@@ -3390,7 +4486,9 @@ class AutomationGUI:
                 package_name=target_app,
                 activity_name=target_activity,
                 max_retries=3,
-                file_logger=file_logger
+                file_logger=file_logger,
+                phone=account.phone,
+                password=account.password
             )
             
             if not startup_ok:
@@ -3402,90 +4500,126 @@ class AutomationGUI:
             # 快速签到模式下，跳过ID验证，直接进入登录流程
             enable_profile = getattr(self.config, 'workflow_enable_profile', True)
             
+            # [2026-03-05] 添加调试日志
+            log_callback(f"[DEBUG-GUI] has_valid_cache: {has_valid_cache}")
+            log_callback(f"[DEBUG-GUI] enable_profile: {enable_profile}")
+            log_callback(f"[DEBUG-GUI] 是否需要验证用户ID: {has_valid_cache and enable_profile}")
+            
             if has_valid_cache and enable_profile:
                 # 完整流程模式：需要验证用户ID
-                from .navigator import Navigator
-                from .model_manager import ModelManager
-                from .page_detector import PageState
-                
-                # 从ModelManager获取共享的检测器实例
-                model_manager = ModelManager.get_instance()
-                detector = model_manager.get_page_detector_integrated()
-                
-                navigator = Navigator(adb, detector)
-                
-                # 导航到个人页面
-                nav_success = await navigator.navigate_to_profile(device_id)
-                if nav_success:
-                    # 检测页面状态
-                    profile_templates = ['已登陆个人页.png', '未登陆个人页.png']
-                    page_result = await detector.detect_page_with_priority(
-                        device_id, profile_templates, use_cache=False
-                    )
+                try:
+                    log_callback("[DEBUG-验证] 开始用户ID验证流程...")
+                    from .navigator import Navigator
+                    from .model_manager import ModelManager
+                    from .page_detector import PageState
                     
-                    if page_result and page_result.state == PageState.PROFILE_LOGGED:
-                        # 获取当前用户ID验证
-                        profile_info = await ximeng.profile_reader.get_full_profile_parallel(device_id)
+                    # 从ModelManager获取共享的检测器实例
+                    model_manager = ModelManager.get_instance()
+                    detector = model_manager.get_page_detector_integrated()
+                    
+                    navigator = Navigator(adb, detector)
+                    
+                    # 导航到个人页面
+                    log_callback("[DEBUG-验证] 导航到个人页面...")
+                    nav_success = await navigator.navigate_to_profile(device_id)
+                    log_callback(f"[DEBUG-验证] 导航结果: {nav_success}")
+                    
+                    if nav_success:
+                        # 检测页面状态
+                        log_callback("[DEBUG-验证] 检测页面状态...")
+                        profile_templates = ['已登陆个人页.png', '未登陆个人页.png']
+                        page_result = await detector.detect_page_with_priority(
+                            device_id, profile_templates, use_cache=False
+                        )
+                        log_callback(f"[DEBUG-验证] 页面状态: {page_result.state if page_result else 'None'}")
                         
-                        if profile_info and profile_info.get('user_id'):
-                            current_user_id = profile_info['user_id']
-                            expected_user_id = auto_login.cache_manager._get_expected_user_id(account.phone)
+                        if page_result and page_result.state == PageState.PROFILE_LOGGED:
+                            # 获取当前用户ID验证
+                            log_callback("[DEBUG-验证] 获取用户ID...")
+                            try:
+                                profile_info = await ximeng.profile_reader.get_full_profile_parallel(device_id)
+                                log_callback(f"[DEBUG-验证] 获取到的profile_info: {profile_info}")
+                            except Exception as profile_error:
+                                log_callback(f"[DEBUG-验证] 获取用户ID时出错: {profile_error}")
+                                import traceback
+                                log_callback(f"[DEBUG-验证] 异常堆栈:\n{traceback.format_exc()}")
+                                raise
                             
-                            if expected_user_id and current_user_id != expected_user_id:
-                                log_callback(f"用户ID不匹配，重新登录")
+                            if profile_info and profile_info.get('user_id'):
+                                current_user_id = profile_info['user_id']
+                                expected_user_id = auto_login.cache_manager._get_expected_user_id(account.phone)
+                                log_callback(f"[DEBUG-验证] 当前用户ID: {current_user_id}")
+                                log_callback(f"[DEBUG-验证] 预期用户ID: {expected_user_id}")
                                 
-                                # 停止应用并清理
+                                if expected_user_id and current_user_id != expected_user_id:
+                                    log_callback(f"用户ID不匹配，重新登录")
+                                    
+                                    # 停止应用并清理
+                                    await adb.stop_app(device_id, target_app)
+                                    await asyncio.sleep(0.5)  # 优化：减少等待时间
+                                    await auto_login.cache_manager.clear_app_login_data(device_id, target_app)
+                                    
+                                    # 重新启动
+                                    await adb.start_app(device_id, target_app, target_activity)
+                                    await asyncio.sleep(1.5)  # 优化：减少等待时间，让启动流程自动检测
+                                    
+                                    # 清理页面检测缓存
+                                    ximeng.detector.clear_cache()
+                                    
+                                    # 重新处理启动流程
+                                    file_logger = logging.getLogger(__name__)
+                                    startup_ok = await ximeng.handle_startup_flow_integrated(
+                                        device_id, log_callback=log_callback,
+                                        stop_check=self._check_stop_or_pause,
+                                        package_name=target_app, activity_name=target_activity,
+                                        max_retries=3,
+                                        file_logger=file_logger,
+                                        phone=account.phone,
+                                        password=account.password
+                                    )
+                                    if not startup_ok:
+                                        raise Exception("重新启动失败")
+                                    
+                                    has_valid_cache = False
+                                else:
+                                    log_callback("OK 用户ID验证通过，缓存有效！")
+                                    # 清理页面检测缓存，因为当前已在个人页
+                                    ximeng.detector.clear_cache()
+                            else:
+                                log_callback("[DEBUG-验证] 无法获取用户ID，清理后重新登录")
+                                # 无法获取用户ID，清理后重新登录
                                 await adb.stop_app(device_id, target_app)
                                 await asyncio.sleep(0.5)  # 优化：减少等待时间
                                 await auto_login.cache_manager.clear_app_login_data(device_id, target_app)
-                                
-                                # 重新启动
                                 await adb.start_app(device_id, target_app, target_activity)
-                                await asyncio.sleep(1.5)  # 优化：减少等待时间，让启动流程智能检测
-                                
-                                # 清理页面检测缓存
+                                await asyncio.sleep(1.5)  # 优化：减少等待时间
                                 ximeng.detector.clear_cache()
-                                
-                                # 重新处理启动流程
                                 file_logger = logging.getLogger(__name__)
                                 startup_ok = await ximeng.handle_startup_flow_integrated(
                                     device_id, log_callback=log_callback,
                                     stop_check=self._check_stop_or_pause,
                                     package_name=target_app, activity_name=target_activity,
                                     max_retries=3,
-                                    file_logger=file_logger
+                                    file_logger=file_logger,
+                                    phone=account.phone,
+                                    password=account.password
                                 )
                                 if not startup_ok:
                                     raise Exception("重新启动失败")
-                                
                                 has_valid_cache = False
-                            else:
-                                log_callback("OK 用户ID验证通过，缓存有效！")
-                                # 清理页面检测缓存，因为当前已在个人页
-                                ximeng.detector.clear_cache()
                         else:
-                            # 无法获取用户ID，清理后重新登录
-                            await adb.stop_app(device_id, target_app)
-                            await asyncio.sleep(0.5)  # 优化：减少等待时间
-                            await auto_login.cache_manager.clear_app_login_data(device_id, target_app)
-                            await adb.start_app(device_id, target_app, target_activity)
-                            await asyncio.sleep(1.5)  # 优化：减少等待时间
-                            ximeng.detector.clear_cache()
-                            file_logger = logging.getLogger(__name__)
-                            startup_ok = await ximeng.handle_startup_flow_integrated(
-                                device_id, log_callback=log_callback,
-                                stop_check=self._check_stop_or_pause,
-                                package_name=target_app, activity_name=target_activity,
-                                max_retries=3,
-                                file_logger=file_logger
-                            )
-                            if not startup_ok:
-                                raise Exception("重新启动失败")
+                            log_callback("[DEBUG-验证] 页面状态不是PROFILE_LOGGED，设置has_valid_cache=False")
                             has_valid_cache = False
+                            ximeng.detector.clear_cache()
                     else:
+                        log_callback("[DEBUG-验证] 导航失败，设置has_valid_cache=False")
                         has_valid_cache = False
                         ximeng.detector.clear_cache()
-                else:
+                except Exception as verify_error:
+                    log_callback(f"[DEBUG-验证] 用户ID验证流程出错: {verify_error}")
+                    import traceback
+                    log_callback(f"[DEBUG-验证] 异常堆栈:\n{traceback.format_exc()}")
+                    # 验证失败，设置has_valid_cache=False，继续正常登录流程
                     has_valid_cache = False
                     ximeng.detector.clear_cache()
             elif has_valid_cache and not enable_profile:
@@ -3532,7 +4666,7 @@ class AutomationGUI:
             if result.success:
                 self.root.after(0, lambda: self._add_result_to_table(result))
                 self.root.after(0, lambda: self._update_pending_count())
-                log_callback(f"✓ 账号处理完成 (耗时: {round(duration, 3)}秒)")
+                log_callback(f"✓ 账号 {account.phone} 处理完成 (耗时: {round(duration, 3)}秒)")
                 log_callback("")  # 空行分隔
                 
                 # 清除该账号的警告日志（重试成功后）
@@ -3540,7 +4674,7 @@ class AutomationGUI:
             else:
                 self.root.after(0, lambda: self._update_account_status_in_table(account.phone, "失败"))
                 self.root.after(0, lambda: self._update_pending_count())
-                log_callback(f"✗ 账号处理失败: {result.error_message}")
+                log_callback(f"✗ 账号 {account.phone} 处理失败: {result.error_message}")
                 log_callback("")  # 空行分隔
                 
                 # 记录错误日志
@@ -3732,8 +4866,17 @@ class AutomationGUI:
     
     def _on_scheduled_time_changed(self):
         """定时运行时间改变回调"""
+        # [2026-02-28] 修复：只有在允许自动保存时才保存（避免加载配置时触发）
+        if not self._allow_auto_save_scheduled_time:
+            return
+        
         self._update_scheduled_time()
+        # [2026-02-28] 调试：打印保存前的时间值
+        # [2026-03-01] 删除DEBUG日志：减少启动时的冗余输出
+        # print(f"[DEBUG] 定时运行时间变化，准备保存: {self.scheduled_run_time.get()}")
         self._auto_save_config()
+        # [2026-03-01] 删除DEBUG日志：减少启动时的冗余输出
+        # print(f"[DEBUG] 配置已保存")
     
     def _update_scheduled_time(self):
         """更新scheduled_run_time变量（从小时和分钟变量合成）"""
@@ -4036,6 +5179,30 @@ class AutomationGUI:
         self.status_var.set("已完成")
         self._log("自动化任务完成")
         
+        # [2026-03-03] 新增：计算并输出总运行时间到"全部"标签页
+        if hasattr(self, 'run_start_time'):
+            total_seconds = time.time() - self.run_start_time
+            
+            # 格式化时间显示
+            hours = int(total_seconds // 3600)
+            minutes = int((total_seconds % 3600) // 60)
+            seconds = int(total_seconds % 60)
+            
+            if hours > 0:
+                time_str = f"{hours}小时{minutes}分钟{seconds}秒"
+            else:
+                time_str = f"{minutes}分钟{seconds}秒"
+            
+            # 输出到"全部"标签页
+            all_log_text = self.instance_log_texts.get(-1)
+            if all_log_text:
+                all_log_text.config(state=tk.NORMAL)
+                all_log_text.insert(tk.END, f"\n{'='*60}\n")
+                all_log_text.insert(tk.END, f"✓ 本次运行总时间: {time_str}\n")
+                all_log_text.insert(tk.END, f"{'='*60}\n")
+                all_log_text.config(state=tk.DISABLED)
+                all_log_text.see(tk.END)
+        
         # 历史记录已在执行过程中实时保存
         try:
             self._save_to_history()
@@ -4111,10 +5278,14 @@ class AutomationGUI:
                 for item in self.results_tree.get_children():
                     self.results_tree.delete(item)
                 
-                # 清空日志
-                self.log_text.config(state=tk.NORMAL)
-                self.log_text.delete(1.0, tk.END)
-                self.log_text.config(state=tk.DISABLED)
+                # [2026-03-03] 修复：清空所有实例日志标签页
+                for instance_id, log_text in self.instance_log_texts.items():
+                    try:
+                        log_text.config(state=tk.NORMAL)
+                        log_text.delete(1.0, tk.END)
+                        log_text.config(state=tk.DISABLED)
+                    except:
+                        pass
                 
                 # 清空变量
                 self.checked_items.clear()
@@ -4682,7 +5853,8 @@ class TransferConfigWindow:
         selection = self.transfer_tree.selection()
         
         # 调试：打印选中的项目数量
-        print(f"[DEBUG] _move_to_recipient: selection count = {len(selection)}")
+        # [2026-03-01] 删除DEBUG日志：减少启动时的冗余输出
+        # print(f"[DEBUG] _move_to_recipient: selection count = {len(selection)}")
         
         if not selection:
             messagebox.showwarning("提示", "请先选择要移动的账号")
@@ -4706,7 +5878,8 @@ class TransferConfigWindow:
             moved_phones.append(phone)
             self.transfer_config.add_recipient(user_id, level)
         
-        print(f"[DEBUG] _move_to_recipient: moved phones = {moved_phones}")
+        # [2026-03-01] 删除DEBUG日志：减少启动时的冗余输出
+        # print(f"[DEBUG] _move_to_recipient: moved phones = {moved_phones}")
         
         self._refresh_trees()
         self.log(f"已将 {len(selection)} 个账号移到 {level}级收款账户")
@@ -5240,14 +6413,16 @@ class HistoryResultsWindow:
         table_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         
         # 创建Treeview
+        # [2026-03-01] 删除优惠券列：个人页已经没有优惠券了
         columns = (
-            "nickname", "user_id", "phone", "balance_before", "points", "vouchers",
+            "nickname", "user_id", "phone", "balance_before", "points",
             "checkin_reward", "checkin_total_times",
             "balance_after", "transfer_info", "status", "timestamp", "owner"
         )
         
         self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=20)
         
+        # [2026-03-01] 删除优惠券列：个人页已经没有优惠券了
         # 定义列标题和宽度
         column_config = {
             "nickname": ("昵称", 80),
@@ -5255,7 +6430,6 @@ class HistoryResultsWindow:
             "phone": ("手机号", 100),
             "balance_before": ("余额前", 70),
             "points": ("积分", 60),
-            "vouchers": ("抵扣券", 60),
             "checkin_reward": ("签到奖励", 80),
             "checkin_total_times": ("签到次数", 70),
             "balance_after": ("余额", 70),
@@ -5354,13 +6528,13 @@ class HistoryResultsWindow:
                         return str(value)
                 return str(value) if value else default
             
+            # [2026-03-01] 删除优惠券列：个人页已经没有优惠券了
             values = (
                 format_value(result.get('昵称'), 'N/A'),
                 format_value(result.get('用户ID'), 'N/A'),
                 format_value(result.get('手机号'), 'N/A'),
                 format_value(result.get('余额前(元)'), '0.0'),
                 format_value(result.get('积分'), '0'),
-                format_value(result.get('抵扣券(张)'), '0'),
                 format_value(result.get('签到奖励(元)'), '0.0'),
                 format_value(result.get('签到总次数'), '0'),
                 format_value(result.get('余额(元)'), '0.0'),

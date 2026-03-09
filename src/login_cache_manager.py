@@ -272,6 +272,16 @@ class LoginCacheManager:
                     # 删除 sdcard 上的临时文件
                     await self.adb.shell(device_id, f"rm {temp_path}")
                     
+                    # [2026-03-05] 修复：检查临时文件是否成功拉取
+                    if not temp_plain_file.exists():
+                        # 文件拉取失败，可能是因为文件不存在
+                        if file_path not in self.REQUIRED_FILES:
+                            # 非必需文件，静默跳过
+                            continue
+                        else:
+                            print(f"  [缓存] ⚠️ 拉取失败: {file_path}")
+                            continue
+                    
                     # 读取临时文件并加密
                     with open(temp_plain_file, 'rb') as f:
                         plain_data = f.read()
@@ -290,8 +300,23 @@ class LoginCacheManager:
                     print(f"  [缓存] ✓ 已保存并加密: {file_path}")
                     saved_count += 1
                     
+                except FileNotFoundError as e:
+                    # [2026-03-05] 修复：文件不存在错误，静默跳过非必需文件
+                    if file_path not in self.REQUIRED_FILES:
+                        # SQLite临时文件不存在是正常的，静默跳过
+                        pass
+                    else:
+                        print(f"  [缓存] ⚠️ 必需文件不存在: {file_path}")
+                    # 清理临时文件
+                    if temp_plain_file.exists():
+                        try:
+                            temp_plain_file.unlink()
+                        except:
+                            pass
                 except Exception as e:
-                    print(f"  [缓存] ✗ 保存失败 {file_path}: {e}")
+                    # [2026-03-05] 修复：其他错误，只对必需文件显示错误
+                    if file_path in self.REQUIRED_FILES:
+                        print(f"  [缓存] ✗ 保存失败 {file_path}: {e}")
                     # 清理临时文件
                     if temp_plain_file.exists():
                         try:
@@ -348,7 +373,7 @@ class LoginCacheManager:
                     print(f"  [缓存] 未找到 {phone} 的缓存")
                     return False
             
-            print(f"  [缓存] 从目录恢复: {account_cache_dir}")
+            # [2026-03-01] 删除启动日志：不显示"从目录恢复"
             
             # 先停止应用
             await self.adb.shell(device_id, f"am force-stop {package_name}")
@@ -440,7 +465,7 @@ class LoginCacheManager:
                         pass
             
             restored_count = len(files_to_restore)
-            print(f"  [缓存] ✓ 已恢复 {restored_count} 个文件")
+            # [2026-03-01] 删除启动日志：不显示"已恢复 X 个文件"
             
             return restored_count > 0
             

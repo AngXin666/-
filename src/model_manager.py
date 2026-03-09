@@ -292,6 +292,32 @@ class ModelManager:
                     'enabled': True,
                     'thread_count': 4,
                     'use_gpu': True
+                },
+                # [2026-03-03] 新增：通用分类器（作为专用模型的降级方案）
+                'general_classifier': {
+                    'enabled': True,
+                    'device': 'auto'
+                },
+                # [2026-03-03] 新增：5个专用检测器的默认配置
+                'startup_detector': {
+                    'enabled': True,
+                    'device': 'auto'
+                },
+                'profile_detector': {
+                    'enabled': True,
+                    'device': 'auto'
+                },
+                'checkin_detector': {
+                    'enabled': True,
+                    'device': 'auto'
+                },
+                'transfer_detector': {
+                    'enabled': True,
+                    'device': 'auto'
+                },
+                'login_detector': {
+                    'enabled': True,
+                    'device': 'auto'
                 }
             },
             'startup': {
@@ -309,7 +335,7 @@ class ModelManager:
                 
                 # 合并配置（用户配置覆盖默认配置）
                 config = self._merge_config(default_config, user_config)
-                print(f"[OK] 已加载配置文件: {config_path}")
+                # [2026-03-01] 删除启动日志：不显示"已加载配置文件"
                 return config
                 
             except Exception as e:
@@ -598,9 +624,17 @@ class ModelManager:
             raise FileNotFoundError(error_msg)
         
         # 要加载的模型列表
+        # [2026-03-03] 新增：添加通用分类器和5个专用检测器（启动、资料、签到、转账、登录）
+        # 注意：通用分类器必须在专用检测器之前加载，因为专用检测器需要使用通用分类器作为降级方案
         models_to_load = [
             ('page_detector_integrated', self._load_page_detector_integrated),
-            ('ocr_thread_pool', self._load_ocr_thread_pool)
+            ('ocr_thread_pool', self._load_ocr_thread_pool),
+            ('general_classifier', self._load_general_classifier),  # 通用分类器（降级方案）
+            ('startup_detector', self._load_startup_detector),
+            ('profile_detector', self._load_profile_detector),
+            ('checkin_detector', self._load_checkin_detector),
+            ('transfer_detector', self._load_transfer_detector),
+            ('login_detector', self._load_login_detector),
         ]
         
         self._loading_stats.total_models = len(models_to_load)
@@ -965,6 +999,225 @@ class ModelManager:
                 "OCRThreadPool未初始化，请先调用initialize_all_models()"
             )
         return self._models['ocr_thread_pool']
+    
+    # [2026-03-03] 新增：通用分类器（作为专用模型的降级方案）
+    
+    def _load_general_classifier(self, adb_bridge) -> Optional['PageDetectorDL']:
+        """[2026-03-03] 加载通用页面分类器（作为专用模型的降级方案）
+        
+        通用分类器会被所有专用检测器共享，避免重复加载
+        
+        Args:
+            adb_bridge: ADB桥接器实例
+        
+        Returns:
+            PageDetectorDL: 通用分类器实例，如果加载失败则返回None
+        """
+        from .page_detector_dl import PageDetectorDL
+        
+        # 通用分类器路径
+        model_path = self.models_dir / 'page_classifier_pytorch_best.pth'
+        classes_path = self.models_dir / 'page_classes.json'
+        
+        if not model_path.exists() or not classes_path.exists():
+            return None
+        
+        try:
+            # 创建通用分类器实例（不传入fallback_classifier，避免循环引用）
+            return PageDetectorDL(
+                adb_bridge, 
+                model_path=str(model_path), 
+                classes_path=str(classes_path),
+                fallback_classifier=None  # 通用分类器本身不需要降级
+            )
+        except Exception:
+            return None
+    
+    def get_general_classifier(self) -> Optional['PageDetectorDL']:
+        """[2026-03-03] 获取通用页面分类器（线程安全）
+        
+        Returns:
+            PageDetectorDL: 通用分类器实例，如果未加载则返回None
+        """
+        return self._models.get('general_classifier')
+    
+    # [2026-03-03] 新增：5个专用检测器的加载和获取方法
+    
+    def _load_startup_detector(self, adb_bridge) -> 'PageDetectorDL':
+        """加载启动专用检测器（MobileNetV3）
+        
+        Args:
+            adb_bridge: ADB桥接器实例
+        
+        Returns:
+            PageDetectorDL: 启动专用检测器实例
+        """
+        from .page_detector_dl import PageDetectorDL
+        
+        # [2026-03-03] 修改路径：使用 models 目录
+        model_path = self.models_dir / 'page_classifier_startup_best.pth'
+        classes_path = self.models_dir / 'page_classes_startup.json'
+        
+        if not model_path.exists() or not classes_path.exists():
+            # 如果专用模型不存在，返回None（业务类会降级使用通用分类器）
+            return None
+        
+        # [2026-03-03] 传入通用分类器作为降级方案
+        general_classifier = self.get_general_classifier()
+        return PageDetectorDL(
+            adb_bridge, 
+            model_path=str(model_path), 
+            classes_path=str(classes_path),
+            fallback_classifier=general_classifier
+        )
+    
+    def _load_profile_detector(self, adb_bridge) -> 'PageDetectorDL':
+        """加载资料专用检测器（MobileNetV3）
+        
+        Args:
+            adb_bridge: ADB桥接器实例
+        
+        Returns:
+            PageDetectorDL: 资料专用检测器实例
+        """
+        from .page_detector_dl import PageDetectorDL
+        
+        # [2026-03-03] 修改路径：使用 models 目录
+        model_path = self.models_dir / 'page_classifier_profile_best.pth'
+        classes_path = self.models_dir / 'page_classes_profile.json'
+        
+        if not model_path.exists() or not classes_path.exists():
+            return None
+        
+        # [2026-03-03] 传入通用分类器作为降级方案
+        general_classifier = self.get_general_classifier()
+        return PageDetectorDL(
+            adb_bridge, 
+            model_path=str(model_path), 
+            classes_path=str(classes_path),
+            fallback_classifier=general_classifier
+        )
+    
+    def _load_checkin_detector(self, adb_bridge) -> 'PageDetectorDL':
+        """加载签到专用检测器（MobileNetV3）
+        
+        Args:
+            adb_bridge: ADB桥接器实例
+        
+        Returns:
+            PageDetectorDL: 签到专用检测器实例
+        """
+        from .page_detector_dl import PageDetectorDL
+        
+        # [2026-03-03] 修改路径：使用 models 目录
+        model_path = self.models_dir / 'page_classifier_checkin_best.pth'
+        classes_path = self.models_dir / 'page_classes_checkin.json'
+        
+        if not model_path.exists() or not classes_path.exists():
+            return None
+        
+        # [2026-03-03] 传入通用分类器作为降级方案
+        general_classifier = self.get_general_classifier()
+        return PageDetectorDL(
+            adb_bridge, 
+            model_path=str(model_path), 
+            classes_path=str(classes_path),
+            fallback_classifier=general_classifier
+        )
+    
+    def _load_transfer_detector(self, adb_bridge) -> 'PageDetectorDL':
+        """加载转账专用检测器（MobileNetV3）
+        
+        Args:
+            adb_bridge: ADB桥接器实例
+        
+        Returns:
+            PageDetectorDL: 转账专用检测器实例
+        """
+        from .page_detector_dl import PageDetectorDL
+        
+        # [2026-03-03] 修改路径：使用 models 目录
+        model_path = self.models_dir / 'page_classifier_transfer_best.pth'
+        classes_path = self.models_dir / 'page_classes_transfer.json'
+        
+        if not model_path.exists() or not classes_path.exists():
+            return None
+        
+        # [2026-03-03] 传入通用分类器作为降级方案
+        general_classifier = self.get_general_classifier()
+        return PageDetectorDL(
+            adb_bridge, 
+            model_path=str(model_path), 
+            classes_path=str(classes_path),
+            fallback_classifier=general_classifier
+        )
+    
+    def _load_login_detector(self, adb_bridge) -> 'PageDetectorDL':
+        """加载登录专用检测器（MobileNetV3）
+        
+        Args:
+            adb_bridge: ADB桥接器实例
+        
+        Returns:
+            PageDetectorDL: 登录专用检测器实例
+        """
+        from .page_detector_dl import PageDetectorDL
+        
+        # [2026-03-03] 修改路径：使用 models 目录
+        model_path = self.models_dir / 'page_classifier_login_best.pth'
+        classes_path = self.models_dir / 'page_classes_login.json'
+        
+        if not model_path.exists() or not classes_path.exists():
+            return None
+        
+        # [2026-03-03] 传入通用分类器作为降级方案
+        general_classifier = self.get_general_classifier()
+        return PageDetectorDL(
+            adb_bridge, 
+            model_path=str(model_path), 
+            classes_path=str(classes_path),
+            fallback_classifier=general_classifier
+        )
+    
+    def get_startup_detector(self) -> Optional['PageDetectorDL']:
+        """获取启动专用检测器（线程安全）
+        
+        Returns:
+            PageDetectorDL: 启动专用检测器实例，如果未加载则返回None
+        """
+        return self._models.get('startup_detector')
+    
+    def get_profile_detector(self) -> Optional['PageDetectorDL']:
+        """获取资料专用检测器（线程安全）
+        
+        Returns:
+            PageDetectorDL: 资料专用检测器实例，如果未加载则返回None
+        """
+        return self._models.get('profile_detector')
+    
+    def get_checkin_detector(self) -> Optional['PageDetectorDL']:
+        """获取签到专用检测器（线程安全）
+        
+        Returns:
+            PageDetectorDL: 签到专用检测器实例，如果未加载则返回None
+        """
+        return self._models.get('checkin_detector')
+    
+    def get_transfer_detector(self) -> Optional['PageDetectorDL']:
+        """获取转账专用检测器（线程安全）
+        
+        Returns:
+            PageDetectorDL: 转账专用检测器实例，如果未加载则返回None
+        """
+        return self._models.get('transfer_detector')
+    
+    def get_login_detector(self) -> Optional['PageDetectorDL']:
+        """获取登录专用检测器（线程安全）
+        
+        Returns:
+            PageDetectorDL: 登录专用检测器实例，如果未加载则返回None
+        """
+        return self._models.get('login_detector')
     
     def cleanup(self):
         """清理所有模型资源

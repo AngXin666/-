@@ -78,8 +78,8 @@ class CheckinPageReader:
             
             # [2026-02-21] 删除学习器：直接使用全屏 OCR
             
-            # 使用全屏OCR识别
-            print(f"[签到页面OCR] 使用全屏OCR识别")
+            # [2026-03-01] 禁用调试输出：减少日志冗余
+            # print(f"[签到页面OCR] 使用全屏OCR识别")
             # 使用OCR图像预处理模块增强图像（灰度图 + 对比度增强2倍）
             enhanced_img = enhance_for_ocr(img)
             
@@ -87,8 +87,8 @@ class CheckinPageReader:
             # 优化：增加超时时间 2秒→5秒，避免批量处理时超时
             ocr_result = await self._ocr_pool.recognize(enhanced_img, timeout=5.0)
             
-            # 检查返回值
-            if not ocr_result or not ocr_result.texts:
+            # [2026-03-05] 修复数组比较错误：检查 texts 是否为 None 或长度为 0
+            if not ocr_result or ocr_result.texts is None or len(ocr_result.texts) == 0:
                 return result
             
             texts = ocr_result.texts
@@ -98,10 +98,11 @@ class CheckinPageReader:
             # 合并所有文本用于调试
             result['raw_text'] = ' '.join(texts)
             
-            # 调试：输出所有识别到的文本
-            print(f"[签到页面OCR] 识别到 {len(texts)} 段文本:")
-            for idx, txt in enumerate(texts):
-                print(f"  [{idx}] {txt}")
+            # [2026-03-01] 禁用调试输出：减少日志冗余
+            # 只在需要调试时启用
+            # print(f"[签到页面OCR] 识别到 {len(texts)} 段文本:")
+            # for idx, txt in enumerate(texts):
+            #     print(f"  [{idx}] {txt}")
             
             # 解析签到信息
             self._parse_checkin_times(texts, result)
@@ -126,8 +127,9 @@ class CheckinPageReader:
         except Exception as e:
             import traceback
             error_details = traceback.format_exc()
-            print(f"[签到页面OCR] 发生错误: {str(e)}")
-            print(f"[签到页面OCR] 错误详情:\n{error_details}")
+            # [2026-03-01] 禁用调试输出：减少日志冗余
+            # print(f"[签到页面OCR] 发生错误: {str(e)}")
+            # print(f"[签到页面OCR] 错误详情:\n{error_details}")
             result['raw_text'] = f"Error: {str(e)}"
             return result
     
@@ -168,7 +170,8 @@ class CheckinPageReader:
                 # 在同一行或下一行查找数字
                 match = re.search(r'(\d+)', text)
                 if match and result['total_times'] is None:
-                    print(f"[签到页面OCR] 从文本 '{text}' 中提取总次数: {match.group(1)}")
+                    # [2026-03-01] 禁用调试输出：减少日志冗余
+                    # print(f"[签到页面OCR] 从文本 '{text}' 中提取总次数: {match.group(1)}")
                     result['total_times'] = int(match.group(1))
                     continue
             
@@ -185,14 +188,16 @@ class CheckinPageReader:
             match = re.search(r'总\s*次\s*数\s*[:：为]?\s*(\d+)', full_text)
             if match:
                 result['total_times'] = int(match.group(1))
-                print(f"[签到页面OCR] 跨文本匹配总次数: {result['total_times']}")
+                # [2026-03-01] 禁用调试输出：减少日志冗余
+                # print(f"[签到页面OCR] 跨文本匹配总次数: {result['total_times']}")
         
         if result['daily_remaining_times'] is None:
             # 匹配 "当日还有" 或 "当日剩余" 后面跟着数字
             match = re.search(r'当日(?:还有|剩余)\s*[:：]?\s*(\d+)', full_text)
             if match:
                 result['daily_remaining_times'] = int(match.group(1))
-                print(f"[签到页面OCR] 跨文本匹配剩余次数: {result['daily_remaining_times']}")
+                # [2026-03-01] 禁用调试输出：减少日志冗余
+                # print(f"[签到页面OCR] 跨文本匹配剩余次数: {result['daily_remaining_times']}")
     
     async def can_checkin_today(self, device_id: str) -> bool:
         """检查今天是否还可以签到
@@ -239,8 +244,8 @@ class CheckinPageReader:
             # 使用 OCR 线程池识别（异步，带超时）
             ocr_result = await self._ocr_pool.recognize(enhanced_img, timeout=2.0)  # 优化：减少超时 10秒→2秒
             
-            # 检查返回值
-            if not ocr_result or not ocr_result.texts:
+            # [2026-03-05] 修复数组比较错误：检查 texts 是否为 None 或长度为 0
+            if not ocr_result or ocr_result.texts is None or len(ocr_result.texts) == 0:
                 return None
             
             texts = ocr_result.texts

@@ -73,7 +73,7 @@ class ProfileInfoManager:
             # 获取 ADB 实例（从 profile_reader 中获取）
             adb = profile_reader.adb
             
-            # 获取智能检测器
+            # [2026-03-02] 统一术语：获取YOLO识别器
             model_manager = ModelManager.get_instance()
             detector = model_manager.get_page_detector_integrated()
             

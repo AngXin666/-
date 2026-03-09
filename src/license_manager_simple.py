@@ -62,7 +62,7 @@ class SimpleLicenseManager:
         for path in search_paths:
             if path.exists():
                 env_file = path
-                print(f"[配置] 找到配置文件: {path.absolute()}")
+                # [2026-03-01] 删除启动日志：不显示"配置文件加载成功"
                 break
         
         if not env_file:
@@ -89,7 +89,7 @@ class SimpleLicenseManager:
                             self.supabase_key = value
             
             if self.supabase_url and self.supabase_key:
-                print(f"[配置] Supabase 配置加载成功")
+                pass  # 配置加载成功，不显示日志
             else:
                 print(f"[警告] 配置文件不完整")
         except Exception as e:

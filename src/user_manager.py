@@ -130,7 +130,7 @@ class UserManager:
                     mapping[phone] = user_id
             
             if db_mapping:
-                print(f"✓ 从数据库加载了 {len(db_mapping)} 个账号的管理员信息")
+                pass  # [2026-03-01] 删除启动日志：不显示"从数据库加载了 X 个账号的管理员信息"
         except Exception as e:
             print(f"⚠️ 从数据库加载账号映射失败: {e}")
         

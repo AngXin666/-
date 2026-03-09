@@ -104,7 +104,8 @@ class LocalDatabase:
                         UNIQUE(phone, run_date)
                     )
                 """)
-                print("[数据库] ✅ 创建 history_records 表（带唯一约束和转账字段）")
+                # [2026-03-01] 删除日志：减少启动时的冗余输出
+                # print("[数据库] ✅ 创建 history_records 表（带唯一约束和转账字段）")
             else:
                 # 表已存在，执行迁移
                 self._migrate_add_unique_constraint(cursor)
@@ -163,7 +164,8 @@ class LocalDatabase:
                 conn.commit()
                 conn.close()
                 
-                print("[数据库] ✅ SQLite 优化配置已应用（WAL 模式）")
+                # [2026-03-01] 删除日志：减少启动时的冗余输出
+                # print("[数据库] ✅ SQLite 优化配置已应用（WAL 模式）")
                 
         except Exception as e:
             print(f"[数据库] ⚠️ SQLite 优化配置失败: {e}")
@@ -195,7 +197,8 @@ class LocalDatabase:
             
             # 检查是否已有唯一约束
             if 'UNIQUE' in table_sql and 'phone' in table_sql and 'run_date' in table_sql:
-                print("[数据库] ✅ 唯一约束已存在，跳过迁移")
+                # [2026-03-01] 删除日志：减少启动时的冗余输出
+                # print("[数据库] ✅ 唯一约束已存在，跳过迁移")
                 return
             
             print("[数据库] 开始迁移：添加唯一约束...")
@@ -263,20 +266,23 @@ class LocalDatabase:
             columns = [row[1] for row in cursor.fetchall()]
             
             if 'transfer_amount' not in columns:
-                print("[数据库] 添加转账金额字段...")
+                # [2026-03-01] 删除日志：减少启动时的冗余输出
+                # print("[数据库] 添加转账金额字段...")
                 cursor.execute("""
                     ALTER TABLE history_records 
                     ADD COLUMN transfer_amount REAL DEFAULT 0.0
                 """)
             
             if 'transfer_recipient' not in columns:
-                print("[数据库] 添加转账收款人字段...")
+                # [2026-03-01] 删除日志：减少启动时的冗余输出
+                # print("[数据库] 添加转账收款人字段...")
                 cursor.execute("""
                     ALTER TABLE history_records 
                     ADD COLUMN transfer_recipient TEXT
                 """)
             
-            print("[数据库] ✅ 转账字段添加完成")
+            # [2026-03-01] 删除日志：减少启动时的冗余输出
+            # print("[数据库] ✅ 转账字段添加完成")
             
         except Exception as e:
             print(f"[数据库] ⚠️ 添加转账字段失败: {e}")
@@ -294,14 +300,17 @@ class LocalDatabase:
             columns = [row[1] for row in cursor.fetchall()]
             
             if 'owner' not in columns:
-                print("[数据库] 添加管理员字段...")
+                # [2026-03-01] 删除日志：减少启动时的冗余输出
+                # print("[数据库] 添加管理员字段...")
                 cursor.execute("""
                     ALTER TABLE history_records 
                     ADD COLUMN owner TEXT
                 """)
-                print("[数据库] ✅ 管理员字段添加完成")
-            else:
-                print("[数据库] ✅ 管理员字段已存在")
+                # [2026-03-01] 删除日志：减少启动时的冗余输出
+                # print("[数据库] ✅ 管理员字段添加完成")
+            # [2026-03-01] 删除日志：减少启动时的冗余输出
+            # else:
+            #     print("[数据库] ✅ 管理员字段已存在")
             
         except Exception as e:
             print(f"[数据库] ⚠️ 添加管理员字段失败: {e}")
@@ -322,7 +331,8 @@ class LocalDatabase:
             result = cursor.fetchone()
             
             if result and result[0] == 'ok':
-                print("[数据库] ✅ 数据库完整性检查通过")
+                # [2026-03-01] 删除日志：减少启动时的冗余输出
+                # print("[数据库] ✅ 数据库完整性检查通过")
                 return
             else:
                 print(f"[数据库] ❌ 数据库完整性检查失败: {result}")
@@ -802,7 +812,7 @@ class LocalDatabase:
                                 # None值不更新
                                 should_update = False
                             elif field in ['nickname', 'user_id', 'owner']:
-                                # 字符串字段：只有非空时才更新
+                                # [2026-03-06] 修复：字符串字段只要非空就更新，覆盖旧的错误值
                                 should_update = bool(field_value and str(field_value).strip())
                             elif field == 'checkin_reward':
                                 # 签到奖励：累计（如果新值>0）
@@ -814,10 +824,12 @@ class LocalDatabase:
                                 if isinstance(field_value, (int, float)) and field_value > 0:
                                     actual_value = existing_transfer_amount + field_value
                                     should_update = True
-                            elif field in ['balance_before', 'balance_after', 'points', 'vouchers', 'coupons',
-                                         'checkin_total_times', 'checkin_balance_after']:
-                                # 其他数值字段：只有大于0时才更新（0可能是无效数据）
-                                should_update = (isinstance(field_value, (int, float)) and field_value > 0)
+                            elif field in ['balance_before', 'balance_after', 'checkin_balance_after']:
+                                # [2026-03-06] 修复：余额字段总是更新为最新值（即使是0也更新）
+                                should_update = isinstance(field_value, (int, float))
+                            elif field in ['points', 'vouchers', 'coupons', 'checkin_total_times']:
+                                # [2026-03-06] 修复：积分、签到次数等字段总是更新（即使是0也更新，因为0可能是真实值）
+                                should_update = isinstance(field_value, (int, float))
                             elif field == 'transfer_recipient':
                                 # 转账收款人：只有非空且不是"失败"时才更新
                                 should_update = (field_value and str(field_value).strip() and 
@@ -854,9 +866,9 @@ class LocalDatabase:
                                 WHERE phone = ? AND run_date = ?
                             """
                             cursor.execute(sql, values)
-                            print(f"[数据库] 更新记录: {record.get('phone')} - {record.get('run_date')} (更新了 {len(update_fields)} 个字段: {', '.join(update_fields)})")
+                            # [2026-03-01] 删除日志：不显示"更新记录"详细信息
                         else:
-                            print(f"[数据库] 跳过更新: {record.get('phone')} - {record.get('run_date')} (所有字段都是None)")
+                            pass  # [2026-03-01] 删除日志：不显示"跳过更新"
                     else:
                         # 插入新记录 - 使用字典映射，并对浮点数进行精度控制
                         fields_str = ', '.join(self.HISTORY_RECORD_FIELDS)
@@ -881,24 +893,12 @@ class LocalDatabase:
                             VALUES ({placeholders})
                         """
                         cursor.execute(sql, values)
-                        print(f"[数据库] 插入记录: {record.get('phone')} - {record.get('run_date')}")
+                        # [2026-03-01] 删除日志：不显示"插入记录"详细信息
                     
                     conn.commit()
                     
-                    # 保存后验证（读取刚保存的记录）
-                    cursor.execute("""
-                        SELECT status, duration, checkin_reward FROM history_records
-                        WHERE phone = ? AND run_date = ?
-                    """, (record.get('phone'), record.get('run_date')))
-                    
-                    saved = cursor.fetchone()
-                    if saved:
-                        saved_status, saved_duration, saved_checkin_reward = saved
-                        # 验证关键字段
-                        if record.get('status') and saved_status != record.get('status'):
-                            print(f"[数据库] ⚠️ 警告: status不匹配 (期望: {record.get('status')}, 实际: {saved_status})")
-                        if record.get('duration') and abs(saved_duration - record.get('duration')) > 0.01:
-                            print(f"[数据库] ⚠️ 警告: duration不匹配 (期望: {record.get('duration')}, 实际: {saved_duration})")
+                    # [2026-03-01] 删除日志：不显示保存后验证的详细信息
+                    # 保存后验证已移除，减少日志输出
                     
                     conn.close()
                     return True
@@ -981,10 +981,19 @@ class LocalDatabase:
                 # 转换为字典列表
                 records = []
                 for row in rows:
+                    # [2026-03-05] 修复原因：过滤数据库中的字符串'None'，避免显示为无效数据
+                    nickname = row[1]
+                    if nickname in [None, '', 'None', 'none', 'N/A', '-']:
+                        nickname = None  # 保持为None，让调用方处理
+                    
+                    user_id = row[2]
+                    if user_id in [None, '', 'None', 'none', 'N/A', '-']:
+                        user_id = None  # 保持为None，让调用方处理
+                    
                     records.append({
                         'phone': row[0],
-                        'nickname': row[1],
-                        'user_id': row[2],
+                        'nickname': nickname,
+                        'user_id': user_id,
                         'balance_before': row[3],
                         'points': row[4],
                         'vouchers': row[5],
@@ -1495,11 +1504,22 @@ class LocalDatabase:
                 # 转换为字典列表，同时包含中文键名和英文键名
                 records = []
                 for row in rows:
+                    # [2026-03-05] 修复原因：过滤数据库中的字符串'None'，避免显示为无效数据
+                    # 检查昵称是否为无效值
+                    nickname = row[1]
+                    if nickname in [None, '', 'None', 'none', 'N/A', '-']:
+                        nickname = '待处理'
+                    
+                    # 检查用户ID是否为无效值
+                    user_id = row[2]
+                    if user_id in [None, '', 'None', 'none', 'N/A', '-']:
+                        user_id = '待处理'
+                    
                     record = {
                         # 中文键名（用于GUI显示）
                         '手机号': row[0],
-                        '昵称': row[1] or '待处理',
-                        '用户ID': row[2] or '待处理',
+                        '昵称': nickname,
+                        '用户ID': user_id,
                         '余额前(元)': row[3] if row[3] is not None else '-',
                         '积分': row[4] if row[4] is not None else '-',
                         '抵扣券(张)': row[5] if row[5] is not None else '-',
@@ -1517,8 +1537,8 @@ class LocalDatabase:
                         '管理员': row[18] or '-',
                         # 英文键名（用于代码访问）
                         'phone': row[0],
-                        'nickname': row[1] or '待处理',
-                        'user_id': row[2] or '待处理',
+                        'nickname': nickname,
+                        'user_id': user_id,
                         'balance_before': row[3],
                         'points': row[4],
                         'vouchers': row[5],
@@ -1657,3 +1677,33 @@ class LocalDatabase:
         except Exception as e:
             print(f"获取排行榜失败: {e}")
             return []
+
+    def delete_account_records(self, phone: str) -> int:
+        """[2026-03-06] 删除指定账号的所有历史记录
+        
+        Args:
+            phone: 手机号
+            
+        Returns:
+            删除的记录数量
+        """
+        try:
+            with self._lock:
+                conn = sqlite3.connect(str(self.db_path))
+                cursor = conn.cursor()
+                
+                # 删除该账号的所有历史记录
+                cursor.execute("""
+                    DELETE FROM history_records
+                    WHERE phone = ?
+                """, (phone,))
+                
+                deleted_count = cursor.rowcount
+                conn.commit()
+                conn.close()
+                
+                return deleted_count
+                
+        except Exception as e:
+            print(f"删除账号记录失败: {e}")
+            return 0

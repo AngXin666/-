@@ -23,6 +23,9 @@ else:
 class ADBBridge:
     """ADB 桥接器 - 封装 ADB 命令"""
     
+    # [2026-03-03] 全局步骤计数器
+    _click_step_counter = 0
+    
     def __init__(self, adb_path: Optional[str] = None):
         """初始化 ADB 桥接器
         
@@ -102,6 +105,97 @@ class ADBBridge:
         Returns:
             操作是否成功
         """
+        # [2026-03-03] 调试日志：记录所有点击操作并截图
+        import time
+        import traceback
+        from datetime import datetime
+        import os
+        
+        # 步骤计数器递增
+        ADBBridge._click_step_counter += 1
+        step_number = ADBBridge._click_step_counter
+        
+        # 获取调用栈信息（找出是哪里调用的tap）
+        stack = traceback.extract_stack()
+        caller_info = ""
+        step_name = "未知步骤"
+        if len(stack) >= 2:
+            caller = stack[-2]
+            caller_info = f"{caller.filename}:{caller.lineno} in {caller.name}"
+            # 提取步骤名称（从函数名推断）
+            if 'startup' in caller.name.lower():
+                step_name = "启动流程"
+            elif 'checkin' in caller.name.lower() or 'sign' in caller.name.lower():
+                step_name = "签到流程"
+            elif 'login' in caller.name.lower():
+                step_name = "登录流程"
+            elif 'navigate' in caller.name.lower():
+                step_name = "页面导航"
+            else:
+                step_name = caller.name
+        
+        # 使用 datetime 获取毫秒
+        now = datetime.now()
+        time_str = now.strftime('%H:%M:%S') + f".{now.microsecond // 1000:03d}"
+        timestamp = now.strftime('%Y%m%d_%H%M%S_%f')[:-3]
+        
+        # 点击前截图
+        screenshot_path = None
+        try:
+            # 创建截图目录
+            screenshot_dir = "click_screenshots"
+            os.makedirs(screenshot_dir, exist_ok=True)
+            
+            # 截图文件名（包含步骤编号）
+            screenshot_path = f"{screenshot_dir}/step_{step_number:03d}_{timestamp}.png"
+            
+            # 在设备上截图
+            device_screenshot = "/sdcard/temp_screenshot.png"
+            await self._run_adb_async(
+                "shell", f"screencap -p {device_screenshot}",
+                device_id=device_id
+            )
+            
+            # 从设备拉取截图
+            result = await self._run_adb_async(
+                "pull", device_screenshot, screenshot_path,
+                device_id=device_id
+            )
+            
+            # 删除设备上的临时文件
+            await self._run_adb_async(
+                "shell", f"rm {device_screenshot}",
+                device_id=device_id
+            )
+            
+            # 检查文件是否成功保存
+            if not os.path.exists(screenshot_path) or os.path.getsize(screenshot_path) == 0:
+                screenshot_path = "截图失败: 文件为空"
+        except Exception as e:
+            screenshot_path = f"截图失败: {e}"
+        
+        # 写入日志文件
+        log_message = f"""[DEBUG-点击] ========================================
+[DEBUG-点击] 步骤编号: 第 {step_number} 步
+[DEBUG-点击] 时间: {time_str}
+[DEBUG-点击] 步骤名称: {step_name}
+[DEBUG-点击] 设备: {device_id}
+[DEBUG-点击] 坐标: ({x}, {y})
+[DEBUG-点击] 调用位置: {caller_info}
+[DEBUG-点击] 截图文件: {screenshot_path}
+[DEBUG-点击] ========================================
+
+"""
+        
+        try:
+            with open("click_debug.log", "a", encoding="utf-8") as f:
+                f.write(log_message)
+        except:
+            pass
+        
+        # 同时打印到控制台
+        print(log_message.strip())
+        
         try:
             result = await self._run_adb_async(
                 "shell", f"input tap {x} {y}",

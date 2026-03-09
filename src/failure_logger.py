@@ -39,7 +39,7 @@ class FailureLogger:
         failure_handler = logging.FileHandler(failure_log_file, encoding='utf-8')
         failure_handler.setLevel(logging.ERROR)
         failure_formatter = logging.Formatter(
-            '%(asctime)s | %(levelname)-8s | %(message)s',
+            '%(asctime)s  |  %(levelname)-8s  |  %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
         )
         failure_handler.setFormatter(failure_formatter)

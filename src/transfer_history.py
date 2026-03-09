@@ -56,7 +56,7 @@ class TransferHistory:
         transfer_handler = logging.FileHandler(transfer_log_file, encoding='utf-8')
         transfer_handler.setLevel(logging.INFO)
         transfer_formatter = logging.Formatter(
-            '%(asctime)s | %(levelname)-8s | %(message)s',
+            '%(asctime)s  |  %(levelname)-8s  |  %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
         )
         transfer_handler.setFormatter(transfer_formatter)

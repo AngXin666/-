@@ -135,15 +135,18 @@ class EmulatorController:
             abs_path = os.path.abspath(adb_path)
             if os.path.exists(abs_path):
                 self._adb_path = abs_path
-                print(f"[ADB] 找到 ADB: {abs_path}")
+                # [2026-03-01] 删除日志：减少启动时的冗余输出
+                # print(f"[ADB] 找到 ADB: {abs_path}")
                 return
         
         # 如果还没找到，递归搜索（最多3层）
-        print(f"[ADB] 在常见路径未找到，开始递归搜索...")
+        # [2026-03-01] 删除日志：减少启动时的冗余输出
+        # print(f"[ADB] 在常见路径未找到，开始递归搜索...")
         found_path = self._search_adb_recursive(base_path, max_depth=3)
         if found_path:
             self._adb_path = found_path
-            print(f"[ADB] 递归搜索找到 ADB: {found_path}")
+            # [2026-03-01] 删除日志：减少启动时的冗余输出
+            # print(f"[ADB] 递归搜索找到 ADB: {found_path}")
         else:
             print(f"[ADB] 警告：未找到 adb.exe，部分功能可能无法使用")
     
@@ -816,7 +819,8 @@ class EmulatorController:
             if not self._adb_path:
                 return []
             
-            print(f"正在快速扫描MuMu实例...")
+            # [2026-03-01] 删除日志：减少启动时的冗余输出
+            # print(f"正在快速扫描MuMu实例...")
             
             # 使用线程池并发连接（避免复杂的异步进程）
             def try_connect_sync(instance_id: int):
@@ -841,7 +845,8 @@ class EmulatorController:
                     return False
             
             # 快速连接所有可能的实例端口（0-9）
-            print(f"正在快速扫描MuMu实例...")
+            # [2026-03-01] 删除日志：减少启动时的冗余输出（已在上面输出过）
+            # print(f"正在快速扫描MuMu实例...")
             
             # 使用并发连接提高速度
             import concurrent.futures
@@ -889,9 +894,7 @@ class EmulatorController:
             )
             
             # 解析设备列表，提取端口号
-            print(f"ADB devices输出:")
-            print(devices_result.stdout)
-            
+            # [2026-03-01] 简化日志：只显示检测到的实例数量，不显示详细的设备列表
             for line in devices_result.stdout.split('\n'):
                 if '127.0.0.1:' in line and 'device' in line:
                     parts = line.split()
@@ -905,16 +908,12 @@ class EmulatorController:
                             if port >= 16384 and (port - 16384) % 32 == 0:
                                 instance_id = (port - 16384) // 32
                                 running_instances.append(instance_id)
-                                print(f"检测到MuMu实例 {instance_id} (端口 {port})")
-                            else:
-                                print(f"跳过非MuMu端口: {port}")
-                        except (ValueError, IndexError) as e:
-                            print(f"解析端口失败: {device_id}, 错误: {e}")
+                        except (ValueError, IndexError):
                             continue
-                    else:
-                        print(f"跳过非device状态的行: {line}")
-                elif '127.0.0.1:' in line:
-                    print(f"跳过非device状态的设备: {line}")
+            
+            # 只输出一条汇总日志
+            if running_instances:
+                print(f"✅ 检测到 {len(running_instances)} 个运行中的MuMu实例")
             
             return sorted(running_instances)
             

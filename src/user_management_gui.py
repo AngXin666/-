@@ -22,6 +22,17 @@ class UserManagementDialog:
         self.parent = parent
         self.log = log_callback if log_callback else print
         
+        # [2026-02-28] 记住上次导出字段选择
+        self.last_export_fields = {
+            'phone': True,
+            'password': True,
+            'user_id': False,
+            'nickname': False,
+            'balance': False,
+            'checkin_times': False,
+            'owner': False
+        }
+        
         # 创建窗口（宽度改为1400，左右各700）
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("用户管理 & 批量添加账号")
@@ -130,6 +141,7 @@ class UserManagementDialog:
         ttk.Button(user_button_frame, text="➕ 添加管理员", command=self._add_user, width=12).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(user_button_frame, text="✏️ 编辑管理员", command=self._edit_user, width=12).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(user_button_frame, text="🗑️ 删除管理员", command=self._delete_user, width=12).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(user_button_frame, text="📤 导出账号", command=self._export_accounts, width=12).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(user_button_frame, text="🔄 刷新", command=self._refresh_user_list, width=10).pack(side=tk.LEFT, padx=(0, 5))
         
         # === 下半部分：该管理员的账号列表区域 ===
@@ -415,7 +427,9 @@ class UserManagementDialog:
                     # 模糊匹配：手机号或ID包含搜索文本
                     if search_text in phone or search_text in account_user_id:
                         items_data.append(values)
-            except:
+            except Exception as e:
+                # 跳过格式错误的项
+                print(f"[搜索] 跳过格式错误的项: {e}")
                 pass
         
         # 删除所有项
@@ -711,6 +725,560 @@ class UserManagementDialog:
             messagebox.showerror("错误", f"删除管理员时出错: {e}")
             self.dialog.lift()
             self.dialog.focus_force()
+    
+    def _export_accounts(self):
+        """[2026-02-28] 导出账号功能 - 支持自定义字段选择和按管理员分组"""
+        # 创建导出配置对话框
+        export_dialog = tk.Toplevel(self.dialog)
+        export_dialog.title("导出账号配置")
+        export_dialog.geometry("600x700")
+        export_dialog.resizable(False, False)
+        
+        # 居中显示
+        export_dialog.update_idletasks()
+        width = 600
+        height = 700
+        screen_width = export_dialog.winfo_screenwidth()
+        screen_height = export_dialog.winfo_screenheight()
+        x = (screen_width // 2) - (width // 2)
+        y = (screen_height // 2) - (height // 2)
+        export_dialog.geometry(f'{width}x{height}+{x}+{y}')
+        
+        main_frame = ttk.Frame(export_dialog, padding="20")
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # 标题
+        title_label = ttk.Label(main_frame, text="账号导出配置", font=("Microsoft YaHei UI", 14, "bold"), foreground="blue")
+        title_label.pack(pady=(0, 20))
+        
+        # === 字段选择区域 ===
+        fields_frame = ttk.LabelFrame(main_frame, text="选择要导出的字段", padding="15")
+        fields_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # [2026-02-28] 字段选项（使用上次的选择作为默认值）
+        field_vars = {}
+        fields = [
+            ("phone", "手机号"),
+            ("password", "密码"),
+            ("user_id", "用户ID"),
+            ("nickname", "昵称"),
+            ("balance", "余额"),
+            ("checkin_times", "签到次数"),
+            ("owner", "管理员")
+        ]
+        
+        for field_name, display_name in fields:
+            # 使用上次的选择，如果没有则使用默认值
+            default_checked = self.last_export_fields.get(field_name, False)
+            var = tk.BooleanVar(value=default_checked)
+            field_vars[field_name] = var
+            cb = ttk.Checkbutton(fields_frame, text=display_name, variable=var)
+            cb.pack(anchor=tk.W, pady=2)
+        
+        # === 管理员筛选区域 ===
+        owner_frame = ttk.LabelFrame(main_frame, text="按管理员筛选（可选）", padding="15")
+        owner_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        # 获取所有管理员
+        all_users = self.user_manager.get_all_users()
+        
+        # 添加"全部"和"未分配"选项（单独一行）
+        owner_var = tk.StringVar(value="all")
+        
+        special_row = ttk.Frame(owner_frame)
+        special_row.pack(fill=tk.X, pady=(0, 5))
+        ttk.Radiobutton(special_row, text="导出所有账号", variable=owner_var, value="all").pack(side=tk.LEFT, padx=(0, 20))
+        ttk.Radiobutton(special_row, text="仅导出未分配管理员的账号", variable=owner_var, value="unassigned").pack(side=tk.LEFT)
+        
+        # 添加每个管理员的选项（每行3个）
+        if all_users:
+            users_container = ttk.Frame(owner_frame)
+            users_container.pack(fill=tk.X)
+            
+            current_row = None
+            for idx, user in enumerate(all_users):
+                if idx % 3 == 0:
+                    current_row = ttk.Frame(users_container)
+                    current_row.pack(fill=tk.X, pady=2)
+                
+                display_name = f"{user.user_name} ({user.user_id.replace('user_', '')})"
+                ttk.Radiobutton(current_row, text=display_name, variable=owner_var, value=user.user_id).pack(side=tk.LEFT, padx=(0, 10))
+        
+        # === 分组导出选项 ===
+        group_frame = ttk.LabelFrame(main_frame, text="分组导出选项", padding="10")
+        group_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        group_by_owner_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            group_frame,
+            text="按管理员分组导出（每个管理员一个文件）",
+            variable=group_by_owner_var
+        ).pack(anchor=tk.W, pady=2)
+        
+        # === 按钮区域 ===
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill=tk.X, pady=(10, 0))
+        
+        def do_export():
+            """执行导出"""
+            # 检查至少选择了一个字段
+            selected_fields = [name for name, var in field_vars.items() if var.get()]
+            if not selected_fields:
+                messagebox.showwarning("警告", "请至少选择一个要导出的字段", parent=export_dialog)
+                return
+            
+            # [2026-02-28] 保存用户的选择，下次使用
+            for field_name, var in field_vars.items():
+                self.last_export_fields[field_name] = var.get()
+            
+            # 获取筛选条件
+            owner_filter = owner_var.get()
+            group_by_owner = group_by_owner_var.get()
+            
+            # 执行导出
+            try:
+                self._do_export_accounts(selected_fields, owner_filter, group_by_owner, export_dialog)
+                export_dialog.destroy()
+            except Exception as e:
+                messagebox.showerror("错误", f"导出失败: {e}", parent=export_dialog)
+        
+        ttk.Button(button_frame, text="📤 开始导出", command=do_export, width=15).pack(side=tk.LEFT, padx=(0, 10))
+        ttk.Button(button_frame, text="取消", command=export_dialog.destroy, width=10).pack(side=tk.LEFT)
+        
+        # 模态对话框
+        export_dialog.transient(self.dialog)
+        export_dialog.grab_set()
+        self.dialog.wait_window(export_dialog)
+    
+    def _do_export_accounts(self, selected_fields: List[str], owner_filter: str, group_by_owner: bool, parent_dialog):
+        """[2026-02-28] 执行账号导出
+        
+        Args:
+            selected_fields: 要导出的字段列表
+            owner_filter: 管理员筛选条件 ("all", "unassigned", 或具体的user_id)
+            group_by_owner: 是否按管理员分组导出
+            parent_dialog: 父对话框
+        """
+        from tkinter import filedialog
+        import csv
+        from pathlib import Path
+        from datetime import datetime
+        
+        # 读取账号文件
+        from .config import ConfigLoader
+        config = ConfigLoader().load()
+        accounts_file = config.accounts_file
+        
+        if not accounts_file:
+            messagebox.showerror(
+                "错误", 
+                "未配置账号文件路径\n\n请在主界面配置账号文件路径后再导出", 
+                parent=parent_dialog
+            )
+            return
+        
+        # [2026-02-28] 修复：检查加密文件是否存在（.enc后缀）
+        encrypted_file = Path(str(accounts_file) + '.enc')
+        if not Path(accounts_file).exists() and not encrypted_file.exists():
+            messagebox.showerror(
+                "错误", 
+                f"账号文件不存在\n\n文件路径: {accounts_file}\n加密文件: {encrypted_file}\n\n请检查：\n1. 是否已添加账号到账号文件\n2. 文件是否被移动或删除", 
+                parent=parent_dialog
+            )
+            return
+        
+        # 读取账号数据
+        from .encrypted_accounts_file import EncryptedAccountsFile
+        encrypted_file = EncryptedAccountsFile(accounts_file)
+        accounts_list = encrypted_file.read_accounts()
+        
+        if not accounts_list:
+            messagebox.showinfo("提示", "没有可导出的账号", parent=parent_dialog)
+            return
+        
+        # 获取账号的详细信息（从数据库）
+        from .local_db import LocalDatabase
+        db = LocalDatabase()
+        
+        # 构建账号数据字典 {phone: {field: value}}
+        # [2026-02-28] 修复：兼容旧版本账号文件格式（只有phone和password）
+        # [2026-02-28] 修复：从UserManager获取管理员分配信息
+        accounts_data = {}
+        for account_tuple in accounts_list:
+            # 兼容两种格式：(phone, password) 或 (phone, password, owner)
+            if len(account_tuple) == 2:
+                phone, password = account_tuple
+                owner = None
+            elif len(account_tuple) == 3:
+                phone, password, owner = account_tuple
+            else:
+                continue  # 跳过格式错误的数据
+            
+            # 从UserManager获取管理员分配（优先级高于账号文件中的owner）
+            assigned_user = self.user_manager.get_account_user(phone)
+            if assigned_user:
+                owner = assigned_user.user_id
+            
+            # 获取账号摘要信息
+            summary = db.get_account_summary(phone)
+            
+            # [2026-02-28] 获取最新记录的签到总次数
+            latest_checkin_times = 0
+            latest_records = db.get_history_records(phone, limit=1)
+            if latest_records:
+                latest_checkin_times = latest_records[0].get('checkin_total_times', 0) or 0
+            
+            accounts_data[phone] = {
+                'phone': phone,
+                'password': password,
+                'owner': owner if owner else '未分配',
+                'user_id': summary.get('user_id', '-') if summary else '-',
+                'nickname': summary.get('nickname', '-') if summary else '-',
+                'balance': f"{summary.get('latest_balance', 0):.2f}" if summary and summary.get('latest_balance') is not None else '0.00',
+                'checkin_times': str(latest_checkin_times)
+            }
+        
+        # 根据管理员筛选
+        if owner_filter != "all":
+            if owner_filter == "unassigned":
+                # 只保留未分配的账号
+                accounts_data = {phone: data for phone, data in accounts_data.items() if not data['owner'] or data['owner'] == '未分配'}
+            else:
+                # 只保留指定管理员的账号
+                accounts_data = {phone: data for phone, data in accounts_data.items() if data['owner'] == owner_filter}
+        
+        if not accounts_data:
+            messagebox.showinfo("提示", "没有符合条件的账号可导出", parent=parent_dialog)
+            return
+        
+        # [2026-02-28] 添加智能排序功能
+        def sort_accounts(accounts_list):
+            """根据选择的字段智能排序账号列表"""
+            # 优先级1：如果选择了密码，按密码分组排序
+            if 'password' in selected_fields:
+                accounts_list.sort(key=lambda x: (x['password'], x['phone']))
+            # 优先级2：如果选择了签到次数，按次数从少到多排序
+            elif 'checkin_times' in selected_fields:
+                accounts_list.sort(key=lambda x: (int(x['checkin_times']), x['phone']))
+            # 默认：按手机号排序
+            else:
+                accounts_list.sort(key=lambda x: x['phone'])
+            return accounts_list
+        
+        # 字段显示名映射
+        field_display_names = {
+            'phone': '手机号',
+            'password': '密码',
+            'user_id': '用户ID',
+            'nickname': '昵称',
+            'balance': '余额',
+            'checkin_times': '签到次数',
+            'owner': '管理员'
+        }
+        
+        # [2026-02-28] 导出为Excel格式并自动调整列宽
+        import openpyxl
+        from openpyxl.styles import Font, Alignment, PatternFill
+        from openpyxl.utils import get_column_letter
+        
+        # 按管理员分组导出
+        if group_by_owner:
+            # 选择导出目录
+            export_dir = filedialog.askdirectory(title="选择导出目录", parent=parent_dialog)
+            if not export_dir:
+                return
+            
+            export_dir = Path(export_dir)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            # 按管理员分组
+            grouped_accounts = {}
+            for phone, data in accounts_data.items():
+                owner = data['owner']
+                if owner not in grouped_accounts:
+                    grouped_accounts[owner] = []
+                grouped_accounts[owner].append(data)
+            
+            # 为每个管理员创建一个文件
+            exported_files = []
+            for owner, accounts in grouped_accounts.items():
+                # [2026-02-28] 应用智能排序
+                accounts = sort_accounts(accounts)
+                
+                # 文件名：管理员名_时间戳.xlsx
+                safe_owner_name = owner.replace('user_', '').replace('/', '_').replace('\\', '_')
+                filename = f"账号导出_{safe_owner_name}_{timestamp}.xlsx"
+                filepath = export_dir / filename
+                
+                # 创建Excel工作簿
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "账号列表"
+                
+                # [2026-02-28] 写入表头（添加序号列）
+                headers = ['序号'] + [field_display_names[field] for field in selected_fields]
+                ws.append(headers)
+                header_fill = PatternFill(start_color="CCE5FF", end_color="CCE5FF", fill_type="solid")
+                header_font = Font(bold=True)
+                for col_idx, _ in enumerate(headers, 1):
+                    cell = ws.cell(row=1, column=col_idx)
+                    cell.fill = header_fill
+                    cell.font = header_font
+                    cell.alignment = Alignment(horizontal='center', vertical='center')
+                
+                # [2026-02-28] 写入数据（添加序号，数字字段设置为数字格式）
+                for idx, account in enumerate(accounts, 1):
+                    row_num = idx + 1  # 数据从第2行开始（第1行是表头）
+                    
+                    # 写入序号
+                    ws.cell(row=row_num, column=1, value=idx)
+                    
+                    # 写入其他字段
+                    for col_idx, field in enumerate(selected_fields, 1):
+                        cell = ws.cell(row=row_num, column=col_idx + 1)  # +1 因为序号占了第一列
+                        value = account[field]
+                        
+                        # [2026-02-28] 数字字段设置为数字格式
+                        if field == 'phone':
+                            # 手机号转为整数
+                            cell.value = int(value) if value and value.isdigit() else value
+                            cell.number_format = '0'  # 整数格式，不使用千位分隔符
+                        elif field == 'user_id':
+                            # 用户ID转为整数（如果是纯数字）
+                            cell.value = int(value) if value and str(value).isdigit() else value
+                            cell.number_format = '0'
+                        elif field == 'balance':
+                            # 余额转为浮点数
+                            cell.value = float(value) if value and value != '-' else 0.0
+                            cell.number_format = '0.00'  # 保留两位小数
+                        elif field == 'checkin_times':
+                            # 签到次数转为整数
+                            cell.value = int(value) if value and str(value).isdigit() else 0
+                            cell.number_format = '0'
+                        elif field == 'password':
+                            # 密码保持文本格式
+                            cell.value = value
+                            cell.number_format = '@'
+                        else:
+                            # 其他字段默认格式
+                            cell.value = value
+                
+                # [2026-02-28] 自动调整列宽
+                # 序号列固定宽度
+                ws.column_dimensions['A'].width = 6
+                
+                # 其他列自动调整
+                for col_idx, field in enumerate(selected_fields, 1):
+                    column_letter = get_column_letter(col_idx + 1)  # +1 因为序号占了第一列
+                    max_length = len(field_display_names[field])  # 表头长度
+                    
+                    # 计算该列最大内容长度
+                    for account in accounts:
+                        cell_value = str(account[field])
+                        # [2026-02-28] 中文字符按2个字符计算，增加余量
+                        length = sum(2 if '\u4e00' <= c <= '\u9fff' else 1 for c in cell_value)
+                        max_length = max(max_length, length)
+                    
+                    # 设置列宽（增加更多余量，确保中文完整显示）
+                    ws.column_dimensions[column_letter].width = min(max_length + 4, 50)
+                
+                # 保存文件
+                wb.save(filepath)
+                exported_files.append((filename, len(accounts)))
+            
+            # 显示导出结果
+            result_msg = f"导出完成！\n\n导出目录: {export_dir}\n\n"
+            for filename, count in exported_files:
+                result_msg += f"- {filename} ({count} 个账号)\n"
+            
+            messagebox.showinfo("导出成功", result_msg, parent=parent_dialog)
+            self.log(f"✓ 账号导出成功：{len(exported_files)} 个文件，共 {sum(c for _, c in exported_files)} 个账号")
+        
+        else:
+            # [2026-02-28] 单文件导出为Excel格式并自动调整列宽
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            # [2026-02-28] 根据筛选条件生成文件名
+            if owner_filter == "all":
+                default_filename = f"账号导出_全部_{timestamp}.xlsx"
+            elif owner_filter == "unassigned":
+                default_filename = f"账号导出_未分配_{timestamp}.xlsx"
+            else:
+                # 获取管理员名称
+                user = self.user_manager.get_user(owner_filter)
+                if user:
+                    safe_owner_name = user.user_name.replace('/', '_').replace('\\', '_')
+                    default_filename = f"账号导出_{safe_owner_name}_{timestamp}.xlsx"
+                else:
+                    default_filename = f"账号导出_{timestamp}.xlsx"
+            
+            filepath = filedialog.asksaveasfilename(
+                title="保存导出文件",
+                defaultextension=".xlsx",
+                filetypes=[("Excel文件", "*.xlsx"), ("所有文件", "*.*")],
+                initialfile=default_filename,
+                parent=parent_dialog
+            )
+            
+            if not filepath:
+                return
+            
+            # [2026-02-28] 按管理员分组并排序（账号少的管理员排在前面），每个管理员一个工作表
+            if owner_filter == "all":
+                # 按管理员分组
+                grouped_accounts = {}
+                for account in accounts_data.values():
+                    owner = account['owner']
+                    if owner not in grouped_accounts:
+                        grouped_accounts[owner] = []
+                    grouped_accounts[owner].append(account)
+                
+                # 按每个管理员的账号数量排序（账号少的排前面）
+                sorted_groups = sorted(grouped_accounts.items(), key=lambda x: len(x[1]))
+            else:
+                # 单个管理员或未分配，不分组
+                sorted_groups = None
+            
+            # 创建Excel工作簿
+            wb = openpyxl.Workbook()
+            
+            # [2026-02-28] 如果是导出所有账号，为每个管理员创建一个工作表
+            if sorted_groups:
+                # 删除默认的工作表
+                wb.remove(wb.active)
+                
+                # 为每个管理员创建工作表
+                for owner, accounts in sorted_groups:
+                    # 获取管理员显示名称
+                    if owner and owner != '未分配':
+                        user = self.user_manager.get_user(owner)
+                        display_name = user.user_name if user else owner.replace('user_', '')
+                    else:
+                        display_name = '未分配'
+                    
+                    # 创建工作表（工作表名称限制31字符）
+                    sheet_name = f"{display_name}({len(accounts)})"[:31]
+                    ws = wb.create_sheet(title=sheet_name)
+                    
+                    # 对该组账号排序
+                    sorted_accounts = sort_accounts(accounts)
+                    
+                    # 写入表头
+                    headers = ['序号'] + [field_display_names[field] for field in selected_fields]
+                    ws.append(headers)
+                    header_fill = PatternFill(start_color="CCE5FF", end_color="CCE5FF", fill_type="solid")
+                    header_font = Font(bold=True)
+                    for col_idx, _ in enumerate(headers, 1):
+                        cell = ws.cell(row=1, column=col_idx)
+                        cell.fill = header_fill
+                        cell.font = header_font
+                        cell.alignment = Alignment(horizontal='center', vertical='center')
+                    
+                    # 写入数据
+                    for idx, account in enumerate(sorted_accounts, 1):
+                        row_num = idx + 1
+                        ws.cell(row=row_num, column=1, value=idx)
+                        
+                        for col_idx, field in enumerate(selected_fields, 1):
+                            cell = ws.cell(row=row_num, column=col_idx + 1)
+                            value = account[field]
+                            
+                            if field == 'phone':
+                                cell.value = int(value) if value and value.isdigit() else value
+                                cell.number_format = '0'
+                            elif field == 'user_id':
+                                cell.value = int(value) if value and str(value).isdigit() else value
+                                cell.number_format = '0'
+                            elif field == 'balance':
+                                cell.value = float(value) if value and value != '-' else 0.0
+                                cell.number_format = '0.00'
+                            elif field == 'checkin_times':
+                                cell.value = int(value) if value and str(value).isdigit() else 0
+                                cell.number_format = '0'
+                            elif field == 'password':
+                                cell.value = value
+                                cell.number_format = '@'
+                            else:
+                                cell.value = value
+                    
+                    # 自动调整列宽
+                    ws.column_dimensions['A'].width = 6
+                    for col_idx, field in enumerate(selected_fields, 1):
+                        column_letter = get_column_letter(col_idx + 1)
+                        max_length = len(field_display_names[field])
+                        for account in sorted_accounts:
+                            cell_value = str(account[field])
+                            length = sum(2 if '\u4e00' <= c <= '\u9fff' else 1 for c in cell_value)
+                            max_length = max(max_length, length)
+                        # [2026-02-28] 增加更多余量，确保中文完整显示
+                        ws.column_dimensions[column_letter].width = min(max_length + 4, 50)
+            
+            else:
+                # 单个管理员或未分配，使用单个工作表
+                ws = wb.active
+                ws.title = "账号列表"
+                
+                sorted_accounts = sort_accounts(list(accounts_data.values()))
+                
+                # 写入表头
+                headers = ['序号'] + [field_display_names[field] for field in selected_fields]
+                ws.append(headers)
+                header_fill = PatternFill(start_color="CCE5FF", end_color="CCE5FF", fill_type="solid")
+                header_font = Font(bold=True)
+                for col_idx, _ in enumerate(headers, 1):
+                    cell = ws.cell(row=1, column=col_idx)
+                    cell.fill = header_fill
+                    cell.font = header_font
+                    cell.alignment = Alignment(horizontal='center', vertical='center')
+                
+                # 写入数据
+                for idx, account in enumerate(sorted_accounts, 1):
+                    row_num = idx + 1
+                    ws.cell(row=row_num, column=1, value=idx)
+                    
+                    for col_idx, field in enumerate(selected_fields, 1):
+                        cell = ws.cell(row=row_num, column=col_idx + 1)
+                        value = account[field]
+                        
+                        if field == 'phone':
+                            cell.value = int(value) if value and value.isdigit() else value
+                            cell.number_format = '0'
+                        elif field == 'user_id':
+                            cell.value = int(value) if value and str(value).isdigit() else value
+                            cell.number_format = '0'
+                        elif field == 'balance':
+                            cell.value = float(value) if value and value != '-' else 0.0
+                            cell.number_format = '0.00'
+                        elif field == 'checkin_times':
+                            cell.value = int(value) if value and str(value).isdigit() else 0
+                            cell.number_format = '0'
+                        elif field == 'password':
+                            cell.value = value
+                            cell.number_format = '@'
+                        else:
+                            cell.value = value
+                
+                # 自动调整列宽
+                ws.column_dimensions['A'].width = 6
+                for col_idx, field in enumerate(selected_fields, 1):
+                    column_letter = get_column_letter(col_idx + 1)
+                    max_length = len(field_display_names[field])
+                    for account in sorted_accounts:
+                        cell_value = str(account[field])
+                        length = sum(2 if '\u4e00' <= c <= '\u9fff' else 1 for c in cell_value)
+                        max_length = max(max_length, length)
+                    # [2026-02-28] 增加更多余量，确保中文完整显示
+                    ws.column_dimensions[column_letter].width = min(max_length + 4, 50)
+            
+            # 保存文件
+            wb.save(filepath)
+            
+            messagebox.showinfo(
+                "导出成功",
+                f"导出完成！\n\n文件: {Path(filepath).name}\n账号数量: {len(accounts_data)}",
+                parent=parent_dialog
+            )
+            self.log(f"✓ 账号导出成功：{len(accounts_data)} 个账号")
     
     def _batch_add_accounts(self):
         """批量添加账号到账号文件（已集成到主窗口右侧，此方法保留用于兼容性）"""

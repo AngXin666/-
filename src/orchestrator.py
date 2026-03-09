@@ -120,7 +120,9 @@ class Orchestrator:
             log_callback=log_callback,
             stop_check=stop_check,
             package_name=self.config.target_app_package,
-            file_logger=file_logger
+            file_logger=file_logger,
+            phone=account.phone,
+            password=account.password
         )
         
         if not startup_success:

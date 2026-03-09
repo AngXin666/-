@@ -18,11 +18,26 @@ import os
 # 设置环境变量，隐藏 RapidOCR 的详细日志
 os.environ.setdefault('RAPIDOCR_LOG_LEVEL', 'ERROR')
 
+# [2026-02-28] 修复：彻底禁用RapidOCR的INFO日志
+# 在导入之前就设置所有相关logger的级别
+logging.basicConfig(level=logging.WARNING)
+
 # 配置 RapidOCR 相关的日志记录器
 for logger_name in ['rapidocr', 'RapidOCR', 'ppocr', 'onnxruntime', 'Navigator', 'RapidOCRv2']:
     logger = logging.getLogger(logger_name)
-    logger.setLevel(logging.ERROR)
+    logger.setLevel(logging.CRITICAL)  # 只显示严重错误
     logger.propagate = False
+    logger.disabled = True  # 完全禁用
+
+# 添加一个全局过滤器，过滤掉所有RapidOCR的INFO日志
+class RapidOCRFilter(logging.Filter):
+    def filter(self, record):
+        if 'RapidOCR' in record.name or 'rapidocr' in record.name.lower():
+            return record.levelno >= logging.ERROR
+        return True
+
+# 添加到根logger
+logging.getLogger().addFilter(RapidOCRFilter())
 
 try:
     from rapidocr import RapidOCR
@@ -73,7 +88,22 @@ class OCRThreadPool:
         # OCR 实例（单例）
         self._ocr = None
         if HAS_OCR:
-            self._ocr = RapidOCR()
+            # [2026-02-28] 初始化RapidOCR时抑制INFO日志输出
+            import sys
+            from io import StringIO
+            
+            # 临时重定向stdout和stderr
+            old_stdout = sys.stdout
+            old_stderr = sys.stderr
+            sys.stdout = StringIO()
+            sys.stderr = StringIO()
+            
+            try:
+                self._ocr = RapidOCR()
+            finally:
+                # 恢复stdout和stderr
+                sys.stdout = old_stdout
+                sys.stderr = old_stderr
         
         # 线程池配置（增加到8个线程以提升并行度）
         self._executor = ThreadPoolExecutor(

@@ -240,7 +240,51 @@ class SmartWaiter:
                     if log_callback:
                         log_callback(f"检测到页面变化（距离:{distance}）")
                     
-                    # 变化时用深度学习识别页面类型
+                    # [2026-02-28] 修复：等待页面稳定后再检测，避免检测到过渡画面
+                    await asyncio.sleep(0.3)
+                    
+                    # [2026-02-28] 测试：使用OCR识别代替深度学习
+                    # 检查是否在期望状态中包含签到相关页面
+                    from ..page_detector import PageState
+                    has_checkin_states = any(s in [PageState.CHECKIN, PageState.CHECKIN_POPUP] for s in expected_states)
+                    
+                    if has_checkin_states:
+                        # 使用OCR识别签到页
+                        try:
+                            from PIL import Image
+                            from io import BytesIO
+                            
+                            image = Image.open(BytesIO(screenshot_data))
+                            
+                            # 使用OCR识别
+                            if hasattr(detector, '_ocr_pool') and detector._ocr_pool:
+                                ocr_result = await detector._ocr_pool.recognize(image, timeout=2.0)
+                                
+                                # [2026-03-05] 修复数组比较错误：检查 texts 是否为 None 并且长度大于 0
+                                if ocr_result and ocr_result.texts is not None and len(ocr_result.texts) > 0:
+                                    all_text = ' '.join(ocr_result.texts)
+                                    
+                                    # 检查是否包含签到页特征文字
+                                    if '立即签到' in all_text or '每日签到' in all_text:
+                                        if log_callback:
+                                            log_callback(f"✓ OCR识别到签到页（包含'立即签到'或'每日签到'）")
+                                        
+                                        # 创建一个模拟的检测结果
+                                        class OCRResult:
+                                            def __init__(self):
+                                                self.state = PageState.CHECKIN
+                                                self.confidence = 0.95
+                                        
+                                        elapsed = asyncio.get_event_loop().time() - start_time
+                                        if log_callback:
+                                            log_callback(f"✓ 检测到 checkin（OCR），耗时{elapsed:.2f}秒")
+                                        
+                                        return OCRResult()
+                        except Exception as e:
+                            if log_callback:
+                                log_callback(f"OCR识别失败: {e}，回退到深度学习")
+                    
+                    # 回退到深度学习检测
                     dl_checks += 1
                     detector_type = type(detector).__name__
                     

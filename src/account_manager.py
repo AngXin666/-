@@ -349,24 +349,22 @@ class AccountManager:
             user_id = result.user_id
             
             # 检查昵称和用户ID是否有效
-            invalid_values = [None, '', '-', 'N/A', '待处理']
+            # [2026-03-05] 修复原因：添加字符串'None'到无效值列表，防止GUI中str(None)导致的问题
+            invalid_values = [None, '', '-', 'N/A', '待处理', 'None', 'none']
             nickname_invalid = nickname in invalid_values
             user_id_invalid = user_id in invalid_values
             
+            # [2026-03-05] 修复原因：静默处理无效数据，不打印警告（避免启动时大量警告）
             if nickname_invalid or user_id_invalid:
-                print(f"[数据库] ⚠️ 检测到无效数据 - 昵称: '{nickname}', 用户ID: '{user_id}'")
-                print(f"[数据库] 尝试从历史记录中获取正确值...")
                 
                 # 策略1: 从历史记录中获取最近的正常值
                 latest_record = self.db.get_latest_record_by_phone(result.phone)
                 if latest_record:
                     if nickname_invalid and latest_record.get('nickname') not in invalid_values:
                         nickname = latest_record.get('nickname')
-                        print(f"[数据库] ✓ 从历史记录获取昵称: {nickname}")
                     
                     if user_id_invalid and latest_record.get('user_id') not in invalid_values:
                         user_id = latest_record.get('user_id')
-                        print(f"[数据库] ✓ 从历史记录获取用户ID: {user_id}")
                 
                 # 策略2: 从 phone_userid_mapping.txt 中获取用户ID
                 if user_id_invalid:
@@ -431,9 +429,11 @@ class AccountManager:
             
             # 调用 UPSERT 方法
             if self.db.upsert_history_record(record):
-                print(f"[数据库] ✅ 已保存 {result.phone} 的记录")
+                print(f"✓ 已保存: {result.phone}")
             else:
-                print(f"[数据库] ⚠️ 保存 {result.phone} 的记录失败")
+                # [2026-03-01] 失败时显示详细错误信息用于调试
+                print(f"✗ 保存失败: {result.phone}")
+                print(f"  错误详情: 数据库操作失败，请查看上方的详细错误日志")
                 
         except Exception as e:
             print(f"[数据库] ❌ 保存记录时出错: {e}")

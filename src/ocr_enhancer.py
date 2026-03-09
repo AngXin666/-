@@ -64,7 +64,8 @@ class OCREnhancer:
                 # OCR识别
                 ocr_result = await self._ocr_pool.recognize(enhanced, timeout=5.0)
                 
-                if ocr_result.texts:
+                # [2026-03-05] 修复数组比较错误
+                if ocr_result.texts is not None and len(ocr_result.texts) > 0:
                     text = ''.join(ocr_result.texts)
                     all_results.append(text)
                     
@@ -120,7 +121,8 @@ class OCREnhancer:
         # OCR识别
         ocr_result = await self._ocr_pool.recognize(enhanced, timeout=5.0)
         
-        if not ocr_result.texts:
+        # [2026-03-05] 修复数组比较错误
+        if ocr_result.texts is None or len(ocr_result.texts) == 0:
             return EnhancedOCRResult(
                 text='',
                 confidence=0.0,
@@ -173,7 +175,8 @@ class OCREnhancer:
         # OCR识别
         ocr_result = await self._ocr_pool.recognize(enhanced, timeout=5.0)
         
-        if not ocr_result.texts:
+        # [2026-03-05] 修复数组比较错误
+        if ocr_result.texts is None or len(ocr_result.texts) == 0:
             return None
         
         # 合并所有文本
@@ -269,7 +272,8 @@ class OCREnhancer:
         # OCR识别
         ocr_result = await self._ocr_pool.recognize(enhanced, timeout=5.0)
         
-        if ocr_result.texts:
+        # [2026-03-05] 修复数组比较错误
+        if ocr_result.texts is not None and len(ocr_result.texts) > 0:
             text = ''.join(ocr_result.texts)
             confidence = self._calculate_confidence(ocr_result)
             
@@ -321,7 +325,8 @@ class OCREnhancer:
                 # OCR识别
                 ocr_result = await self._ocr_pool.recognize(enhanced, timeout=5.0)
                 
-                if ocr_result.texts:
+                # [2026-03-05] 修复数组比较错误
+                if ocr_result.texts is not None and len(ocr_result.texts) > 0:
                     text = ''.join(ocr_result.texts)
                     all_results.append(text)
                     
@@ -370,7 +375,8 @@ class OCREnhancer:
         enhanced = ImageProcessor.preprocess_for_ocr(image, mode='text')
         ocr_result = await self._ocr_pool.recognize(enhanced, timeout=5.0)
         
-        if not ocr_result.texts:
+        # [2026-03-05] 修复数组比较错误
+        if ocr_result.texts is None or len(ocr_result.texts) == 0:
             return False
         
         # 检查每个识别的文本
@@ -390,7 +396,8 @@ class OCREnhancer:
         Returns:
             float: 置信度 (0-1)
         """
-        if not ocr_result.texts:
+        # [2026-03-05] 修复数组比较错误
+        if ocr_result.texts is None or len(ocr_result.texts) == 0:
             return 0.0
         
         # 如果有scores，使用平均分数

@@ -31,26 +31,39 @@ class BalanceTransfer:
         
         Args:
             adb: ADB桥接对象
-            detector: 页面检测器（智能检测器或混合检测器）
+            detector: 页面检测器（YOLO识别器）
         """
         self.adb = adb
+        
+        # [2026-03-03] 修改：从 ModelManager 获取转账专用检测器（避免重复创建）
+        # 保存YOLO检测器（用于元素检测、按钮点击等）
         self.detector = detector
         
-        # 初始化检测器
+        # 导入日志记录器和ModelManager
+        import logging
         from .model_manager import ModelManager
+        
+        logger = logging.getLogger(__name__)
         model_manager = ModelManager.get_instance()
-        self.detector = model_manager.get_page_detector_integrated()
+        
+        # 获取转账专用检测器（MobileNetV3，仅用于页面分类）
+        self.page_classifier = model_manager.get_transfer_detector()
+        if not self.page_classifier:
+            # 降级使用YOLO检测器
+            self.page_classifier = detector
+            logger.warning(f"⚠️ 转账专用模型未加载，降级使用YOLO检测器")
+        
         # 检查是否有转账相关的YOLO模型
         self.has_wallet_yolo = self._check_yolo_model('钱包页')
         self.has_transfer_yolo = self._check_yolo_model('transfer')
         self.has_transfer_confirm_yolo = self._check_yolo_model('transfer_confirm')
         
         if self.has_wallet_yolo:
-            print("  [转账] ✓ 钱包页YOLO模型已加载")
+            logger.debug("  [转账] ✓ 钱包页YOLO模型已加载")
         if self.has_transfer_yolo:
-            print("  [转账] ✓ 转账页YOLO模型已加载")
+            logger.debug("  [转账] ✓ 转账页YOLO模型已加载")
         if self.has_transfer_confirm_yolo:
-            print("  [转账] ✓ 转账确认弹窗YOLO模型已加载")
+            logger.debug("  [转账] ✓ 转账确认弹窗YOLO模型已加载")
     
     def _check_yolo_model(self, page_type: str) -> bool:
         """检查指定页面类型的YOLO模型是否存在
@@ -286,7 +299,8 @@ class BalanceTransfer:
             ocr_pool = OCRThreadPool()
             ocr_result = await ocr_pool.recognize(enhanced_screenshot)
             
-            if not ocr_result or not ocr_result.texts:
+            # [2026-03-05] 修复数组比较错误：检查 texts 是否为 None 或长度为 0
+            if not ocr_result or ocr_result.texts is None or len(ocr_result.texts) == 0:
                 log("  [OCR] 未识别到任何文字")
                 return None
             
@@ -349,7 +363,8 @@ class BalanceTransfer:
             ocr_pool = OCRThreadPool()
             ocr_result = await ocr_pool.recognize(enhanced_screenshot)
             
-            if not ocr_result or not ocr_result.texts:
+            # [2026-03-05] 修复数组比较错误：检查 texts 是否为 None 或长度为 0
+            if not ocr_result or ocr_result.texts is None or len(ocr_result.texts) == 0:
                 return None
             
             # 查找"?"或"¥"符号
@@ -481,7 +496,8 @@ class BalanceTransfer:
             ocr_pool = OCRThreadPool()
             ocr_result = await ocr_pool.recognize(enhanced_screenshot)
             
-            if not ocr_result or not ocr_result.texts:
+            # [2026-03-05] 修复数组比较错误：检查 texts 是否为 None 或长度为 0
+            if not ocr_result or ocr_result.texts is None or len(ocr_result.texts) == 0:
                 return False
             
             # 提取期望金额中的数字部分
@@ -561,7 +577,8 @@ class BalanceTransfer:
             ocr_pool = OCRThreadPool()
             ocr_result = await ocr_pool.recognize(enhanced_screenshot)
             
-            if not ocr_result or not ocr_result.texts:
+            # [2026-03-05] 修复数组比较错误：检查 texts 是否为 None 或长度为 0
+            if not ocr_result or ocr_result.texts is None or len(ocr_result.texts) == 0:
                 return None
             
             result = {
@@ -691,7 +708,8 @@ class BalanceTransfer:
             ocr_pool = OCRThreadPool()
             ocr_result = await ocr_pool.recognize(enhanced_screenshot)
             
-            if not ocr_result or not ocr_result.texts:
+            # [2026-03-05] 修复数组比较错误：检查 texts 是否为 None 或长度为 0
+            if not ocr_result or ocr_result.texts is None or len(ocr_result.texts) == 0:
                 log(f"  [验证] ⚠️ OCR未识别到任何文字")
                 return False
             
@@ -731,7 +749,7 @@ class BalanceTransfer:
                                initial_balance: Optional[float] = None,
                                log_callback=None, transfer_chain: list = None,
                                step_number: int = 1, gui_logger=None) -> Dict[str, any]:
-        """执行余额转账（使用智能检测器进行综合检测）
+        """执行余额转账（使用转账专用模型进行页面检测）
         
         Args:
             device_id: 设备ID
@@ -790,19 +808,25 @@ class BalanceTransfer:
                 return result
             
             # 记录详细日志到文件
-            file_logger.info(f"[转账] 开始执行转账流程（使用智能检测器）")
+            file_logger.info(f"[转账] 开始执行转账流程（使用YOLO）")
             
             # 1. 进入钱包页面
             concise.action("检查转账条件")
-            file_logger.info(f"[转账] 步骤1: 使用智能检测器检测个人页面")
+            file_logger.info(f"[转账] 步骤1: 使用YOLO检测个人页面")
             from .page_detector import PageState
             
-            # 使用智能检测器进行页面检测和元素检测
-            page_result = await self.detector.detect_page(
+            # [2026-03-02] 修复：使用转账专用模型进行页面检测
+            # 清除页面检测缓存
+            if hasattr(self.page_classifier, 'clear_cache'):
+                self.page_classifier.clear_cache(device_id)
+            
+            # 使用转账专用模型进行页面检测
+            page_result = await self.page_classifier.detect_page(
                 device_id, 
-                use_cache=False, 
-                detect_elements=True  # 启用元素检测
+                use_cache=False
             )
+            
+            file_logger.info(f"[转账] 页面检测结果（转账专用模型）: {page_result.state.value if page_result else 'None'}, 置信度: {page_result.confidence if page_result else 'N/A'}")
             
             if not page_result or page_result.state != PageState.PROFILE_LOGGED:
                 file_logger.warning(f"[转账] 当前不在个人页面（已登录），当前页面: {page_result.state.value if page_result else 'unknown'}")
@@ -818,10 +842,19 @@ class BalanceTransfer:
             concise.action("进入钱包页面")
             file_logger.info("[转账] 点击余额按钮")
             
-            # [2026-02-22] 优化：直接使用page_result中的余额按钮元素
+            # [2026-03-02] 修复：使用YOLO检测器进行元素检测
+            # 转账专用模型只做页面分类，元素检测需要用YOLO检测器
+            element_result = await self.detector.detect_page(
+                device_id,
+                use_cache=False,
+                detect_elements=True
+            )
+            
+            # [2026-02-22] 优化：直接使用element_result中的余额按钮元素
+            # [2026-03-05] 修复数组比较错误：使用 is not None 和 len() 检查
             balance_element = None
-            if page_result.elements:
-                for element in page_result.elements:
+            if element_result and element_result.elements is not None and len(element_result.elements) > 0:
+                for element in element_result.elements:
                     if element.class_name == '余额数字':
                         balance_element = element
                         file_logger.info(f"[转账] YOLO检测到余额按钮: {element.center}, 置信度{element.confidence:.2f}")
@@ -845,21 +878,18 @@ class BalanceTransfer:
                     file_logger.info(f"[转账] 使用默认坐标: {self.BALANCE_BUTTON_FALLBACK}")
             
             # [2026-02-21] 增加等待时间，确保页面开始跳转
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0.5)
             
-            # 2. 使用SmartWaiter等待钱包页面
+            # 2. 使用智能等待器等待钱包页面
             file_logger.info("[转账] 步骤2: 等待进入钱包页面...")
             from .performance.smart_waiter import wait_for_page
             
-            # [2026-02-21] 添加详细日志回调
-            def detailed_log(msg):
-                file_logger.info(f"  [SmartWaiter] {msg}")
-            
+            # [2026-03-02] 修复：使用转账专用模型作为检测器
             page_result = await wait_for_page(
                 device_id=device_id,
-                detector=self.detector,
+                detector=self.page_classifier,  # 使用转账专用模型
                 expected_states=[PageState.WALLET],
-                log_callback=detailed_log
+                log_callback=lambda msg: file_logger.info(f"  [等待] {msg}")
             )
             
             if not page_result or page_result.state != PageState.WALLET:
@@ -880,7 +910,8 @@ class BalanceTransfer:
                 if manual_result:
                     file_logger.info(f"  手动检测结果: {manual_result.state.value} (置信度: {manual_result.confidence:.2%})")
                     file_logger.info(f"  详细信息: {manual_result.details}")
-                    if manual_result.elements:
+                    # [2026-03-05] 修复数组比较错误：使用 is not None 和 len() 检查
+                    if manual_result.elements is not None and len(manual_result.elements) > 0:
                         file_logger.info(f"  检测到 {len(manual_result.elements)} 个元素:")
                         for elem in manual_result.elements:
                             file_logger.info(f"    - {elem.class_name} (置信度: {elem.confidence:.2f}, 位置: {elem.center})")
@@ -906,13 +937,15 @@ class BalanceTransfer:
                 file_logger.info(f"[转账] OCR未识别到转赠按钮，使用默认坐标: {self.TRANSFER_BUTTON}")
                 await self.adb.tap(device_id, self.TRANSFER_BUTTON[0], self.TRANSFER_BUTTON[1])
             
-            # 4. 使用SmartWaiter等待转账页面
+            # 4. 使用智能等待器等待转账页面
             file_logger.info("[转账] 步骤4: 等待进入转账页面...")
+            
+            # [2026-03-02] 修复：使用转账专用模型作为检测器
             page_result = await wait_for_page(
                 device_id=device_id,
-                detector=self.detector,
+                detector=self.page_classifier,  # 使用转账专用模型
                 expected_states=[PageState.TRANSFER],
-                log_callback=lambda msg: file_logger.info(f"  {msg}")
+                log_callback=lambda msg: file_logger.info(f"  [等待] {msg}")
             )
             
             if not page_result or page_result.state != PageState.TRANSFER:
@@ -926,21 +959,23 @@ class BalanceTransfer:
             
             # 5. 检测转账页面元素（YOLO）
             file_logger.info("[转账] 步骤5: 检测转账页面元素...")
-            page_result = await self.detector.detect_page(
+            # [2026-03-02] 修复：使用YOLO检测器进行元素检测
+            element_result = await self.detector.detect_page(
                 device_id, 
                 use_cache=False, 
                 detect_elements=True  # 启用YOLO元素检测
             )
             
-            if not page_result or not page_result.elements:
+            # [2026-03-05] 修复数组比较错误：使用 is not None 和 len() 检查
+            if not element_result or element_result.elements is None or len(element_result.elements) == 0:
                 file_logger.error("[转账] 未检测到转账页面元素")
                 concise.error("未检测到转账页面元素")
                 result['message'] = "未检测到转账页面元素"
                 result['error_type'] = ErrorType.TRANSFER_FAILED
                 return result
             
-            file_logger.info(f"[转账] ✓ 检测到 {len(page_result.elements)} 个元素")
-            for elem in page_result.elements:
+            file_logger.info(f"[转账] ✓ 检测到 {len(element_result.elements)} 个元素")
+            for elem in element_result.elements:
                 file_logger.info(f"  - {elem.class_name} (置信度: {elem.confidence:.2f}, 位置: {elem.center})")
             
             # 6. 查找并点击全部转账按钮
@@ -948,7 +983,7 @@ class BalanceTransfer:
             file_logger.info("[转账] 步骤6: 点击全部转账按钮")
             
             all_transfer_element = None
-            for element in page_result.elements:
+            for element in element_result.elements:
                 if element.class_name == '全部转账按钮':
                     all_transfer_element = element
                     break
@@ -967,32 +1002,36 @@ class BalanceTransfer:
             file_logger.info("[转账] 步骤7: 重新检测转账页面元素...")
             file_logger.info(f"[转账] 调用detect_page: device_id={device_id}, use_cache=False, detect_elements=True")
             
-            page_result = await self.detector.detect_page(
+            # [2026-03-02] 修复：使用YOLO检测器进行元素检测
+            element_result = await self.detector.detect_page(
                 device_id, 
                 use_cache=False, 
                 detect_elements=True
             )
             
             # [2026-02-22] 详细记录检测结果
-            file_logger.info(f"[转账] detect_page返回: page_result={page_result is not None}")
-            if page_result:
-                file_logger.info(f"[转账] - state: {page_result.state}")
-                file_logger.info(f"[转账] - confidence: {page_result.confidence:.2%}")
-                file_logger.info(f"[转账] - details: {page_result.details}")
-                file_logger.info(f"[转账] - elements: {page_result.elements}")
-                file_logger.info(f"[转账] - elements数量: {len(page_result.elements) if page_result.elements else 0}")
-                file_logger.info(f"[转账] - yolo_model_used: {page_result.yolo_model_used}")
+            file_logger.info(f"[转账] detect_page返回: element_result={element_result is not None}")
+            if element_result:
+                file_logger.info(f"[转账] - state: {element_result.state}")
+                file_logger.info(f"[转账] - confidence: {element_result.confidence:.2%}")
+                file_logger.info(f"[转账] - details: {element_result.details}")
+                file_logger.info(f"[转账] - elements: {element_result.elements}")
+                file_logger.info(f"[转账] - elements数量: {len(element_result.elements) if element_result.elements else 0}")
+                file_logger.info(f"[转账] - yolo_model_used: {element_result.yolo_model_used}")
             
-            if not page_result or not page_result.elements:
+            # [2026-03-05] 修复数组比较错误：使用 is None 和 len() 检查
+            if not element_result or element_result.elements is None or len(element_result.elements) == 0:
                 file_logger.error("[转账] 重新检测失败，未检测到元素")
-                file_logger.error(f"[转账] page_result为空: {page_result is None}, elements为空: {not page_result.elements if page_result else 'N/A'}")
+                # [2026-03-05] 修复数组比较错误：使用 is None 和 len() 检查
+                elements_empty = (element_result.elements is None or len(element_result.elements) == 0) if element_result else 'N/A'
+                file_logger.error(f"[转账] element_result为空: {element_result is None}, elements为空: {elements_empty}")
                 concise.error("重新检测失败")
                 result['message'] = "重新检测失败"
                 result['error_type'] = ErrorType.TRANSFER_FAILED
                 return result
             
-            file_logger.info(f"[转账] ✓ 重新检测到 {len(page_result.elements)} 个元素")
-            for elem in page_result.elements:
+            file_logger.info(f"[转账] ✓ 重新检测到 {len(element_result.elements)} 个元素")
+            for elem in element_result.elements:
                 file_logger.info(f"  - {elem.class_name} (置信度: {elem.confidence:.2f}, 位置: {elem.center})")
             
             # 8. 查找并点击ID输入框
@@ -1000,7 +1039,7 @@ class BalanceTransfer:
             file_logger.info(f"[转账] 步骤8: 输入收款人ID")
             
             recipient_input_element = None
-            for element in page_result.elements:
+            for element in element_result.elements:
                 if element.class_name == 'ID输入框':
                     recipient_input_element = element
                     break
@@ -1021,7 +1060,7 @@ class BalanceTransfer:
             file_logger.info("[转账] 步骤9: 点击提交按钮")
             
             submit_button_element = None
-            for element in page_result.elements:
+            for element in element_result.elements:
                 if element.class_name == '提交按钮':
                     submit_button_element = element
                     break
@@ -1083,7 +1122,8 @@ class BalanceTransfer:
                     ocr_pool = OCRThreadPool()
                     ocr_result = await ocr_pool.recognize(enhanced_screenshot)
                     
-                    if ocr_result and ocr_result.texts:
+                    # [2026-03-05] 修复数组比较错误：检查 texts 是否为 None 并且长度大于 0
+                    if ocr_result and ocr_result.texts is not None and len(ocr_result.texts) > 0:
                         file_logger.debug(f"[转账] OCR识别到 {len(ocr_result.texts)} 个文本")
                         
                         # 查找"确认提交"或"确认"文字
@@ -1132,31 +1172,22 @@ class BalanceTransfer:
             await self.adb.tap(device_id, button_pos[0], button_pos[1])
             file_logger.info(f"[转账] 成功点击确认按钮，位置: {button_pos}")
             
-            # 使用SmartWaiter等待转账完成（高频检测，15秒超时）
-            # [2026-02-22] 修复：只检测转账相关的页面状态，不检测广告页等无关页面
+            # [2026-03-02] 修复：使用智能等待器等待转账完成
             file_logger.info("[转账] 等待转账完成...")
             page_result = await wait_for_page(
                 device_id=device_id,
-                detector=self.detector,
+                detector=self.page_classifier,  # 使用转账专用模型
                 expected_states=[PageState.WALLET, PageState.PROFILE_LOGGED],
-                log_callback=lambda msg: file_logger.info(msg)
+                log_callback=lambda msg: file_logger.info(f"  [等待] {msg}")
             )
-            
-            if not page_result:
-                # SmartWaiter超时，使用降级等待
-                file_logger.warning("[转账] SmartWaiter超时，使用降级等待...")
-                await asyncio.sleep(3.0)
-                page_result = await self.detector.detect_page(device_id, use_cache=False)
             
             # 9. 验证转账结果并获取转账后余额
             file_logger.info("[转账] 步骤9: 验证转账结果")
             
-            # [2026-02-22] 处理异常页面（如误触进入分类页）
-            # 如果wait_for_page超时或返回非预期页面，尝试按返回键恢复
+            # [2026-03-02] 修复：如果不在钱包页或个人页，尝试按返回键返回
             if not page_result:
-                # SmartWaiter超时，手动检测当前页面
-                file_logger.warning("[转账] SmartWaiter超时，手动检测当前页面...")
-                page_result = await self.detector.detect_page(device_id, use_cache=False)
+                file_logger.warning("[转账] 超时，手动检测当前页面...")
+                page_result = await self.page_classifier.detect_page(device_id, use_cache=False)
             
             # 如果不在钱包页或个人页，尝试按返回键返回
             max_back_attempts = 3
@@ -1165,7 +1196,7 @@ class BalanceTransfer:
                 file_logger.warning(f"[转账] 当前页面异常（{page_result.state.value}），按返回键尝试恢复")
                 await self.adb.press_back(device_id)
                 await asyncio.sleep(TimeoutsConfig.WAIT_MEDIUM)
-                page_result = await self.detector.detect_page(device_id, use_cache=False)
+                page_result = await self.page_classifier.detect_page(device_id, use_cache=False)
                 back_attempt += 1
             
             if page_result and page_result.state == PageState.WALLET:
@@ -1179,73 +1210,100 @@ class BalanceTransfer:
                     # 按返回键回到个人页面
                     file_logger.info("[转账] 按返回键回到个人页面...")
                     await self.adb.press_back(device_id)
+                    await asyncio.sleep(1.0)  # 等待页面跳转
                     
-                    # 使用SmartWaiter等待个人页面
-                    file_logger.info("[转账] 使用SmartWaiter等待个人页面...")
-                    page_result = await wait_for_page(
-                        device_id=device_id,
-                        detector=self.detector,
-                        expected_states=[PageState.PROFILE_LOGGED],
-                        log_callback=lambda msg: file_logger.info(msg)
-                    )
+                    # [2026-03-02] 修复原因：使用循环检测 + OCR 降级，避免长时间等待
+                    file_logger.info("[转账] 检测是否返回个人页...")
+                    max_attempts = 3  # 最多尝试3次，每次1秒
+                    page_result = None
                     
-                    if not page_result:
-                        file_logger.warning("[转账] SmartWaiter超时，使用降级等待...")
-                        await asyncio.sleep(1.0)
-                        page_result = await self.detector.detect_page(device_id, use_cache=False, detect_elements=True)
+                    for attempt in range(max_attempts):
+                        # 先用转账专用模型检测
+                        page_result = await self.page_classifier.detect_page(device_id, use_cache=False)
+                        
+                        if page_result and page_result.state == PageState.PROFILE_LOGGED:
+                            file_logger.info(f"[转账] ✓ 转账专用模型确认在个人页（第{attempt+1}次尝试）")
+                            break
+                        
+                        # 如果专用模型识别失败，立即降级使用 OCR
+                        file_logger.info(f"[转账] 转账专用模型识别失败（第{attempt+1}次），降级使用 OCR...")
+                        from .page_detector import PageDetector
+                        ocr_detector = PageDetector(self.adb)
+                        ocr_result = await ocr_detector.detect_page(device_id, use_ocr=True, use_dl=False)
+                        
+                        if ocr_result and ocr_result.state == PageState.PROFILE_LOGGED:
+                            file_logger.info(f"[转账] ✓ OCR 确认在个人页（第{attempt+1}次尝试）")
+                            page_result = ocr_result
+                            break
+                        
+                        if attempt < max_attempts - 1:
+                            file_logger.info(f"[转账] 未检测到个人页，等待1秒后重试...")
+                            await asyncio.sleep(1.0)
                     
-                    file_logger.info(f"[转账] ✓ 已在个人页，开始获取转账后余额")
+                    # 检查最终结果
+                    # 检查最终结果
+                    if not page_result or page_result.state != PageState.PROFILE_LOGGED:
+                        file_logger.warning(f"[转账] ⚠️ 3次尝试后仍未检测到个人页")
+                        if page_result:
+                            file_logger.warning(f"  当前页面: {page_result.state.value}")
+                        file_logger.error(f"  ✗ 无法获取转账后余额，将使用其他策略计算转账金额")
+                        final_balance = None
                     
-                    # 检测页面元素
-                    file_logger.info(f"[转账] 检测页面元素...")
-                    page_result = await self.detector.detect_page(
-                        device_id, 
-                        use_cache=False, 
-                        detect_elements=True
-                    )
-                    
-                    if page_result and page_result.elements:
-                        for element in page_result.elements:
-                            if element.class_name == '余额数字':
-                                file_logger.info(f"[转账] 检测到余额元素，位置: {element.center}, 置信度: {element.confidence:.2f}")
-                                
-                                # 截图并OCR识别余额区域
-                                try:
-                                    from .screen_capture import ScreenCapture
-                                    from .ocr_thread_pool import OCRThreadPool
-                                    from PIL import Image
-                                    import cv2
-                                    import re
+                    if page_result and page_result.state == PageState.PROFILE_LOGGED:
+                        file_logger.info(f"[转账] ✓ 已在个人页，开始获取转账后余额")
+                        
+                        # 检测页面元素（使用YOLO检测器）
+                        file_logger.info(f"[转账] 检测页面元素...")
+                        element_result = await self.detector.detect_page(
+                            device_id, 
+                            use_cache=False, 
+                            detect_elements=True
+                        )
+                        
+                        # [2026-03-05] 修复数组比较错误：检查 elements 是否为 None 并且长度大于 0
+                        if element_result and element_result.elements is not None and len(element_result.elements) > 0:
+                            for element in element_result.elements:
+                                if element.class_name == '余额数字':
+                                    file_logger.info(f"[转账] 检测到余额元素，位置: {element.center}, 置信度: {element.confidence:.2f}")
                                     
-                                    screen_capture = ScreenCapture(self.adb)
-                                    screenshot = await screen_capture.capture(device_id)
+                                    # 截图并OCR识别余额区域
+                                    try:
+                                        from .screen_capture import ScreenCapture
+                                        from .ocr_thread_pool import OCRThreadPool
+                                        from PIL import Image
+                                        import cv2
+                                        import re
+                                        
+                                        screen_capture = ScreenCapture(self.adb)
+                                        screenshot = await screen_capture.capture(device_id)
+                                        
+                                        # 裁剪余额区域
+                                        x1, y1, x2, y2 = element.bbox
+                                        padding = 10
+                                        x1 = max(0, x1 - padding)
+                                        y1 = max(0, y1 - padding)
+                                        x2 = min(screenshot.shape[1], x2 + padding)
+                                        y2 = min(screenshot.shape[0], y2 + padding)
+                                        
+                                        balance_region = screenshot[y1:y2, x1:x2]
+                                        balance_pil = Image.fromarray(cv2.cvtColor(balance_region, cv2.COLOR_BGR2RGB))
+                                        
+                                        # OCR识别
+                                        ocr_pool = OCRThreadPool()
+                                        ocr_result = await ocr_pool.recognize(balance_pil)
+                                        
+                                        # [2026-03-05] 修复数组比较错误：检查 texts 是否为 None 并且长度大于 0
+                                        if ocr_result and ocr_result.texts is not None and len(ocr_result.texts) > 0:
+                                            for text in ocr_result.texts:
+                                                balance_match = re.search(r'[\d.]+', text)
+                                                if balance_match:
+                                                    final_balance = float(balance_match.group(0))
+                                                    file_logger.info(f"[转账] OCR识别到转账后余额: {final_balance:.2f} 元")
+                                                    break
+                                    except Exception as e:
+                                        file_logger.error(f"[转账] OCR识别余额失败: {e}", exc_info=True)
                                     
-                                    # 裁剪余额区域
-                                    x1, y1, x2, y2 = element.bbox
-                                    padding = 10
-                                    x1 = max(0, x1 - padding)
-                                    y1 = max(0, y1 - padding)
-                                    x2 = min(screenshot.shape[1], x2 + padding)
-                                    y2 = min(screenshot.shape[0], y2 + padding)
-                                    
-                                    balance_region = screenshot[y1:y2, x1:x2]
-                                    balance_pil = Image.fromarray(cv2.cvtColor(balance_region, cv2.COLOR_BGR2RGB))
-                                    
-                                    # OCR识别
-                                    ocr_pool = OCRThreadPool()
-                                    ocr_result = await ocr_pool.recognize(balance_pil)
-                                    
-                                    if ocr_result and ocr_result.texts:
-                                        for text in ocr_result.texts:
-                                            balance_match = re.search(r'[\d.]+', text)
-                                            if balance_match:
-                                                final_balance = float(balance_match.group(0))
-                                                file_logger.info(f"[转账] OCR识别到转账后余额: {final_balance:.2f} 元")
-                                                break
-                                except Exception as e:
-                                    file_logger.error(f"[转账] OCR识别余额失败: {e}", exc_info=True)
-                                
-                                break
+                                    break
                 
                 # ========== 转账金额获取策略（三级降级）==========
                 calculated_amount = None
