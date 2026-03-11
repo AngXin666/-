@@ -65,6 +65,14 @@ class XimengAutomation:
         # 获取共享的检测器实例（YOLO检测器）
         self.detector = model_manager.get_page_detector_integrated()
         
+        # [2026-03-11] 修复原因：添加调试日志，确认detector类型（保存到文件）
+        from .logger import get_logger
+        debug_logger = get_logger()
+        debug_logger.info(f"[DEBUG-XimengAutomation] self.detector类型: {type(self.detector)}")
+        debug_logger.info(f"[DEBUG-XimengAutomation] 是否有find_button_yolo: {hasattr(self.detector, 'find_button_yolo')}")
+        print(f"[DEBUG-XimengAutomation] self.detector类型: {type(self.detector)}")
+        print(f"[DEBUG-XimengAutomation] 是否有find_button_yolo: {hasattr(self.detector, 'find_button_yolo')}")
+        
         # [2026-03-03] 修改：从 ModelManager 获取专用检测器（避免重复创建）
         # 导入日志记录器
         from .logger import get_logger
@@ -118,7 +126,9 @@ class XimengAutomation:
         self.balance_reader = BalanceReader(self.adb)
         self.daily_checkin = DailyCheckin(self.adb, self.detector, self.navigator)
         
-        # 初始化ProfileReader，传入YOLO检测器
+        # [2026-03-11] 修复原因：ProfileReader必须使用PageDetectorIntegrated（支持YOLO元素检测）
+        # 不能使用profile_detector（PageDetectorDL），因为它不支持元素检测
+        # 强制使用self.detector（PageDetectorIntegrated），确保YOLO元素检测可用
         self.profile_reader = ProfileReader(self.adb, yolo_detector=self.detector)
         
         # 从ModelManager获取OCR线程池
@@ -239,6 +249,47 @@ class XimengAutomation:
         print(f"[DEBUG-启动流程] 函数开始执行 - {time.strftime('%H:%M:%S')}")
         if file_logger:
             file_logger.info(f"启动流程开始 - {time.strftime('%H:%M:%S')}")
+        
+        # [2026-03-11] 修复原因：验号流程需要恢复对应账号的登录缓存
+        if phone:
+            print(f"[DEBUG-启动流程] 开始恢复账号 {phone} 的登录缓存")
+            if file_logger:
+                file_logger.info(f"开始恢复账号 {phone} 的登录缓存")
+            
+            try:
+                # 获取登录缓存管理器
+                from .login_cache_manager import LoginCacheManager
+                cache_manager = LoginCacheManager(self.adb)
+                
+                # 获取预期的用户ID
+                expected_user_id = cache_manager._get_expected_user_id(phone)
+                if expected_user_id:
+                    print(f"[DEBUG-启动流程] 找到预期用户ID: {expected_user_id}")
+                    if file_logger:
+                        file_logger.info(f"找到预期用户ID: {expected_user_id}")
+                    
+                    # 恢复登录缓存
+                    cache_restored = await cache_manager.restore_login_cache(
+                        device_id, phone, package_name, expected_user_id
+                    )
+                    
+                    if cache_restored:
+                        print(f"[DEBUG-启动流程] ✓ 成功恢复账号 {phone} 的登录缓存")
+                        if file_logger:
+                            file_logger.info(f"✓ 成功恢复账号 {phone} 的登录缓存")
+                    else:
+                        print(f"[DEBUG-启动流程] ⚠️ 未找到账号 {phone} 的缓存，将执行登录")
+                        if file_logger:
+                            file_logger.info(f"⚠️ 未找到账号 {phone} 的缓存，将执行登录")
+                else:
+                    print(f"[DEBUG-启动流程] ⚠️ 未找到账号 {phone} 的用户ID映射，将执行登录")
+                    if file_logger:
+                        file_logger.info(f"⚠️ 未找到账号 {phone} 的用户ID映射，将执行登录")
+                        
+            except Exception as cache_error:
+                print(f"[DEBUG-启动流程] ⚠️ 缓存恢复失败: {cache_error}")
+                if file_logger:
+                    file_logger.error(f"缓存恢复失败: {cache_error}")
         
         # 简洁日志：步骤1 - 启动应用
         concise.step(1, "启动应用")
@@ -893,6 +944,17 @@ class XimengAutomation:
         import logging
         from .page_detector import PageState  # 确保 PageState 在函数开头导入
         
+        # [2026-03-10] 修复原因：初始化 file_logger，避免未定义错误
+        file_logger = logging.getLogger(__name__)
+        
+        # [2026-03-10] 修复原因：检查是否有缓存验证时获取的资料数据
+        cached_profile_info = getattr(self, '_cached_profile_info', None)
+        if cached_profile_info:
+            file_logger.info("="*60)
+            file_logger.info("检测到缓存验证时已获取的资料数据")
+            file_logger.info(f"缓存资料: {cached_profile_info}")
+            file_logger.info("="*60)
+        
         # 默认流程配置（全部启用）
         if workflow_config is None:
             workflow_config = {
@@ -1177,8 +1239,22 @@ class XimengAutomation:
                 # 文件日志记录详细信息
                 file_logger.info(f"步骤{step_number}: 获取初始个人资料")
                 
-                profile_success = False
-                profile_data = None
+                # [2026-03-10] 修复原因：优先使用缓存验证时获取的资料数据
+                if cached_profile_info:
+                    file_logger.info("使用缓存验证时已获取的资料数据")
+                    profile_success = True
+                    profile_data = cached_profile_info
+                    
+                    # 清除缓存数据，避免重复使用
+                    self._cached_profile_info = None
+                    
+                    # 显示使用缓存数据的日志
+                    concise.success("使用缓存资料")
+                    file_logger.info(f"缓存资料数据: {profile_data}")
+                else:
+                    # 正常获取资料流程
+                    profile_success = False
+                    profile_data = None
                 
                 # 尝试最多3次获取个人资料
                 for attempt in range(3):
@@ -1625,7 +1701,8 @@ class XimengAutomation:
                             result.balance_before = 0.0
                         
                         # 构建 profile_data 字典，传递给 do_checkin
-                        if result.balance_before is not None or result.nickname or result.user_id:
+                        # [2026-03-11] 修复原因：只要有余额记录就构建profile_data，不依赖nickname和user_id
+                        if result.balance_before is not None:
                             updated_profile_data = {
                                 'balance': result.balance_before,  # 从数据库或个人页获取的余额
                                 'points': result.points,
@@ -1936,7 +2013,8 @@ class XimengAutomation:
                                             device_id,
                                             recipient_id,
                                             initial_balance=result.checkin_balance_after,
-                                            log_callback=log
+                                            log_callback=log,
+                                            gui_logger=gui_logger_obj
                                         )
                                         
                                         # 如果转账成功，跳出重试循环

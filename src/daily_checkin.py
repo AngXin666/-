@@ -396,17 +396,17 @@ class DailyCheckin:
                 #     log(f"    签到次数: {checkin_total_times} 次")
             elif allow_skip_profile:
                 # 快速签到模式：完全不去个人页，使用从数据库获取的余额
-                log(f"  [签到] 快速签到模式：使用数据库余额（不去个人页）...")
+                log(f"  [签到] 快速签到模式：跳过个人页获取资料...")
                 profile_success = True  # 标记为成功，允许继续
                 
-                # [2026-03-02] 修复原因：余额已在调用前从数据库或个人页获取，直接使用
-                # 从 profile_data 中获取余额（已从数据库或个人页获取）
+                # [2026-03-11] 修复原因：快速签到模式下，没有历史记录就设置余额为0
+                # 从 profile_data 中获取余额（如果有的话）
                 if profile_data and profile_data.get('balance') is not None:
                     balance = profile_data.get('balance')
-                    log(f"  [签到] ✓ 使用余额: {balance:.2f} 元")
+                    log(f"  [签到] ✓ 使用数据库余额: {balance:.2f} 元")
                 else:
-                    log(f"  [签到] ⚠️ 无余额记录，将无法计算签到奖励")
-                    balance = None
+                    balance = 0.0
+                    log(f"  [签到] ⚠️ 无历史记录，设置余额为 0.00 元")
                 
                 points = None
                 vouchers = None
@@ -429,6 +429,7 @@ class DailyCheckin:
                         # 2. 获取完整个人资料
                         concise.action("读取个人资料")
                         from .profile_reader import ProfileReader
+                        # [2026-03-11] 修复原因：使用PageDetectorIntegrated（已添加find_button_yolo方法）
                         profile_reader = ProfileReader(self.adb, self.detector)
                         profile_data = await profile_reader.get_full_profile(device_id)
                         
@@ -852,15 +853,34 @@ class DailyCheckin:
             # 优化：第一次循环时，使用已知的页面状态（从 wait_for_page 返回）
             current_state = page_result.state if page_result else PageState.UNKNOWN
             
+            # [2026-03-11] 修复原因：快速签到模式下减少页面验证，提升性能
+            quick_mode_optimization = allow_skip_profile  # 快速签到模式标志
+            
             for attempt in range(max_attempts):
                 # 5.0 每次循环前验证仍在签到页面
                 # 优化：第一次循环跳过验证（已经知道页面状态）
-                # 优化：快速签到模式下跳过验证（刚从首页重新进入签到页）
-                if attempt > 0 and not skip_page_verification:
+                # 优化：快速签到模式下大幅减少验证频率（每3次循环验证1次）
+                should_verify = attempt > 0 and not skip_page_verification
+                if quick_mode_optimization and should_verify:
+                    # 快速签到模式：每3次循环才验证1次页面状态
+                    should_verify = (attempt % 3 == 0)
+                
+                if should_verify:
                     # log(f"  [签到循环 {attempt+1}/{max_attempts}] 验证页面状态...")  # [2026-03-01] 精简日志：删除中间步骤
                     
-                    # [2026-03-01] 修复：使用签到专用检测器进行页面分类
-                    page_result_loop = await self.page_classifier.detect_page(device_id, use_cache=False)
+                    # [2026-03-11] 修复原因：快速签到模式下使用缓存检测，提升性能
+                    if quick_mode_optimization:
+                        # 快速签到模式：使用缓存检测，减少深度学习推理
+                        page_result_loop = await self._detect_page_cached(
+                            device_id, 
+                            use_cache=True,  # 使用缓存
+                            cache_key=f"quick_checkin_{attempt}",
+                            ttl=2.0  # 缓存2秒
+                        )
+                    else:
+                        # 完整模式：正常检测
+                        page_result_loop = await self.page_classifier.detect_page(device_id, use_cache=False)
+                    
                     current_state = page_result_loop.state if page_result_loop else PageState.UNKNOWN
                 else:
                     # 第一次循环：使用已知的页面状态
@@ -1560,11 +1580,11 @@ class DailyCheckin:
                     await asyncio.sleep(TimeoutsConfig.WAIT_MEDIUM)
                     
                     # 使用正常流程的方式：get_full_profile_with_retry（带重试机制）
-                    # [2026-03-02] 修复：传入资料专用检测器
-                    # 资料专用检测器包含：个人页已登陆、个人页未登陆、首页、签到页
+                    # [2026-03-11] 修复原因：必须使用self.detector（PageDetectorIntegrated）而不是self.profile_classifier（PageDetectorDL）
+                    # PageDetectorDL不支持YOLO元素检测，会导致个人页元素检测失败
                     concise.action("读取个人资料")
                     from .profile_reader import ProfileReader
-                    profile_reader = ProfileReader(self.adb, self.profile_classifier)
+                    profile_reader = ProfileReader(self.adb, self.detector)
                     account_str = f"{phone}----{password}" if password else phone
                     # 改用带重试的方法，和正常流程完全一样
                     profile_task = profile_reader.get_full_profile_with_retry(device_id, account=account_str, max_retries=3)

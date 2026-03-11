@@ -68,16 +68,35 @@ class ProfileReader:
         self._yolo_detector = None
         
         if yolo_detector:
+            # [2026-03-11] 添加详细的类型检查（保存到文件）
+            from .logger import get_logger
+            debug_logger = get_logger()
+            debug_logger.info(f"[ProfileReader] 传入检测器类型: {type(yolo_detector)}")
+            debug_logger.info(f"[ProfileReader] 检测器类名: {yolo_detector.__class__.__name__}")
+            print(f"[ProfileReader] 传入检测器类型: {type(yolo_detector)}")
+            print(f"[ProfileReader] 检测器类名: {yolo_detector.__class__.__name__}")
+            
             # 检查是否是YOLO检测器（PageDetectorIntegrated 或 PageDetectorDL）
             if hasattr(yolo_detector, 'detect_page'):
-                self._integrated_detector = yolo_detector
-                print(f"[ProfileReader] ✓ 使用传入的检测器")
+                # 进一步检查是否是PageDetectorIntegrated
+                if yolo_detector.__class__.__name__ == 'PageDetectorIntegrated':
+                    self._integrated_detector = yolo_detector
+                    debug_logger.info(f"[ProfileReader] ✓ 使用PageDetectorIntegrated检测器")
+                    print(f"[ProfileReader] ✓ 使用PageDetectorIntegrated检测器")
+                else:
+                    debug_logger.warning(f"[ProfileReader] ⚠️ 检测器有detect_page方法但不是PageDetectorIntegrated: {yolo_detector.__class__.__name__}")
+                    debug_logger.info(f"[ProfileReader] ✓ 使用传入的检测器（可能不支持元素检测）")
+                    print(f"[ProfileReader] ⚠️ 检测器有detect_page方法但不是PageDetectorIntegrated: {yolo_detector.__class__.__name__}")
+                    self._integrated_detector = yolo_detector
+                    print(f"[ProfileReader] ✓ 使用传入的检测器（可能不支持元素检测）")
             # 检查是否是PageDetector对象，提取其中的_yolo_detector
             elif hasattr(yolo_detector, '_yolo_detector'):
                 self._yolo_detector = yolo_detector._yolo_detector
+                debug_logger.info(f"[ProfileReader] ✓ YOLO检测器已初始化（从PageDetector提取）")
                 print(f"[ProfileReader] ✓ YOLO检测器已初始化（从PageDetector提取）")
             else:
                 self._yolo_detector = yolo_detector
+                debug_logger.info(f"[ProfileReader] ✓ YOLO检测器已初始化")
                 print(f"[ProfileReader] ✓ YOLO检测器已初始化")
         else:
             print(f"[ProfileReader] ✗ 检测器为None，将使用OCR降级方案")
@@ -193,6 +212,19 @@ class ProfileReader:
             # [2026-02-22] 删除调试日志
             
             # [2026-02-21] 删除学习器：移除 OCRRegionLearner
+            
+            # [2026-03-11] 修复原因：添加详细调试日志，追踪检测器类型（保存到文件）
+            from .logger import get_logger
+            debug_logger = get_logger()
+            debug_logger.info(f"  [DEBUG-_get_dynamic_data_only] self._integrated_detector类型: {type(self._integrated_detector)}")
+            debug_logger.info(f"  [DEBUG-_get_dynamic_data_only] 检测器类名: {self._integrated_detector.__class__.__name__ if self._integrated_detector else 'None'}")
+            print(f"  [DEBUG-_get_dynamic_data_only] self._integrated_detector类型: {type(self._integrated_detector)}")
+            print(f"  [DEBUG-_get_dynamic_data_only] 检测器类名: {self._integrated_detector.__class__.__name__ if self._integrated_detector else 'None'}")
+            if self._integrated_detector:
+                debug_logger.info(f"  [DEBUG-_get_dynamic_data_only] 是否有find_button_yolo: {hasattr(self._integrated_detector, 'find_button_yolo')}")
+                debug_logger.info(f"  [DEBUG-_get_dynamic_data_only] 是否有detect_page: {hasattr(self._integrated_detector, 'detect_page')}")
+                print(f"  [DEBUG-_get_dynamic_data_only] 是否有find_button_yolo: {hasattr(self._integrated_detector, 'find_button_yolo')}")
+                print(f"  [DEBUG-_get_dynamic_data_only] 是否有detect_page: {hasattr(self._integrated_detector, 'detect_page')}")
             
             if self._integrated_detector:
                 detection_result = await self._integrated_detector.detect_page(
@@ -809,13 +841,22 @@ class ProfileReader:
                 # [2026-03-01] 修复：检查 elements 属性是否存在（PageDetectorDL 不支持元素检测）
                 # [2026-03-05] 修复数组比较错误：使用 is not None 和 len() 检查
                 has_elements = hasattr(detection_result, 'elements') and detection_result.elements is not None and len(detection_result.elements) > 0
-                if has_elements:
-                    print(f"  [YOLO] 检测到 {len(detection_result.elements)} 个元素")
-                    # 打印检测到的元素详情
-                    for elem in detection_result.elements:
-                        pass  # [2026-02-22] 删除调试日志
+                
+                # [2026-03-11] 修复原因：兼容PageDetectionResult和IntegratedDetectionResult两种类型
+                # 检查是否是IntegratedDetectionResult（有elements属性）
+                if hasattr(detection_result, 'elements') and detection_result.elements is not None:
+                    has_elements = len(detection_result.elements) > 0
+                    if has_elements:
+                        print(f"  [YOLO] 检测到 {len(detection_result.elements)} 个元素")
+                        # 打印检测到的元素详情
+                        for elem in detection_result.elements:
+                            pass  # [2026-02-22] 删除调试日志
+                    else:
+                        print(f"  [YOLO] YOLO检测完成，但未检测到元素")
                 else:
-                    print(f"  [YOLO] 未检测到元素（当前检测器不支持元素检测）")
+                    # PageDetectionResult类型，没有elements属性，跳过YOLO元素检测
+                    print(f"  [YOLO] 检测器类型不支持元素检测，跳过YOLO优化")
+                    has_elements = False
                 
                 # ===== 优化：全屏OCR一次，然后根据YOLO位置匹配文本 =====
                 # [2026-03-01] 修复：检查 elements 属性是否存在
