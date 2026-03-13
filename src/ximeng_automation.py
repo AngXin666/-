@@ -1279,20 +1279,30 @@ class XimengAutomation:
                             file_logger.info(f"缓存登录验证总耗时: {int(cache_check_time)}秒")
                         else:
                             # 导航到个人资料页面（使用统一的广告处理方法）
-                            concise.action("进入个人页")
+                            # [2026-03-13] 修复原因：登录成功后可能已经在个人页，先检测再决定是否导航
+                            # 检测当前页面状态
+                            page_result = await self.profile_detector.detect_page(device_id, use_cache=False)
                             
-                            # [2026-03-05] 添加调试日志：导航前的状态
-                            file_logger.info("[DEBUG-导航] 准备导航到个人页...")
-                            file_logger.info(f"[DEBUG-导航] 设备ID: {device_id}")
-                            file_logger.info(f"[DEBUG-导航] 尝试次数: {attempt + 1}/3")
-                            
-                            nav_start = time.time()
-                            nav_success = await self._navigate_to_profile_with_ad_handling(device_id, log)
-                            nav_time = time.time() - nav_start
-                            
-                            # [2026-03-05] 添加调试日志：导航结果
-                            file_logger.info(f"[DEBUG-导航] 导航结果: {'成功' if nav_success else '失败'}")
-                            file_logger.info(f"[DEBUG-导航] 导航耗时: {int(nav_time)}秒")
+                            if page_result and page_result.state == PageState.PROFILE_LOGGED:
+                                # 已经在个人页，跳过导航
+                                file_logger.info("当前已在个人页（已登录），跳过导航")
+                                nav_success = True
+                            else:
+                                # 不在个人页，需要导航
+                                concise.action("进入个人页")
+                                
+                                # [2026-03-05] 添加调试日志：导航前的状态
+                                file_logger.info("[DEBUG-导航] 准备导航到个人页...")
+                                file_logger.info(f"[DEBUG-导航] 设备ID: {device_id}")
+                                file_logger.info(f"[DEBUG-导航] 尝试次数: {attempt + 1}/3")
+                                
+                                nav_start = time.time()
+                                nav_success = await self._navigate_to_profile_with_ad_handling(device_id, log)
+                                nav_time = time.time() - nav_start
+                                
+                                # [2026-03-05] 添加调试日志：导航结果
+                                file_logger.info(f"[DEBUG-导航] 导航结果: {'成功' if nav_success else '失败'}")
+                                file_logger.info(f"[DEBUG-导航] 导航耗时: {int(nav_time)}秒")
                             
                             if not nav_success:
                                 log(f"⚠️ 导航到个人资料页面失败")
@@ -1676,6 +1686,12 @@ class XimengAutomation:
                     async def login_callback_wrapper(dev_id, phone_num, pwd):
                         """登录回调包装器"""
                         return await self.auto_login.login(dev_id, phone_num, pwd)
+                    
+                    # [2026-03-13] 修复原因：签到前必须导航到首页
+                    # 签到流程需要在首页点击签到按钮
+                    file_logger.info("签到前导航到首页...")
+                    await self.navigator.navigate_to_home(device_id)
+                    await asyncio.sleep(1)  # 等待页面稳定
                     
                     # [2026-03-03] 修复原因：快速签到模式始终跳过个人页导航
                     # 快速模式不需要导航到个人页，直接使用数据库余额
