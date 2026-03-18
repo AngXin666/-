@@ -4298,23 +4298,38 @@ class AutomationGUI:
         if self.stop_event.is_set():
             return
         
+        # [2026-03-18] 修改原因：修复重新选择账号执行时直接完成的问题
         # 统计未勾选账号数（需要处理的账号数）和勾选账号数（视为已成功）
-        # 只统计当前显示的（未被detach的）账号
+        # 基于账号文件中的账号，而不是表格中的账号
         unchecked_phones = set()
         checked_count = 0  # 勾选的账号数量（视为已成功）
+        
+        # 创建表格中账号的映射 {phone: (item_id, is_checked)}
+        table_accounts = {}
         with self.stats_lock:
-            # 获取当前显示的项目（未被detach的）
             visible_items = self.results_tree.get_children()
             for item_id in visible_items:
                 values = self.results_tree.item(item_id, 'values')
                 if values and len(values) > 0:
                     phone = values[0]
-                    if self.checked_items.get(item_id, False):
-                        # 勾选的账号，视为已成功
-                        checked_count += 1
-                    else:
-                        # 未勾选的账号，需要处理
-                        unchecked_phones.add(phone)
+                    is_checked = self.checked_items.get(item_id, False)
+                    table_accounts[phone] = (item_id, is_checked)
+        
+        # 遍历账号文件中的所有账号
+        for account in accounts:
+            phone = account.phone
+            if phone in table_accounts:
+                # 账号在表格中，检查勾选状态
+                item_id, is_checked = table_accounts[phone]
+                if is_checked:
+                    # 勾选的账号，视为已成功
+                    checked_count += 1
+                else:
+                    # 未勾选的账号，需要处理
+                    unchecked_phones.add(phone)
+            else:
+                # 账号不在表格中，视为未勾选（需要处理）
+                unchecked_phones.add(phone)
         
         unchecked_count = len(unchecked_phones)
         
