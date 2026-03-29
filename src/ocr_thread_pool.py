@@ -111,6 +111,10 @@ class OCRThreadPool:
             thread_name_prefix="OCR-Worker"
         )
         
+        # [2026-03-29] 修改原因：添加全局并发控制，限制同时执行的OCR数量为5个，避免CPU/GPU资源竞争
+        self._semaphore = None  # 延迟初始化（在异步环境中）
+        self._max_concurrent = 5  # 最多5个并发OCR
+        
         # 结果缓存（最多缓存200个结果，保留60分钟 - 整个会话期间）
         self._cache: Dict[str, OCRResult] = {}
         self._cache_lock = threading.Lock()
@@ -260,19 +264,25 @@ class OCRThreadPool:
         if not HAS_OCR or not HAS_PIL:
             return OCRResult(texts=[])
         
+        # [2026-03-29] 修改原因：延迟初始化Semaphore（必须在异步环境中）
+        if self._semaphore is None:
+            self._semaphore = asyncio.Semaphore(self._max_concurrent)
+        
         try:
-            # 在线程池中执行 OCR
-            loop = asyncio.get_event_loop()
-            result = await asyncio.wait_for(
-                loop.run_in_executor(
-                    self._executor,
-                    self._ocr_sync,
-                    image,
-                    use_cache
-                ),
-                timeout=timeout
-            )
-            return result
+            # [2026-03-29] 修改原因：使用Semaphore限制并发，避免资源竞争
+            async with self._semaphore:
+                # 在线程池中执行 OCR
+                loop = asyncio.get_event_loop()
+                result = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        self._executor,
+                        self._ocr_sync,
+                        image,
+                        use_cache
+                    ),
+                    timeout=timeout
+                )
+                return result
             
         except asyncio.TimeoutError:
             print(f"  [OCR线程池] OCR 识别超时（{timeout}秒）")

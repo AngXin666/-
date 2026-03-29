@@ -31,13 +31,12 @@ class Navigator:
         """
         self.adb = adb
         
-        # [2026-03-05] 修复原因：获取通用分类器用于页面状态检测
-        # page_detector_integrated 只做YOLO元素检测，不做页面分类
-        # 需要使用通用分类器来检测页面状态
+        # [2026-03-10] 修复原因：导航器只负责导航操作，不做页面检测
+        # 页面检测由调用方使用专用模型负责
         from .model_manager import ModelManager
         model_manager = ModelManager.get_instance()
         
-        # 如果没有提供检测器，从ModelManager获取共享的YOLO识别器
+        # 如果没有提供检测器，从ModelManager获取共享的YOLO识别器（用于元素检测）
         if detector is None:
             self.detector = model_manager.get_page_detector_integrated()
             print(f"[Navigator] 从ModelManager获取共享的YOLO识别器")
@@ -45,8 +44,11 @@ class Navigator:
             # 使用传入的检测器（应该是从ModelManager获取的共享实例）
             self.detector = detector
         
-        # [2026-03-05] 获取通用分类器用于页面状态检测
-        self.general_classifier = model_manager.get_general_classifier()
+        # [2026-03-17] 修复原因：Navigator需要profile_detector来检测个人页状态
+        self.profile_detector = model_manager.get_profile_detector()
+        if not self.profile_detector:
+            # 如果专用检测器未加载，使用通用检测器作为降级
+            self.profile_detector = self.detector
         
         # 详细日志已关闭，保持日志整洁
         # 如需调试YOLO检测问题，可以取消下面的注释
@@ -216,316 +218,92 @@ class Navigator:
         return True
     
     async def navigate_to_profile(self, device_id: str, max_attempts: int = 3) -> bool:
-        """导航到个人页并处理广告（统一方法）
+        """导航到个人页（简化版，只负责导航操作）
         
-        核心逻辑（与 _navigate_to_profile_with_ad_handling 一致）：
-        1. 点击"我的"按钮（YOLO + OCR）
-        2. 高频扫描页面状态（每0.05秒）
-        3. 检测到广告 → 立即用返回键关闭 → 继续扫描
-        4. 检测到正常个人页 → 返回成功
-        5. 超时（5秒）→ 重试
+        [2026-03-10] 修复原因：导航器只负责导航操作，页面检测由调用方负责
+        Navigator 只负责点击"我的"按钮，页面状态检测由调用方使用专用模型负责
         
         Args:
             device_id: 设备ID
-            max_attempts: 最大尝试次数（默认3次）
+            max_attempts: 最大尝试次数（保留参数以兼容旧代码）
             
         Returns:
-            bool: 是否成功到达我的页面
+            bool: 始终返回True（表示已执行导航操作）
         """
-        self._silent_log.info(f"[导航到我的页面] 开始导航，最多尝试 {max_attempts} 次")
+        self._silent_log.info(f"[导航到我的页面] 执行导航操作")
         
-        for attempt in range(max_attempts):
-            self._silent_log.info(f"[导航到我的页面] 尝试 {attempt + 1}/{max_attempts}")
+        # 定义辅助函数：YOLO + OCR检测按钮
+        async def try_detect_and_tap(button_name: str, model_name: str = '首页') -> bool:
+            # 1. 尝试YOLO（使用正确的类别名称）
+            yolo_class_name = f"{button_name}按钮" if model_name == '首页' else button_name
+            button_pos = await self.detector.find_button_yolo(
+                device_id, 
+                model_name,
+                yolo_class_name,
+                conf_threshold=0.5
+            )
             
-            # [2026-03-05] 修复原因：使用通用分类器检测页面状态
-            # page_detector_integrated 只做YOLO元素检测，返回UNKNOWN
-            # 需要使用通用分类器来检测页面状态
-            if self.general_classifier:
-                # 使用通用分类器检测页面
-                from .screen_capture import ScreenCapture
-                screen_capture = ScreenCapture(self.adb)
-                screenshot_np = await screen_capture.capture(device_id)
-                
-                if screenshot_np:
-                    from PIL import Image
-                    import cv2
-                    screenshot = Image.fromarray(cv2.cvtColor(screenshot_np, cv2.COLOR_BGR2RGB))
-                    
-                    # 使用通用分类器预测
-                    from torchvision import transforms
-                    import torch
-                    
-                    transform = transforms.Compose([
-                        transforms.Resize((224, 224)),
-                        transforms.ToTensor(),
-                        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-                    ])
-                    
-                    image_tensor = transform(screenshot).unsqueeze(0)
-                    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-                    image_tensor = image_tensor.to(device)
-                    
-                    with torch.no_grad():
-                        output = self.general_classifier._model(image_tensor)
-                        probabilities = torch.nn.functional.softmax(output, dim=1)
-                        confidence, predicted = probabilities.max(1)
-                        
-                        # 加载类别
-                        import json
-                        from pathlib import Path
-                        classes_path = Path(__file__).parent.parent / "models" / "page_classes.json"
-                        with open(classes_path, 'r', encoding='utf-8') as f:
-                            classes = json.load(f)
-                        
-                        predicted_class = classes[predicted.item()]
-                        
-                        # 映射到PageState
-                        from .page_detector import PageState
-                        page_state_map = {
-                            "首页": PageState.HOME,
-                            "个人页已登陆": PageState.PROFILE_LOGGED,
-                            "个人页未登陆": PageState.PROFILE,
-                            "个人页广告": PageState.PROFILE_AD,
-                            "登录页": PageState.LOGIN,
-                        }
-                        
-                        current_state = page_state_map.get(predicted_class, PageState.UNKNOWN)
-                        self._silent_log.info(f"[导航到我的页面] 当前页面: {current_state.value} (通用分类器: {predicted_class}, 置信度: {confidence.item():.2%})")
-                else:
-                    # 截图失败，使用YOLO检测器
-                    page_result = await self.detector.detect_page(
-                        device_id, use_cache=False, detect_elements=False
-                    )
-                    current_state = page_result.state if page_result else PageState.UNKNOWN
-                    self._silent_log.info(f"[导航到我的页面] 当前页面: {current_state.value} (YOLO)")
-            else:
-                # 没有通用分类器，使用YOLO检测器
-                page_result = await self.detector.detect_page(
-                    device_id, use_cache=False, detect_elements=False
-                )
-                current_state = page_result.state if page_result else PageState.UNKNOWN
-                self._silent_log.info(f"[导航到我的页面] 当前页面: {current_state.value} (YOLO)")
-                
-                # 已经在我的页面
-                if current_state in [PageState.PROFILE, PageState.PROFILE_LOGGED]:
-                    self._silent_log.info(f"[导航到我的页面] ✓ 已在我的页面")
+            if button_pos:
+                # 验证位置是否在底部导航栏区域（y > 850）
+                if button_pos[1] > 850:
+                    self._silent_log.log(f"  YOLO检测到'{button_name}'按钮: {button_pos}")
+                    await self.adb.tap(device_id, button_pos[0], button_pos[1])
                     return True
-                
-                # 第1类：需要返回首页的页面（说明不在个人页区域）
-                pages_need_go_home = [
-                    PageState.ARTICLE,   # 文章页
-                    PageState.SEARCH,    # 搜索页
-                    PageState.CATEGORY,  # 分类页
-                ]
-                
-                # 第2类：需要返回个人页的页面（说明在个人页区域的子页面）
-                pages_need_go_back = [
-                    PageState.SETTINGS,           # 设置页
-                    PageState.TRANSACTION_HISTORY,# 交易流水页
-                    PageState.COUPON,             # 优惠券页
-                    PageState.POINTS_PAGE,        # 积分页
-                ]
-                
-                # 处理第1类：返回首页
-                if current_state in pages_need_go_home:
-                    self._silent_log.info(f"[导航到我的页面] 检测到{current_state.value}，需要先返回首页...")
-                    
-                    # 点击首页按钮
-                    if current_state == PageState.CATEGORY:
-                        # 分类页：使用YOLO检测首页按钮
-                        home_button_pos = await self.detector.find_button_yolo(
-                            device_id, 
-                            '分类页',
-                            '首页按钮',
-                            conf_threshold=0.5
-                        )
-                        if home_button_pos:
-                            await self.adb.tap(device_id, home_button_pos[0], home_button_pos[1])
-                        else:
-                            # 降级：使用默认坐标
-                            await self.adb.tap(device_id, self.TAB_HOME[0], self.TAB_HOME[1])
-                    else:
-                        # 其他页面：优先点击返回按钮，失败则按返回键
-                        back_button_pos = await self.detector.find_button_yolo(
-                            device_id, 
-                            current_state.value,
-                            '返回按钮',
-                            conf_threshold=0.5
-                        )
-                        if back_button_pos:
-                            await self.adb.tap(device_id, back_button_pos[0], back_button_pos[1])
-                        else:
-                            # 降级：按返回键
-                            await self.adb.press_back(device_id)
-                    
-                    await asyncio.sleep(1)
-                    self.detector.clear_cache(device_id)
-                    continue
-                
-                # 处理第2类：返回个人页
-                if current_state in pages_need_go_back:
-                    self._silent_log.info(f"[导航到我的页面] 检测到{current_state.value}，按返回键返回个人页...")
-                    
-                    # 优先点击返回按钮（YOLO），失败则按返回键
-                    back_button_pos = await self.detector.find_button_yolo(
-                        device_id, 
-                        current_state.value if current_state != PageState.POINTS_PAGE else '积分页',
-                        '返回按钮',
-                        conf_threshold=0.5
-                    )
-                    if back_button_pos:
-                        self._silent_log.info(f"  YOLO检测到返回按钮: {back_button_pos}")
-                        await self.adb.tap(device_id, back_button_pos[0], back_button_pos[1])
-                    else:
-                        # 降级：按返回键
-                        self._silent_log.info(f"  使用返回键")
-                        await self.adb.press_back(device_id)
-                    
-                    await asyncio.sleep(1)
-                    self.detector.clear_cache(device_id)
-                    
-                    # 检查是否已经回到个人页
-                    page_result = await self.detector.detect_page(device_id, use_cache=False, detect_elements=False)
-                    if page_result and page_result.state in [PageState.PROFILE, PageState.PROFILE_LOGGED]:
-                        self._silent_log.info(f"[导航到我的页面] ✓ 已返回到个人页")
-                        return True
-                    else:
-                        self._silent_log.info(f"[导航到我的页面] ⚠️ 返回后页面状态: {page_result.state.value if page_result else 'unknown'}，重试...")
-                        continue
+                else:
+                    self._silent_log.log(f"  YOLO检测到'{button_name}'按钮: {button_pos}，但不在底部导航栏区域，忽略")
             
-            # 确保在首页
-            # [2026-03-05] 修复原因：page_result 可能未定义，需要重新检测
-            page_result = await self.detector.detect_page(device_id, use_cache=False, detect_elements=False)
-            if page_result and page_result.state not in [PageState.HOME]:
-                self._silent_log.info(f"[导航到我的页面] 当前不在首页，先返回首页...")
-                success = await self.navigate_to_home(device_id, max_attempts=2)
-                if not success:
-                    self._silent_log.info(f"[导航到我的页面] ⚠️ 无法返回首页，重试...")
-                    continue
-                await asyncio.sleep(0.5)
+            # 2. 降级到OCR
+            self._silent_log.log(f"  YOLO未检测到，尝试OCR...")
+            ocr_pos = await self.screen_capture.find_text_location(device_id, button_name)
             
-            # 定义辅助函数：YOLO + OCR检测按钮
-            async def try_detect_and_tap(button_name: str, model_name: str = '首页') -> bool:
-                # 1. 尝试YOLO（使用正确的类别名称）
-                # 注意：首页模型的类别名称是 '我的按钮'、'每日签到按钮'（带"按钮"后缀）
-                # avatar_homepage模型的类别名称是 '首页按钮'、'头像'（带"按钮"后缀）
-                yolo_class_name = f"{button_name}按钮" if model_name == '首页' else button_name
-                button_pos = await self.detector.find_button_yolo(
-                    device_id, 
-                    model_name,
-                    yolo_class_name,  # 使用正确的类别名称
-                    conf_threshold=0.5
-                )
-                
-                if button_pos:
-                    # 验证位置是否在底部导航栏区域（y > 850）
-                    if button_pos[1] > 850:
-                        self._silent_log.log(f"  YOLO检测到'{button_name}'按钮: {button_pos}")
-                        await self.adb.tap(device_id, button_pos[0], button_pos[1])
-                        return True
-                    else:
-                        self._silent_log.log(f"  YOLO检测到'{button_name}'按钮: {button_pos}，但不在底部导航栏区域，忽略")
-                
-                # 2. 降级到OCR
-                self._silent_log.log(f"  YOLO未检测到，尝试OCR...")
-                ocr_pos = await self.screen_capture.find_text_location(device_id, button_name)
-                
-                if ocr_pos:
-                    # 验证位置是否在底部导航栏区域（y > 850）
-                    if ocr_pos[1] > 850:
-                        self._silent_log.log(f"  OCR检测到'{button_name}'按钮: {ocr_pos}")
-                        await self.adb.tap(device_id, ocr_pos[0], ocr_pos[1])
-                        return True
-                    else:
-                        self._silent_log.log(f"  OCR检测到'{button_name}'按钮: {ocr_pos}，但不在底部导航栏区域，忽略")
-                
-                # 3. 使用默认坐标作为最后的降级方案
-                self._silent_log.log(f"  检测失败，使用默认坐标: {self.TAB_MY}")
-                await self.adb.tap(device_id, self.TAB_MY[0], self.TAB_MY[1])
-                return True
+            if ocr_pos:
+                # 验证位置是否在底部导航栏区域（y > 850）
+                if ocr_pos[1] > 850:
+                    self._silent_log.log(f"  OCR检测到'{button_name}'按钮: {ocr_pos}")
+                    await self.adb.tap(device_id, ocr_pos[0], ocr_pos[1])
+                    return True
+                else:
+                    self._silent_log.log(f"  OCR检测到'{button_name}'按钮: {ocr_pos}，但不在底部导航栏区域，忽略")
             
-            # 尝试检测并点击"我的"按钮（使用首页模型）
-            success = await try_detect_and_tap("我的", "首页")
-            
-            if not success:
-                self._silent_log.info(f"  未检测到'我的'按钮，可能不在首页，尝试先导航到首页...")
-                
-                # 尝试点击首页按钮（使用分类页模型）
-                # 注意：首页模型没有"首页按钮"类别，只有"我的按钮"和"每日签到按钮"
-                # 所以这里使用分类页模型
-                home_success = await try_detect_and_tap("首页", "分类页")
-                
-                if home_success:
-                    self._silent_log.info(f"  已点击首页，等待页面加载...")
-                    await asyncio.sleep(0.5)
-                    
-                    # 再次尝试点击"我的"按钮（此时在首页，使用首页模型）
-                    success = await try_detect_and_tap("我的", "首页")
-                
-                # 如果所有检测方法都失败，已经使用了默认坐标
-                if not success:
-                    self._silent_log.info(f"  ❌ 所有检测方法都失败，但已使用默认坐标")
-                    success = True  # 标记为成功，因为已经点击了默认坐标
-            
-            # 点击"我的"后，等1秒
+            # 3. 使用默认坐标作为最后的降级方案
+            self._silent_log.log(f"  检测失败，使用默认坐标: {self.TAB_MY}")
+            await self.adb.tap(device_id, self.TAB_MY[0], self.TAB_MY[1])
+            return True
+        
+        # 尝试检测并点击"我的"按钮
+        success = await try_detect_and_tap("我的", "首页")
+        
+        if success:
+            self._silent_log.info(f"[导航到我的页面] ✓ 已点击'我的'按钮")
+            # [2026-03-11] 修复原因：双重保险 - 先等待1秒按返回键，再智能检测
+            # 第一次：等待1秒后按返回键（预防性关闭可能的广告）
             await asyncio.sleep(1.0)
-            
-            # 按返回键
             await self.adb.press_back(device_id)
+            self._silent_log.info(f"[导航到我的页面] 已按返回键（预防性关闭广告）")
             
-            # 清除缓存
-            self.detector.clear_cache(device_id)
-            
-            # 开始检测页面状态和高频扫描
-            max_scan_time = 5.0
-            scan_interval = 0.05  # 每50毫秒扫描一次
+            # 第二次：智能检测，如果还有广告再按一次
+            max_wait = 2.0  # 再等2秒
+            check_interval = 0.1
             start_time = asyncio.get_event_loop().time()
-            ad_closed_count = 1  # 已经按了一次返回键
             
-            while (asyncio.get_event_loop().time() - start_time) < max_scan_time:
-                # 检测当前页面状态
-                page_result = await self.detector.detect_page(
-                    device_id, use_cache=False, detect_elements=False
-                )
-                
-                if not page_result or not page_result.state:
-                    await asyncio.sleep(scan_interval)
-                    continue
-                
-                current_state = page_result.state
-                
-                # 检测到正常个人页 → 成功
-                if current_state in [PageState.PROFILE, PageState.PROFILE_LOGGED]:
-                    elapsed = asyncio.get_event_loop().time() - start_time
-                    self._silent_log.info(f"  ✓ 到达个人页（耗时: {elapsed:.1f}秒，关闭广告: {ad_closed_count}次）")
-                    return True
-                
-                # 检测到广告 → 立即用返回键关闭
-                elif current_state == PageState.PROFILE_AD:
-                    self._silent_log.info(f"  ⚠️ 检测到个人页广告，使用返回键关闭...")
-                    await self.adb.press_back(device_id)
-                    ad_closed_count += 1
-                    
-                    # 等待0.3秒让广告关闭动画完成
-                    await asyncio.sleep(0.3)
-                    
-                    # 清除缓存
-                    self.detector.clear_cache(device_id)
-                    
-                    # 继续扫描（可能还有广告，或者已经到达个人页）
-                    continue
-                
-                # 其他状态 → 继续扫描
-                else:
-                    await asyncio.sleep(scan_interval)
-            
-            # 超时，记录日志并重试
-            elapsed = asyncio.get_event_loop().time() - start_time
-            self._silent_log.info(f"  ❌ 导航到个人页超时（耗时: {elapsed:.1f}秒，关闭广告: {ad_closed_count}次），重试...")
+            while (asyncio.get_event_loop().time() - start_time) < max_wait:
+                page_result = await self.profile_detector.detect_page(device_id, use_cache=False)
+                if page_result and page_result.state:
+                    from .page_detector import PageState
+                    # 如果还检测到广告页，再按一次返回键
+                    if page_result.state == PageState.PROFILE_AD:
+                        self._silent_log.info(f"[导航到我的页面] ⚠️ 仍检测到广告页，再次按返回键")
+                        await self.adb.press_back(device_id)
+                        break
+                    # 检测到正常个人页，结束
+                    elif page_result.state in [PageState.PROFILE, PageState.PROFILE_LOGGED]:
+                        self._silent_log.info(f"[导航到我的页面] ✓ 已到达个人页")
+                        break
+                await asyncio.sleep(check_interval)
+        else:
+            self._silent_log.info(f"[导航到我的页面] ⚠️ 点击'我的'按钮失败，但已使用默认坐标")
         
-        # 所有尝试都失败
-        self._silent_log.info(f"[导航到我的页面] ✗ 所有尝试都失败")
-        return False
+        return True  # 始终返回True，表示已执行导航操作
     
     async def navigate_to_cart(self, device_id: str, max_attempts: int = 5) -> bool:
         """导航到购物车页面

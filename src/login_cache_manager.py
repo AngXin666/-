@@ -1,4 +1,4 @@
-﻿"""
+"""
 登录缓存管理器
 用于保存和恢复应用的登录缓存文件，实现快速登录
 
@@ -297,7 +297,7 @@ class LoginCacheManager:
                     # 删除临时明文文件
                     temp_plain_file.unlink()
                     
-                    print(f"  [缓存] ✓ 已保存并加密: {file_path}")
+                    # [2026-03-29] 静默：正常保存不输出到控制台
                     saved_count += 1
                     
                 except FileNotFoundError as e:
@@ -357,128 +357,99 @@ class LoginCacheManager:
         Returns:
             是否成功
         """
+        # [2026-03-19] 简化恢复流程：查找缓存 → 停止应用 → 清理旧缓存 → 恢复文件
         try:
-            # 优先尝试使用 手机号_用户ID 查找缓存
+            # 1. 查找缓存目录
             account_cache_dir = None
             if user_id:
                 account_cache_dir = self._get_account_cache_dir(phone, user_id)
                 if not account_cache_dir.exists():
-                    print(f"  [缓存] 未找到 {phone}_{user_id} 的缓存，尝试使用旧格式")
                     account_cache_dir = None
             
-            # 如果没有user_id或新格式不存在，尝试旧格式（只用手机号）
             if account_cache_dir is None:
                 account_cache_dir = self._get_account_cache_dir(phone)
                 if not account_cache_dir.exists():
-                    print(f"  [缓存] 未找到 {phone} 的缓存")
                     return False
             
-            # [2026-03-01] 删除启动日志：不显示"从目录恢复"
-            
-            # 先停止应用
+            # 2. 停止应用
             await self.adb.shell(device_id, f"am force-stop {package_name}")
-            await asyncio.sleep(0.5)  # 优化：减少等待时间从1秒到0.5秒
+            await asyncio.sleep(0.5)
             
+            # 3. 清理旧缓存（只删除要恢复的文件）
+            # [2026-03-19] 修复：只删除要恢复的文件，不要删除其他文件
             data_path = f"/data/data/{package_name}"
-            restored_count = 0
+            files_to_delete = []
+            for file_path in self.CACHE_FILES:
+                files_to_delete.append(f"{data_path}/{file_path}")
             
-            # 优化：批量准备所有文件
-            files_to_restore = []  # [(local_file, file_path, temp_decrypted_file), ...]
+            if files_to_delete:
+                delete_command = f"rm -f {' '.join(files_to_delete)}"
+                await self.adb.shell(device_id, f"su -c '{delete_command}'")
             
-            # 第一步：解密所有文件（准备阶段）
+            # 4. 准备并传输文件
+            temp_files = []
             for file_path in self.CACHE_FILES:
                 cache_file_name = file_path.replace('/', '_')
-                
-                # 优先使用加密文件（.enc）
                 encrypted_file = self._get_cache_file_path(account_cache_dir, cache_file_name, encrypted=True)
                 plain_file = self._get_cache_file_path(account_cache_dir, cache_file_name, encrypted=False)
                 
                 local_file = None
-                temp_decrypted_file = None
+                temp_decrypted = None
                 
-                # 检查加密文件是否存在
                 if encrypted_file.exists():
-                    # 临时解密到内存
-                    temp_decrypted_file = self._decrypt_cache_file(encrypted_file)
-                    if temp_decrypted_file:
-                        local_file = temp_decrypted_file
-                    else:
-                        print(f"  [缓存] ⚠️ 解密失败: {file_path}")
-                        continue
-                # 如果加密文件不存在，尝试未加密文件（兼容旧数据）
+                    temp_decrypted = self._decrypt_cache_file(encrypted_file)
+                    if temp_decrypted:
+                        local_file = temp_decrypted
                 elif plain_file.exists():
                     local_file = plain_file
                 else:
-                    # 文件不存在
-                    if file_path not in self.REQUIRED_FILES:
-                        continue
-                    else:
-                        print(f"  [缓存] ⚠️ 必需文件不存在: {file_path}")
-                        continue
+                    if file_path in self.REQUIRED_FILES:
+                        return False
+                    continue
                 
-                files_to_restore.append((local_file, file_path, temp_decrypted_file))
+                # 传输到sdcard
+                temp_path = f"/sdcard/temp_{cache_file_name}"
+                await self.adb.push(device_id, str(local_file), temp_path)
+                temp_files.append((temp_path, file_path, temp_decrypted))
             
-            if not files_to_restore:
-                print(f"  [缓存] 没有文件需要恢复")
+            if not temp_files:
                 return False
             
-            # 第二步：批量传输所有文件到 sdcard
-            temp_files = []
-            for local_file, file_path, _ in files_to_restore:
-                temp_path = f"/sdcard/temp_{file_path.replace('/', '_')}"
-                temp_files.append((temp_path, file_path))
-                await self.adb.push(device_id, str(local_file), temp_path)
+            # 5. 批量恢复（一次性执行）
+            # [2026-03-19] 修复：添加chown设置文件所有者，确保应用可以读取
+            commands = []
             
-            # 第三步：批量复制到应用目录（一次性执行多个命令）
-            # 先获取应用的 UID（只需要一次）
-            uid_result = await self.adb.shell(device_id, f"su -c 'stat -c %u {data_path}'")
-            uid = uid_result.strip()
+            # 先获取应用的UID
+            uid_result = await self.adb.shell(device_id, f"su -c 'stat -c \"%u\" {data_path}'")
+            app_uid = uid_result.strip()
             
-            # 构建批量命令
-            batch_commands = []
-            for temp_path, file_path in temp_files:
+            for temp_path, file_path, _ in temp_files:
                 target_path = f"{data_path}/{file_path}"
                 target_dir = target_path.rsplit('/', 1)[0]
-                
-                # 创建目录、删除旧文件、复制、设置权限和所有者
-                batch_commands.append(f"mkdir -p {target_dir}")
-                batch_commands.append(f"rm -f {target_path}")
-                batch_commands.append(f"cp {temp_path} {target_path}")
-                batch_commands.append(f"chmod 660 {target_path}")
-                batch_commands.append(f"chown {uid}:{uid} {target_path}")
+                commands.extend([
+                    f"mkdir -p {target_dir}",
+                    f"cp {temp_path} {target_path}",
+                    f"chown {app_uid}:{app_uid} {target_path}",  # 设置文件所有者
+                    f"chmod 660 {target_path}",
+                    f"restorecon {target_path}",
+                    f"rm {temp_path}"
+                ])
             
-            # 一次性执行所有命令（用 && 连接）
-            batch_command = " && ".join(batch_commands)
-            await self.adb.shell(device_id, f"su -c '{batch_command}'")
+            full_command = " && ".join(commands)
+            await self.adb.shell(device_id, f"su -c '{full_command}'")
             
-            # 第四步：清理临时文件
-            cleanup_commands = [f"rm {temp_path}" for temp_path, _ in temp_files]
-            cleanup_command = " && ".join(cleanup_commands)
-            await self.adb.shell(device_id, cleanup_command)
-            
-            # 清理临时解密文件
-            for _, _, temp_decrypted_file in files_to_restore:
-                if temp_decrypted_file and temp_decrypted_file.exists():
+            # 6. 清理临时文件
+            for _, _, temp_decrypted in temp_files:
+                if temp_decrypted and temp_decrypted.exists():
                     try:
-                        temp_decrypted_file.unlink()
+                        temp_decrypted.unlink()
                     except:
                         pass
             
-            restored_count = len(files_to_restore)
-            # [2026-03-01] 删除启动日志：不显示"已恢复 X 个文件"
-            
-            return restored_count > 0
+            return True
             
         except Exception as e:
             print(f"恢复登录缓存失败: {e}")
-            # 清理临时解密文件
-            if 'files_to_restore' in locals():
-                for _, _, temp_decrypted_file in files_to_restore:
-                    if temp_decrypted_file and temp_decrypted_file.exists():
-                        try:
-                            temp_decrypted_file.unlink()
-                        except:
-                            pass
             return False
     
     def has_cache(self, phone: str, user_id: Optional[str] = None) -> bool:

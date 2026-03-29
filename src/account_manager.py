@@ -401,7 +401,7 @@ class AccountManager:
                 user = manager.get_account_user(result.phone)
                 if user:
                     owner = user.user_name
-                    print(f"[数据库] ✓ 管理员: {owner}")
+                    # [2026-03-29] 静默：正常流程不输出到控制台
             except Exception as e:
                 print(f"[数据库] ⚠️ 获取管理员失败: {e}")
             
@@ -429,7 +429,7 @@ class AccountManager:
             
             # 调用 UPSERT 方法
             if self.db.upsert_history_record(record):
-                print(f"✓ 已保存: {result.phone}")
+                pass  # [2026-03-29] 静默：正常保存不输出到控制台
             else:
                 # [2026-03-01] 失败时显示详细错误信息用于调试
                 print(f"✗ 保存失败: {result.phone}")

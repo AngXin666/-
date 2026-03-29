@@ -1030,6 +1030,39 @@ class LocalDatabase:
         records = self.get_history_records(phone=phone, limit=1)
         return records[0] if records else None
     
+    def get_all_owners(self) -> set:
+        """获取所有不同的管理员
+        
+        [2026-03-21] 新增：从数据库获取所有管理员列表
+        
+        Returns:
+            管理员集合
+        """
+        try:
+            with self._lock:
+                conn = sqlite3.connect(str(self.db_path))
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    SELECT DISTINCT owner
+                    FROM history_records
+                    WHERE owner IS NOT NULL 
+                      AND owner != '' 
+                      AND owner != '-' 
+                      AND owner != 'N/A'
+                    ORDER BY owner
+                """)
+                
+                rows = cursor.fetchall()
+                conn.close()
+                
+                # 返回管理员集合
+                return {row[0] for row in rows if row[0]}
+                
+        except Exception as e:
+            print(f"获取管理员列表失败: {e}")
+            return set()
+    
     def delete_old_records(self, days: int = 365) -> int:
         """删除指定天数之前的历史记录
         
@@ -1591,7 +1624,7 @@ class LocalDatabase:
                 conn.commit()
                 conn.close()
                 
-                print(f"[数据库] 更新管理员: {phone} → {owner} (影响 {affected_rows} 条记录)")
+                # [2026-03-29] 静默：正常更新不输出到控制台
                 return True
                 
         except Exception as e:
@@ -1707,3 +1740,114 @@ class LocalDatabase:
         except Exception as e:
             print(f"删除账号记录失败: {e}")
             return 0
+
+    def query_accounts_by_status(self, statuses: list) -> list:
+        """查询指定状态的账号
+        
+        [2026-03-10] 新增：用于自动验号功能
+        [2026-03-10] 修复：只查询每个账号的最新记录
+        [2026-03-10] 修复：正确处理空字符串和NULL值
+        [2026-03-10] 新增：返回status字段
+        
+        Args:
+            statuses: 状态列表，例如 ['', '待处理']
+            
+        Returns:
+            账号列表 [(phone, nickname, user_id, status, owner), ...]
+        """
+        try:
+            with self._lock:
+                conn = sqlite3.connect(str(self.db_path))
+                cursor = conn.cursor()
+                
+                # 检查是否包含空字符串（需要匹配NULL或空字符串）
+                has_empty = '' in statuses
+                non_empty_statuses = [s for s in statuses if s != '']
+                
+                # 构建查询条件
+                if has_empty and non_empty_statuses:
+                    # 同时查询NULL/空字符串和其他状态
+                    placeholders = ','.join(['?' for _ in non_empty_statuses])
+                    status_condition = f"(h1.status IS NULL OR h1.status = '' OR h1.status IN ({placeholders}))"
+                    query_params = non_empty_statuses
+                elif has_empty:
+                    # 只查询NULL或空字符串
+                    status_condition = "(h1.status IS NULL OR h1.status = '')"
+                    query_params = []
+                else:
+                    # 只查询指定状态
+                    placeholders = ','.join(['?' for _ in non_empty_statuses])
+                    status_condition = f"h1.status IN ({placeholders})"
+                    query_params = non_empty_statuses
+                
+                # 查询每个账号的最新记录，包含status
+                query = f"""
+                    SELECT DISTINCT h1.phone, h1.nickname, h1.user_id, h1.status, h1.owner
+                    FROM history_records h1
+                    INNER JOIN (
+                        SELECT phone, MAX(created_at) as max_created_at
+                        FROM history_records
+                        GROUP BY phone
+                    ) h2 ON h1.phone = h2.phone AND h1.created_at = h2.max_created_at
+                    WHERE {status_condition}
+                    ORDER BY h1.phone
+                """
+                
+                cursor.execute(query, query_params)
+                results = cursor.fetchall()
+                conn.close()
+                
+                return results
+        
+        except Exception as e:
+            print(f"查询账号失败: {e}")
+            import traceback
+            print(f"详细错误: {traceback.format_exc()}")
+            return []
+    
+    def query_unused_accounts(self) -> list:
+        """查询未使用的账号（余额前=0且签到次数=0且余额=0，且历史中从未有过签到记录）
+        
+        [2026-03-10] 新增：用于自动验号功能
+        [2026-03-10] 修复：只查询每个账号的最新记录
+        [2026-03-10] 修复：同时处理NULL和0的情况
+        [2026-03-10] 新增：返回status字段
+        [2026-03-11] 修复原因：添加条件确保历史中从未有过签到记录
+        
+        Returns:
+            账号列表 [(phone, nickname, user_id, status, owner), ...]
+        """
+        try:
+            with self._lock:
+                conn = sqlite3.connect(str(self.db_path))
+                cursor = conn.cursor()
+                
+                # 查询每个账号的最新记录，且三个字段都是0或NULL，且历史中从未有过签到记录
+                query = """
+                    SELECT DISTINCT h1.phone, h1.nickname, h1.user_id, h1.status, h1.owner
+                    FROM history_records h1
+                    INNER JOIN (
+                        SELECT phone, MAX(created_at) as max_created_at
+                        FROM history_records
+                        GROUP BY phone
+                    ) h2 ON h1.phone = h2.phone AND h1.created_at = h2.max_created_at
+                    WHERE (h1.balance_before = 0 OR h1.balance_before IS NULL)
+                      AND (h1.checkin_total_times = 0 OR h1.checkin_total_times IS NULL)
+                      AND (h1.balance_after = 0 OR h1.balance_after IS NULL)
+                      AND h1.phone NOT IN (
+                          SELECT DISTINCT phone 
+                          FROM history_records 
+                          WHERE checkin_total_times > 0
+                      )
+                    ORDER BY h1.phone
+                """
+                
+                cursor.execute(query)
+                results = cursor.fetchall()
+                conn.close()
+                
+                return results
+        
+        except Exception as e:
+            print(f"查询未使用账号失败: {e}")
+            return []

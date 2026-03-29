@@ -60,7 +60,8 @@ class YoloDetector:
     使用训练好的YOLO模型检测页面上的目标（按钮、文本区域等）并返回坐标
     """
     
-    def __init__(self, adb: ADBBridge, registry_path='yolo_model_registry.json', log_callback=None):
+    # [2026-03-12] 修改路径：YOLO注册表文件移动到models目录
+    def __init__(self, adb: ADBBridge, registry_path='models/yolo_model_registry.json', log_callback=None):
         """初始化YOLO检测器
         
         Args:
@@ -85,10 +86,9 @@ class YoloDetector:
     
     def _log(self, msg: str):
         """输出日志"""
+        # [2026-03-11] 优化日志：删除CMD控制台输出，只在有log_callback时记录
         if self._log_callback:
             self._log_callback(msg)
-        else:
-            print(msg)
     
     def _enable_gpu_if_available(self):
         """启用GPU加速（如果可用）"""
@@ -153,8 +153,13 @@ class YoloDetector:
             return None
         
         if not Path(model_path).exists():
-            self._log(f"[YOLO] ✗ 模型文件不存在: {model_path}")
-            return None
+            # [2026-03-10] 修复原因：尝试在models目录下查找模型文件
+            models_path = f"models/{model_path}"
+            if Path(models_path).exists():
+                model_path = models_path
+            else:
+                self._log(f"[YOLO] ✗ 模型文件不存在: {model_path} (也尝试了 {models_path})")
+                return None
         
         try:
             self._log(f"[YOLO] 正在加载模型: {model_path}")

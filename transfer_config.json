@@ -1,6 +1,8 @@
 {
   "min_balance": 0.0,
   "min_transfer_amount": 30.0,
+  "min_checkin_days_enabled": true,
+  "min_checkin_days": 30,
   "recipient_ids": [
     "1579219"
   ],

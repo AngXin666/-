@@ -25,5 +25,23 @@
     ],
     "description": "用户ID: 1877422",
     "enabled": true
+  },
+  "user_1630560": {
+    "user_id": "user_1630560",
+    "user_name": "曾总",
+    "transfer_recipients": [
+      "1630560"
+    ],
+    "description": "用户ID: 1630560",
+    "enabled": true
+  },
+  "user_226077": {
+    "user_id": "user_226077",
+    "user_name": "龙",
+    "transfer_recipients": [
+      "226077"
+    ],
+    "description": "用户ID: 226077",
+    "enabled": true
   }
 }

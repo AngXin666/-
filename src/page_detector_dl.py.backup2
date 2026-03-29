@@ -1,0 +1,519 @@
+﻿"""
+页面状态检测模块 - 基于深度学习分类器
+Page State Detection Module - Deep Learning based
+
+使用训练好的PyTorch页面分类器进行页面识别，准确率100%，速度快（20-50ms）
+支持GPU加速和模型量化
+"""
+
+import asyncio
+from typing import Optional
+from dataclasses import dataclass
+from io import BytesIO
+import time
+
+try:
+    from PIL import Image
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
+
+try:
+    import torch
+    import torch.nn as nn
+    from torchvision import transforms, models
+    HAS_TORCH = True
+except ImportError:
+    HAS_TORCH = False
+
+from .adb_bridge import ADBBridge
+from .page_detector import PageState, PageDetectionResult  # 使用统一的PageState
+
+
+class PageDetectorDL:
+    """页面状态检测器 - 基于深度学习（PyTorch）
+    
+    使用MobileNetV3训练的页面分类器，准确率高，速度快
+    支持GPU加速和模型量化
+    """
+    
+    # 类别名称到PageState的映射
+    CLASS_TO_STATE = {
+        '个人页_已登录': PageState.PROFILE_LOGGED,
+        '个人页_未登录': PageState.PROFILE,
+        '个人页已登陆': PageState.PROFILE_LOGGED,  # [2026-03-02] 转账/资料/登录专用模型使用的类别名
+        '个人页未登陆': PageState.PROFILE,  # [2026-03-02] 转账/资料/登录专用模型使用的类别名
+        '个人页广告': PageState.PROFILE_AD,  # 个人页广告（异常页面）
+        '交易流水': PageState.TRANSACTION_HISTORY,  # 交易流水（转账流程）
+        '优惠劵': PageState.COUPON,  # 优惠劵页面
+        '分类页': PageState.CATEGORY,  # 分类页（需要返回首页）
+        '加载页': PageState.LOADING,
+        '启动页服务弹窗': PageState.STARTUP_POPUP,  # 启动页服务弹窗
+        '启动页协议弹窗': PageState.STARTUP_POPUP,  # [2026-03-02] 启动专用模型使用的类别名
+        '广告页': PageState.AD,
+        '搜索页': PageState.SEARCH,  # 搜索页（异常页面）
+        '文章页': PageState.ARTICLE,  # 文章页（异常页面）
+        '模拟器桌面': PageState.LAUNCHER,
+        '温馨提示': PageState.WARMTIP,  # 温馨提示弹窗
+        '登录页': PageState.LOGIN,
+        '用户名或密码错误': PageState.LOGIN,  # [2026-03-02] 登录专用模型：登录错误提示
+        '手机号码不存在': PageState.LOGIN,  # [2026-03-02] 登录专用模型：手机号不存在提示
+        '积分页': PageState.POINTS_PAGE,
+        '签到弹窗': PageState.CHECKIN_POPUP,  # 签到弹窗
+        '签到页': PageState.CHECKIN,
+        '设置页': PageState.SETTINGS,  # 设置页（异常页面）
+        '商品列表': PageState.UNKNOWN,  # 商品列表（异常页面）
+        '转账确认弹窗': PageState.TRANSFER_CONFIRM,  # 转账确认弹窗
+        '转账弹窗': PageState.TRANSFER_CONFIRM,  # [2026-03-02] 转账专用模型使用的类别名
+        '转账页': PageState.TRANSFER,  # 转账页（转账流程）
+        '钱包页': PageState.WALLET,  # 钱包页（转账流程）
+        '首页': PageState.HOME,
+        '首页公告': PageState.HOME_NOTICE,  # 首页公告弹窗
+        '首页异常代码弹窗': PageState.HOME_ERROR_POPUP,  # 首页异常代码弹窗
+    }
+    
+    def __init__(self, adb: ADBBridge, model_path='page_classifier_pytorch_best.pth', 
+                 classes_path='page_classes.json', log_callback=None,
+                 fallback_classifier: Optional['PageDetectorDL'] = None):
+        """初始化页面检测器
+        
+        Args:
+            adb: ADB 桥接器实例
+            model_path: PyTorch模型文件路径
+            classes_path: 类别列表文件路径
+            log_callback: 日志回调函数
+            fallback_classifier: [2026-03-03] 通用分类器实例（作为降级方案），如果为None则不启用降级
+        """
+        self.adb = adb
+        self._last_screenshot = None
+        self._model = None
+        self._classes = None
+        self._img_size = (224, 224)
+        self._log_callback = log_callback
+        self._device = None
+        self._transform = None
+        
+        # [2026-03-03] 新增：通用分类器作为降级方案（从外部传入，避免重复加载）
+        self._fallback_classifier = fallback_classifier
+        
+        # 初始化检测缓存（TTL=2秒）
+        from .performance.detection_cache import DetectionCache
+        self._detection_cache = DetectionCache(ttl=2.0)
+        
+        # 加载模型和类别
+        if HAS_PIL and HAS_TORCH:
+            try:
+                import json
+                import os
+                
+                # 加载类别列表
+                if os.path.exists(classes_path):
+                    with open(classes_path, 'r', encoding='utf-8') as f:
+                        self._classes = json.load(f)
+                else:
+                    return
+                
+                # 加载PyTorch模型
+                self._load_pytorch_model(model_path)
+                    
+            except Exception as e:
+                self._model = None
+                self._classes = None
+        else:
+            pass
+    
+    def _load_pytorch_model(self, model_path: str):
+        """加载PyTorch模型"""
+        try:
+            import os
+            if not os.path.exists(model_path):
+                return
+            
+            # 设置设备
+            self._device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            
+            # [2026-03-02] 简化：只使用 MobileNetV3 架构
+            # [2026-03-09] 修复原因：自动检测模型文件的第一层通道数
+            # 定义模型架构
+            class PageClassifier(nn.Module):
+                def __init__(self, num_classes, first_channel=16):
+                    super(PageClassifier, self).__init__()
+                    
+                    # 使用标准 MobileNetV3-Large
+                    self.mobilenet = models.mobilenet_v3_large(weights=None)
+                    
+                    # [2026-03-10] 修复原因：正确处理不同通道数的模型架构
+                    if first_channel != 16:
+                        # 修改第一层卷积的输出通道数
+                        self.mobilenet.features[0][0] = nn.Conv2d(
+                            3, first_channel, kernel_size=3, stride=2, padding=1, bias=False
+                        )
+                        # 修改对应的BatchNorm层
+                        self.mobilenet.features[0][1] = nn.BatchNorm2d(first_channel)
+                        
+                        # 修改第二层的输入通道数（必须与第一层的输出通道数匹配）
+                        self.mobilenet.features[1].block[0][0] = nn.Conv2d(
+                            first_channel, first_channel, kernel_size=3, stride=1, padding=1, groups=first_channel, bias=False
+                        )
+                        self.mobilenet.features[1].block[0][1] = nn.BatchNorm2d(first_channel)
+                    
+                    in_features = self.mobilenet.classifier[0].in_features
+                    self.mobilenet.classifier = nn.Sequential(
+                        nn.Linear(in_features, 1280),
+                        nn.Hardswish(),
+                        nn.Dropout(0.2),
+                        nn.Linear(1280, num_classes)
+                    )
+                
+                def forward(self, x):
+                    return self.mobilenet(x)
+            
+            # 创建模型
+            num_classes = len(self._classes)
+            # [2026-03-03] 删除日志：避免每次创建实例都输出加载日志
+            
+            # [2026-03-10] 修复原因：先加载权重文件，检测模型架构
+            checkpoint = torch.load(model_path, map_location=self._device)
+            if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+                state_dict = checkpoint['model_state_dict']
+            else:
+                state_dict = checkpoint
+            
+            # [2026-03-10] 修复原因：检测模型的实际通道配置
+            # 检查第一层卷积的输出通道数（这决定了后续层的输入通道数）
+            first_layer_key = 'mobilenet.features.0.0.weight'
+            if first_layer_key in state_dict:
+                # shape[0] 是输出通道数，这是我们需要的值
+                first_channel = state_dict[first_layer_key].shape[0]
+            else:
+                first_channel = 16  # 默认值
+            
+            # 创建模型（使用检测到的通道数）
+            model = PageClassifier(num_classes, first_channel=first_channel)
+            
+            # 加载权重（使用strict=False兼容不同版本的模型结构）
+            try:
+                model.load_state_dict(state_dict, strict=False)
+                # [2026-03-10] 修复原因：添加模型加载成功的调试信息
+                print(f"[模型] ✓ 模型加载成功，通道数: {first_channel}")
+            except Exception as load_error:
+                print(f"[模型] ❌ 权重加载失败: {load_error}")
+                self._model = None
+                return
+  
+            
+            model = model.to(self._device)
+            model.eval()
+            self._model = model
+            
+            # 设置图片预处理
+            self._transform = transforms.Compose([
+                transforms.Resize(self._img_size),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            ])
+            
+        except Exception as e:
+            print(f"[模型] ❌ 模型加载失败: {e}")
+            self._model = None
+    
+    def _log(self, msg: str):
+        """输出日志"""
+        if self._log_callback:
+            self._log_callback(msg)
+        else:
+            print(msg)
+    
+    async def _get_screenshot(self, device_id: str) -> Optional['Image.Image']:
+        """获取屏幕截图"""
+        if not HAS_PIL:
+            return None
+        
+        try:
+            screenshot_data = await self.adb.screencap(device_id)
+            if not screenshot_data:
+                return None
+            
+            image = Image.open(BytesIO(screenshot_data))
+            self._last_screenshot = image
+            return image
+        except Exception:
+            return None
+    
+    def _predict(self, image: 'Image.Image') -> tuple:
+        """预测图片类别
+        
+        Args:
+            image: PIL Image对象
+            
+        Returns:
+            (类别名称, 置信度)
+        """
+        if not self._model or not self._classes:
+            return None, 0.0
+        
+        try:
+            # 转换为RGB格式（如果是RGBA）
+            if image.mode == 'RGBA':
+                image = image.convert('RGB')
+            
+            # PyTorch预测
+            image_tensor = self._transform(image).unsqueeze(0).to(self._device)
+            
+            with torch.no_grad():
+                outputs = self._model(image_tensor)
+                probabilities = torch.nn.functional.softmax(outputs, dim=1)
+                confidence, predicted_idx = torch.max(probabilities, 1)
+                
+                class_name = self._classes[predicted_idx.item()]
+                confidence_value = confidence.item()
+            
+            return class_name, confidence_value
+            
+        except Exception as e:
+            self._log(f"[DL检测器] ✗ 预测失败: {e}")
+            return None, 0.0
+    
+    async def detect_page(self, device_id: str, use_cache: bool = True, use_ocr: bool = False, use_dl: bool = True, detect_elements: bool = False) -> PageDetectionResult:
+        """检测当前页面状态
+        
+        Args:
+            device_id: 设备 ID
+            use_cache: 是否使用缓存
+            use_ocr: 是否使用OCR（兼容参数，PageDetectorDL不使用OCR）
+            use_dl: 是否使用深度学习（兼容参数，PageDetectorDL始终使用深度学习）
+            detect_elements: 是否检测元素（兼容参数，PageDetectorDL不支持元素检测）
+            
+        Returns:
+            页面检测结果
+        """
+        start_time = time.time()
+        
+        # 检查缓存
+        if use_cache:
+            cached_result = self._detection_cache.get(device_id)
+            if cached_result is not None:
+                cached_result.cached = True
+                cached_result.detection_time = time.time() - start_time
+                return cached_result
+        
+        # 检查模型是否加载
+        if not self._model or not self._classes:
+            return PageDetectionResult(
+                state=PageState.UNKNOWN,
+                confidence=0.0,
+                details="深度学习模型未加载",
+                detection_method="dl",
+                detection_time=time.time() - start_time
+            )
+        
+        # 获取截图
+        image = await self._get_screenshot(device_id)
+        if not image:
+            return PageDetectionResult(
+                state=PageState.UNKNOWN,
+                confidence=0.0,
+                details="无法截取屏幕",
+                detection_method="dl",
+                detection_time=time.time() - start_time
+            )
+        
+        # 预测类别（使用专用模型）
+        class_name, confidence = self._predict(image)
+        
+        if not class_name:
+            return PageDetectionResult(
+                state=PageState.UNKNOWN,
+                confidence=0.0,
+                details="预测失败",
+                detection_method="dl",
+                detection_time=time.time() - start_time
+            )
+        
+        # 映射到PageState
+        state = self.CLASS_TO_STATE.get(class_name, PageState.UNKNOWN)
+        
+        # [2026-03-03] 新增：降级逻辑 - 当专用模型识别失败时，使用通用分类器
+        used_fallback = False
+        if (state == PageState.UNKNOWN or confidence < 0.5) and self._fallback_classifier:
+            # 使用通用分类器重新识别
+            fallback_class_name, fallback_confidence = self._fallback_classifier._predict(image)
+            
+            if fallback_class_name and fallback_confidence > confidence:
+                # 通用分类器的结果更好，使用通用分类器的结果
+                fallback_state = self.CLASS_TO_STATE.get(fallback_class_name, PageState.UNKNOWN)
+                
+                if fallback_state != PageState.UNKNOWN:
+                    # 降级成功
+                    class_name = fallback_class_name
+                    confidence = fallback_confidence
+                    state = fallback_state
+                    used_fallback = True
+        
+        # [2026-03-03] 新增：OCR降级逻辑 - 当通用分类器也识别失败时，使用OCR
+        used_ocr = False
+        if state == PageState.UNKNOWN or confidence < 0.3:
+            ocr_state, ocr_confidence = await self._detect_page_by_ocr(device_id, image)
+            
+            if ocr_state != PageState.UNKNOWN and ocr_confidence > confidence:
+                # OCR识别成功且置信度更高
+                class_name = f"OCR识别: {ocr_state.value}"
+                confidence = ocr_confidence
+                state = ocr_state
+                used_ocr = True
+                used_fallback = False  # OCR优先级高于通用分类器标记
+        
+        # 构建详细信息
+        if used_ocr:
+            details = f"OCR识别: {state.value} (置信度: {confidence:.2%}) [OCR降级]"
+        elif used_fallback:
+            details = f"通用分类器: {class_name} (置信度: {confidence:.2%}) [降级]"
+        else:
+            details = f"专用模型: {class_name} (置信度: {confidence:.2%})"
+        
+        result = PageDetectionResult(
+            state=state,
+            confidence=confidence,
+            details=details,
+            detection_method="ocr" if used_ocr else ("dl_fallback" if used_fallback else "dl"),
+            detection_time=time.time() - start_time,
+            cached=False
+        )
+        
+        # 更新缓存
+        if use_cache:
+            self._detection_cache.set(device_id, result)
+        
+        return result
+    
+    async def _detect_page_by_ocr(self, device_id: str, image: 'Image.Image') -> tuple:
+        """[2026-03-03] 使用OCR识别页面类型（第三层降级方案）
+        
+        Args:
+            device_id: 设备ID
+            image: 截图
+            
+        Returns:
+            (PageState, 置信度)
+        """
+        try:
+            # 获取OCR线程池
+            from .ocr_thread_pool import get_ocr_pool
+            ocr_pool = get_ocr_pool()
+            
+            if not ocr_pool:
+                return PageState.UNKNOWN, 0.0
+            
+            # 使用OCR识别文本
+            import asyncio
+            texts = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: ocr_pool.ocr_image(image)
+            )
+            
+            if not texts:
+                return PageState.UNKNOWN, 0.0
+            
+            # 合并所有文本
+            text_str = ''.join(texts).lower()
+            
+            # 定义OCR识别规则（按优先级排序）
+            ocr_rules = [
+                # 登录页
+                (['登录', '手机号', '密码', '用户协议'], PageState.LOGIN, 0.9),
+                (['登录', '手机号'], PageState.LOGIN, 0.8),
+                (['用户名或密码错误', '友情提示'], PageState.LOGIN_ERROR, 0.95),
+                (['手机号码不存在'], PageState.LOGIN_ERROR, 0.95),
+                
+                # 个人页
+                (['我的', '余额', '积分', '抵扣券'], PageState.PROFILE_LOGGED, 0.9),
+                (['我的', '请登录'], PageState.PROFILE, 0.9),
+                (['个人中心', '余额'], PageState.PROFILE_LOGGED, 0.85),
+                
+                # 首页
+                (['首页', '分类', '购物车', '我的'], PageState.HOME, 0.9),
+                (['首页', '商品'], PageState.HOME, 0.8),
+                
+                # 签到页
+                (['签到', '连续签到', '天'], PageState.CHECKIN, 0.9),
+                (['每日签到', '立即签到'], PageState.CHECKIN, 0.85),
+                (['签到成功', '恭喜'], PageState.CHECKIN_POPUP, 0.95),
+                
+                # 转账页
+                (['转账', '转增', '金额', '用户id'], PageState.TRANSFER, 0.9),
+                (['转账', '金额'], PageState.TRANSFER, 0.8),
+                (['确认转账', '昵称'], PageState.TRANSFER_CONFIRM, 0.9),
+                
+                # 钱包页
+                (['钱包', '余额', '充值'], PageState.WALLET, 0.9),
+                (['我的钱包', '余额'], PageState.WALLET, 0.85),
+                
+                # 积分页
+                (['积分', '积分明细', '获得'], PageState.POINTS_PAGE, 0.9),
+                
+                # 弹窗
+                (['用户协议', '隐私政策', '同意'], PageState.STARTUP_POPUP, 0.9),
+                (['温馨提示', '确定'], PageState.WARMTIP, 0.9),
+                (['公告', '活动'], PageState.HOME_NOTICE, 0.8),
+            ]
+            
+            # 匹配规则
+            for keywords, page_state, base_confidence in ocr_rules:
+                matched_count = sum(1 for keyword in keywords if keyword in text_str)
+                
+                if matched_count >= len(keywords) * 0.6:  # 至少匹配60%的关键词
+                    # 根据匹配度调整置信度
+                    match_ratio = matched_count / len(keywords)
+                    confidence = base_confidence * match_ratio
+                    return page_state, confidence
+            
+            return PageState.UNKNOWN, 0.0
+            
+        except Exception:
+            return PageState.UNKNOWN, 0.0
+    
+    async def wait_for_page(self, device_id: str, target_state: PageState,
+                           timeout: int = 15, check_interval: float = 1.0) -> bool:
+        """等待指定页面出现"""
+        start_time = asyncio.get_event_loop().time()
+        
+        while asyncio.get_event_loop().time() - start_time < timeout:
+            result = await self.detect_page(device_id)
+            if result.state == target_state:
+                return True
+            await asyncio.sleep(check_interval)
+        
+        return False
+    
+    async def is_on_home(self, device_id: str) -> bool:
+        """检查是否在主页"""
+        result = await self.detect_page(device_id)
+        return result.state == PageState.HOME
+    
+    async def is_on_login(self, device_id: str) -> bool:
+        """检查是否在登录页"""
+        result = await self.detect_page(device_id)
+        return result.state == PageState.LOGIN
+    
+    async def is_logged_in(self, device_id: str) -> bool:
+        """检查是否已登录"""
+        result = await self.detect_page(device_id)
+        return result.state == PageState.PROFILE_LOGGED
+    
+    def clear_cache(self, device_id: str = None):
+        """清除缓存
+        
+        Args:
+            device_id: 设备ID（可选，如果提供则只清除该设备的缓存，否则清除所有缓存）
+        """
+        if hasattr(self, '_detection_cache'):
+            if device_id:
+                # 清除指定设备的缓存
+                had_cache = device_id in self._detection_cache._cache
+                self._detection_cache._cache.pop(device_id, None)
+                print(f"[PageDetectorDL] 清除设备 {device_id} 的缓存 (之前{'有' if had_cache else '无'}缓存)")
+            else:
+                # 清除所有缓存
+                cache_count = len(self._detection_cache._cache)
+                self._detection_cache._cache.clear()
+                print(f"[PageDetectorDL] 清除所有缓存 (共 {cache_count} 个)")

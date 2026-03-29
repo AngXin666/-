@@ -819,6 +819,24 @@ class EmulatorController:
             if not self._adb_path:
                 return []
             
+            # [2026-03-18] 修改原因：检测前先断开所有ADB连接，避免检测到已关闭的实例
+            # 断开所有ADB连接
+            try:
+                subprocess.run(
+                    [self._adb_path, "disconnect"],
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                    encoding='utf-8',
+                    errors='ignore',
+                    startupinfo=STARTUPINFO,
+                    creationflags=CREATE_NO_WINDOW
+                )
+                # 短暂等待断开完成
+                await asyncio.sleep(0.2)
+            except Exception:
+                pass
+            
             # [2026-03-01] 删除日志：减少启动时的冗余输出
             # print(f"正在快速扫描MuMu实例...")
             
@@ -893,29 +911,60 @@ class EmulatorController:
                 creationflags=CREATE_NO_WINDOW
             )
             
-            # 解析设备列表，提取端口号
-            # [2026-03-01] 简化日志：只显示检测到的实例数量，不显示详细的设备列表
-            for line in devices_result.stdout.split('\n'):
-                if '127.0.0.1:' in line and 'device' in line:
-                    parts = line.split()
-                    if len(parts) >= 2 and parts[1] == 'device':
-                        # 提取端口号
-                        device_id = parts[0]
-                        try:
-                            port = int(device_id.split(':')[1])
-                            # 根据端口号反推实例ID
-                            # MuMu端口规则：16384 + instance_id * 32
-                            if port >= 16384 and (port - 16384) % 32 == 0:
-                                instance_id = (port - 16384) // 32
-                                running_instances.append(instance_id)
-                        except (ValueError, IndexError):
-                            continue
+            # [2026-03-29] 修改原因：移除ADB验证逻辑，避免多实例并发导致ADB阻塞超时
+            # 只使用进程检测，更快速且可靠
+            process_instances = []
+            try:
+                import psutil
+                # 查找所有 MuMuNxDevice.exe 进程（MuMu 12的正确进程名）
+                found_processes = 0
+                for proc in psutil.process_iter(['name', 'cmdline']):
+                    try:
+                        proc_name = proc.info.get('name')
+                        if proc_name == 'MuMuNxDevice.exe':
+                            found_processes += 1
+                            cmdline = proc.info.get('cmdline')
+                            if cmdline and isinstance(cmdline, list):
+                                has_v_param = False
+                                for i, arg in enumerate(cmdline):
+                                    if arg == '-v' and i + 1 < len(cmdline):
+                                        has_v_param = True
+                                        try:
+                                            instance_id = int(cmdline[i + 1])
+                                            if instance_id not in process_instances:
+                                                process_instances.append(instance_id)
+                                        except (ValueError, TypeError) as e:
+                                            print(f"[调试] 提取实例ID失败: {e}")
+                                        break
+                                if not has_v_param and 0 not in process_instances:
+                                    process_instances.append(0)
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        continue
+                    except Exception as e:
+                        print(f"[调试] 处理进程时出错: {e}")
+                        continue
+                
+                # 如果找到了进程但没有提取到实例ID，标记为失败
+                if found_processes > 0 and len(process_instances) == 0:
+                    print(f"⚠️ 找到了 {found_processes} 个进程但未能提取实例ID")
+                    
+            except ImportError:
+                print(f"⚠️ psutil 未安装，无法使用进程检测")
+            except Exception as e:
+                print(f"⚠️ 进程检测失败: {e}")
+                import traceback
+                traceback.print_exc()
             
-            # 只输出一条汇总日志
-            if running_instances:
-                print(f"✅ 检测到 {len(running_instances)} 个运行中的MuMu实例")
+            # 使用进程检测结果
+            if process_instances:
+                running_instances = sorted(process_instances)
+                print(f"✅ 检测到 {len(running_instances)} 个运行中的实例")
+                print(f"   实例列表: {running_instances}")
+            else:
+                running_instances = []
+                print(f"❌ 未检测到运行中的实例")
             
-            return sorted(running_instances)
+            return running_instances
             
         except Exception as e:
             print(f"❌ 获取运行中实例失败: {e}")

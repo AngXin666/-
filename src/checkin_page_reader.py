@@ -39,6 +39,11 @@ class CheckinPageReader:
         # 使用全局 OCR 线程池（替代单独的 OCR 实例）
         self._ocr_pool = get_ocr_pool() if HAS_OCR else None
         
+        # [2026-03-11] 新增：获取YOLO检测器用于快速定位签到次数区域
+        from .model_manager import ModelManager
+        model_manager = ModelManager.get_instance()
+        self._yolo_detector = model_manager.get_page_detector_integrated()
+        
         # [2026-02-21] 删除学习器：移除 OCRRegionLearner
     
     async def get_checkin_info(self, device_id: str) -> Dict[str, any]:
@@ -67,8 +72,6 @@ class CheckinPageReader:
             return result
         
         try:
-            # [2026-02-21] 删除学习器：移除 OCRRegionLearner
-            
             # 获取截图
             screenshot = await self.adb.screencap(device_id)
             if not screenshot:
@@ -76,51 +79,82 @@ class CheckinPageReader:
             
             img = Image.open(BytesIO(screenshot))
             
-            # [2026-02-21] 删除学习器：直接使用全屏 OCR
-            
-            # [2026-03-01] 禁用调试输出：减少日志冗余
-            # print(f"[签到页面OCR] 使用全屏OCR识别")
-            # 使用OCR图像预处理模块增强图像（灰度图 + 对比度增强2倍）
-            enhanced_img = enhance_for_ocr(img)
-            
-            # 使用 OCR 线程池识别（异步，带超时）
-            # 优化：增加超时时间 2秒→5秒，避免批量处理时超时
-            ocr_result = await self._ocr_pool.recognize(enhanced_img, timeout=5.0)
-            
-            # [2026-03-05] 修复数组比较错误：检查 texts 是否为 None 或长度为 0
-            if not ocr_result or ocr_result.texts is None or len(ocr_result.texts) == 0:
-                return result
-            
-            texts = ocr_result.texts
-            # 修复：正确处理numpy数组
-            boxes = ocr_result.boxes if ocr_result.boxes is not None and len(ocr_result.boxes) > 0 else []
-            
-            # 合并所有文本用于调试
-            result['raw_text'] = ' '.join(texts)
-            
-            # [2026-03-01] 禁用调试输出：减少日志冗余
-            # 只在需要调试时启用
-            # print(f"[签到页面OCR] 识别到 {len(texts)} 段文本:")
-            # for idx, txt in enumerate(texts):
-            #     print(f"  [{idx}] {txt}")
-            
-            # 解析签到信息
-            self._parse_checkin_times(texts, result)
-            
-            # 查找签到按钮（在循环外单独处理）
-            for i, text in enumerate(texts):
-                if '立即签到' in text or '点击签到' in text or '签到' in text:
-                    result['can_checkin'] = True
+            # [2026-03-11] 新增：YOLO+OCR混合方案优化性能
+            # 优先尝试使用YOLO快速定位签到次数区域，然后只对该区域进行OCR
+            yolo_success = False
+            if self._yolo_detector:
+                try:
+                    # 使用YOLO检测签到页面元素
+                    yolo_result = await self._yolo_detector.detect_elements_yolo(
+                        device_id, 
+                        model_key="签到页",  # 使用签到页YOLO模型
+                        target_classes=["签到次数", "签到按钮"]  # 检测签到次数和签到按钮
+                    )
                     
-                    # 获取按钮位置
-                    if i < len(boxes):
-                        box = boxes[i]
-                        x_coords = [p[0] for p in box]
-                        y_coords = [p[1] for p in box]
-                        center_x = int(sum(x_coords) / len(x_coords))
-                        center_y = int(sum(y_coords) / len(y_coords))
+                    if yolo_result and yolo_result.get('签到次数'):
+                        # 找到签到次数区域，进行区域OCR
+                        checkin_times_region = yolo_result['签到次数'][0]  # 取第一个检测结果
+                        
+                        # 提取区域坐标并扩展边界（增加10像素边距提高识别率）
+                        x1, y1, x2, y2 = checkin_times_region['bbox']
+                        margin = 10
+                        x1 = max(0, x1 - margin)
+                        y1 = max(0, y1 - margin)
+                        x2 = min(img.width, x2 + margin)
+                        y2 = min(img.height, y2 + margin)
+                        
+                        # 裁剪签到次数区域
+                        times_region = img.crop((x1, y1, x2, y2))
+                        
+                        # 对区域进行OCR识别（使用相同的图像增强）
+                        enhanced_region = enhance_for_ocr(times_region)
+                        
+                        # 使用OCR线程池识别区域（超时时间减少到2秒）
+                        ocr_result = await self._ocr_pool.recognize(enhanced_region, timeout=2.0)
+                        
+                        if ocr_result and ocr_result.texts is not None and len(ocr_result.texts) > 0:
+                            texts = ocr_result.texts
+                            result['raw_text'] = ' '.join(texts)
+                            
+                            # 解析签到次数信息
+                            self._parse_checkin_times(texts, result)
+                            yolo_success = True
+                            
+                            # [2026-03-12] 优化日志：移除CMD控制台的YOLO+OCR技术信息
+                    
+                    # 处理签到按钮检测
+                    if yolo_result and yolo_result.get('签到按钮'):
+                        result['can_checkin'] = True
+                        button_info = yolo_result['签到按钮'][0]  # 取第一个检测结果
+                        # 计算按钮中心点
+                        x1, y1, x2, y2 = button_info['bbox']
+                        center_x = int((x1 + x2) / 2)
+                        center_y = int((y1 + y2) / 2)
                         result['checkin_button_pos'] = (center_x, center_y)
-                        break
+                        
+                except Exception as e:
+                    print(f"[签到页面YOLO] ⚠️ YOLO检测失败，降级到全屏OCR: {e}")
+            
+            # [2026-03-29] 修改原因：YOLO检测失败时不再降级到全屏OCR，避免加剧阻塞
+            # 如果YOLO失败，直接返回空结果
+            if not yolo_success:
+                print(f"[签到页面OCR] YOLO检测失败，跳过OCR识别")
+                return result
+                
+                # 查找签到按钮（在循环外单独处理）
+                for i, text in enumerate(texts):
+                    if '立即签到' in text or '点击签到' in text or '签到' in text:
+                        result['can_checkin'] = True
+                        
+                        # 获取按钮位置
+                        if i < len(boxes):
+                            box = boxes[i]
+                            x_coords = [p[0] for p in box]
+                            y_coords = [p[1] for p in box]
+                            center_x = int(sum(x_coords) / len(x_coords))
+                            center_y = int(sum(y_coords) / len(y_coords))
+                            result['checkin_button_pos'] = (center_x, center_y)
+                            break
             
             return result
             

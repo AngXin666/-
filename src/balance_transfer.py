@@ -78,7 +78,8 @@ class BalanceTransfer:
             import json
             from pathlib import Path
             
-            registry_path = Path("yolo_model_registry.json")
+            # [2026-03-12] 修改路径：YOLO注册表文件移动到models目录
+            registry_path = Path("models/yolo_model_registry.json")
             if not registry_path.exists():
                 return False
             
@@ -773,7 +774,23 @@ class BalanceTransfer:
         
         # 获取文件日志记录器
         file_logger = logging.getLogger(__name__)
-        concise = ConciseLogger("balance_transfer", gui_logger, file_logger)
+        # [2026-03-12] 修复原因：恢复转账过程的GUI日志显示，让用户看到转账进度
+        # 创建GUI日志记录器包装
+        if gui_logger:
+            gui_logger_obj = gui_logger
+        elif log_callback:
+            class GuiLogger:
+                def __init__(self, callback):
+                    self.callback = callback
+                def info(self, msg):
+                    self.callback(msg)
+                def error(self, msg):
+                    self.callback(msg)
+            gui_logger_obj = GuiLogger(log_callback)
+        else:
+            gui_logger_obj = None
+        
+        concise = ConciseLogger("balance_transfer", gui_logger_obj, file_logger)
         
         def log(msg):
             if log_callback:
@@ -959,87 +976,149 @@ class BalanceTransfer:
             
             # 5. 检测转账页面元素（YOLO）
             file_logger.info("[转账] 步骤5: 检测转账页面元素...")
-            # [2026-03-02] 修复：使用YOLO检测器进行元素检测
-            element_result = await self.detector.detect_page(
+            # [2026-03-12] 修复原因：直接使用转账专用YOLO模型检测元素
+            element_result = await self.detector.detect_elements_yolo(
                 device_id, 
-                use_cache=False, 
-                detect_elements=True  # 启用YOLO元素检测
+                model_key='transfer',  # 直接指定使用转账专用模型
+                conf_threshold=0.25
             )
             
-            # [2026-03-05] 修复数组比较错误：使用 is not None 和 len() 检查
-            if not element_result or element_result.elements is None or len(element_result.elements) == 0:
+            # [2026-03-12] 修复原因：处理detect_elements_yolo返回的字典格式
+            if not element_result:
                 file_logger.error("[转账] 未检测到转账页面元素")
+                # [2026-03-12] 添加详细调试日志：诊断YOLO检测失败的原因
+                file_logger.error(f"[转账调试] element_result: {element_result}")
                 concise.error("未检测到转账页面元素")
                 result['message'] = "未检测到转账页面元素"
                 result['error_type'] = ErrorType.TRANSFER_FAILED
                 return result
             
-            file_logger.info(f"[转账] ✓ 检测到 {len(element_result.elements)} 个元素")
-            for elem in element_result.elements:
-                file_logger.info(f"  - {elem.class_name} (置信度: {elem.confidence:.2f}, 位置: {elem.center})")
+            # 转换字典格式为元素列表，方便后续处理
+            elements = []
+            total_elements = 0
+            for class_name, detections in element_result.items():
+                total_elements += len(detections)
+                for detection in detections:
+                    # 创建临时对象来模拟PageElement
+                    element = type('Element', (), {
+                        'class_name': class_name,
+                        'confidence': detection['confidence'],
+                        'center': detection['center'],
+                        'bbox': detection['bbox']
+                    })()
+                    elements.append(element)
+            
+            file_logger.info(f"[转账] ✓ 检测到 {total_elements} 个元素")
+            for class_name, detections in element_result.items():
+                for detection in detections:
+                    file_logger.info(f"  - {class_name} (置信度: {detection['confidence']:.2f}, 位置: {detection['center']})")
             
             # 6. 查找并点击全部转账按钮
             concise.action("输入转账信息")
             file_logger.info("[转账] 步骤6: 点击全部转账按钮")
             
             all_transfer_element = None
-            for element in element_result.elements:
+            for element in elements:
                 if element.class_name == '全部转账按钮':
                     all_transfer_element = element
                     break
             
+            # [2026-03-12] 修复原因：添加详细调试日志，诊断全部转账按钮点击失败的原因
             if all_transfer_element:
                 file_logger.info(f"[转账] ✓ YOLO检测到全部转账按钮: {all_transfer_element.center}")
+                file_logger.info(f"[转账] 按钮置信度: {all_transfer_element.confidence:.2f}")
+                file_logger.info(f"[转账] 按钮边界框: {all_transfer_element.bbox}")
                 await self.adb.tap(device_id, all_transfer_element.center[0], all_transfer_element.center[1])
+                file_logger.info(f"[转账] 已点击YOLO检测的全部转账按钮")
             else:
-                file_logger.warning(f"[转账] 未检测到全部转账按钮，使用默认坐标")
+                file_logger.warning(f"[转账] 未检测到全部转账按钮，使用默认坐标: {self.ALL_TRANSFER_BUTTON}")
+                file_logger.warning(f"[转账] 当前检测到的元素:")
+                for elem in elements:
+                    file_logger.warning(f"  - {elem.class_name} (置信度: {elem.confidence:.2f})")
                 await self.adb.tap(device_id, self.ALL_TRANSFER_BUTTON[0], self.ALL_TRANSFER_BUTTON[1])
+                file_logger.info(f"[转账] 已点击默认坐标的全部转账按钮")
             
+            # 等待按钮点击生效
             await asyncio.sleep(TimeoutsConfig.WAIT_SHORT)
+            
+            # [2026-03-12] 添加验证：检查点击后页面是否有变化
+            file_logger.info("[转账] 验证全部转账按钮点击是否生效...")
+            verification_result = await self.detector.detect_elements_yolo(
+                device_id, 
+                model_key='transfer',  # 直接指定使用转账专用模型
+                conf_threshold=0.25
+            )
+            
+            if verification_result:
+                total_after_click = sum(len(detections) for detections in verification_result.values())
+                file_logger.info(f"[转账] 点击后检测到 {total_after_click} 个元素:")
+                for class_name, detections in verification_result.items():
+                    for detection in detections:
+                        file_logger.info(f"  - {class_name} (置信度: {detection['confidence']:.2f})")
+            else:
+                file_logger.error("[转账] 点击后未检测到任何元素，可能点击失败")
+                concise.error("全部转账按钮点击失败")
+                result['message'] = "全部转账按钮点击失败"
+                result['error_type'] = ErrorType.TRANSFER_FAILED
+                return result
             
             # 7. 重新检测页面元素（点击全部转账后页面内容变化）
             # [2026-02-22] 添加详细日志：诊断YOLO元素检测失败问题
             file_logger.info("[转账] 步骤7: 重新检测转账页面元素...")
-            file_logger.info(f"[转账] 调用detect_page: device_id={device_id}, use_cache=False, detect_elements=True")
+            file_logger.info(f"[转账] 调用detect_elements_yolo: device_id={device_id}, model_key=transfer")
             
-            # [2026-03-02] 修复：使用YOLO检测器进行元素检测
-            element_result = await self.detector.detect_page(
+            # [2026-03-12] 修复原因：直接使用转账专用YOLO模型检测元素
+            element_result = await self.detector.detect_elements_yolo(
                 device_id, 
-                use_cache=False, 
-                detect_elements=True
+                model_key='transfer',  # 直接指定使用转账专用模型
+                conf_threshold=0.25
             )
             
             # [2026-02-22] 详细记录检测结果
-            file_logger.info(f"[转账] detect_page返回: element_result={element_result is not None}")
+            file_logger.info(f"[转账] detect_elements_yolo返回: element_result={element_result is not None}")
             if element_result:
-                file_logger.info(f"[转账] - state: {element_result.state}")
-                file_logger.info(f"[转账] - confidence: {element_result.confidence:.2%}")
-                file_logger.info(f"[转账] - details: {element_result.details}")
-                file_logger.info(f"[转账] - elements: {element_result.elements}")
-                file_logger.info(f"[转账] - elements数量: {len(element_result.elements) if element_result.elements else 0}")
-                file_logger.info(f"[转账] - yolo_model_used: {element_result.yolo_model_used}")
+                total_elements = sum(len(detections) for detections in element_result.values())
+                file_logger.info(f"[转账] - 总元素数量: {total_elements}")
+                for class_name, detections in element_result.items():
+                    file_logger.info(f"[转账] - {class_name}: {len(detections)} 个")
+                file_logger.info(f"[转账] - 使用模型: transfer")
             
-            # [2026-03-05] 修复数组比较错误：使用 is None 和 len() 检查
-            if not element_result or element_result.elements is None or len(element_result.elements) == 0:
+            # [2026-03-12] 修复原因：处理detect_elements_yolo返回的字典格式
+            if not element_result:
                 file_logger.error("[转账] 重新检测失败，未检测到元素")
-                # [2026-03-05] 修复数组比较错误：使用 is None 和 len() 检查
-                elements_empty = (element_result.elements is None or len(element_result.elements) == 0) if element_result else 'N/A'
-                file_logger.error(f"[转账] element_result为空: {element_result is None}, elements为空: {elements_empty}")
+                # [2026-03-12] 添加详细调试日志：诊断重新检测失败的原因
+                file_logger.error(f"[转账调试] 重新检测结果: {element_result}")
                 concise.error("重新检测失败")
                 result['message'] = "重新检测失败"
                 result['error_type'] = ErrorType.TRANSFER_FAILED
                 return result
             
-            file_logger.info(f"[转账] ✓ 重新检测到 {len(element_result.elements)} 个元素")
-            for elem in element_result.elements:
-                file_logger.info(f"  - {elem.class_name} (置信度: {elem.confidence:.2f}, 位置: {elem.center})")
+            # 转换字典格式为元素列表，方便后续处理
+            elements = []
+            total_elements = 0
+            for class_name, detections in element_result.items():
+                total_elements += len(detections)
+                for detection in detections:
+                    # 创建临时对象来模拟PageElement
+                    element = type('Element', (), {
+                        'class_name': class_name,
+                        'confidence': detection['confidence'],
+                        'center': detection['center'],
+                        'bbox': detection['bbox']
+                    })()
+                    elements.append(element)
+            
+            file_logger.info(f"[转账] ✓ 重新检测到 {total_elements} 个元素")
+            for class_name, detections in element_result.items():
+                for detection in detections:
+                    file_logger.info(f"  - {class_name} (置信度: {detection['confidence']:.2f}, 位置: {detection['center']})")
             
             # 8. 查找并点击ID输入框
             concise.action(f"输入收款人ID: {recipient_id}")
             file_logger.info(f"[转账] 步骤8: 输入收款人ID")
             
             recipient_input_element = None
-            for element in element_result.elements:
+            for element in elements:
                 if element.class_name == 'ID输入框':
                     recipient_input_element = element
                     break
@@ -1053,14 +1132,34 @@ class BalanceTransfer:
             
             await asyncio.sleep(TimeoutsConfig.WAIT_SHORT)
             file_logger.info(f"[转账] 输入收款用户ID: {recipient_id}")
-            await self.adb.input_text(device_id, recipient_id)
+            
+            # [2026-03-12] 修复原因：添加详细调试日志，诊断ID输入失败的原因
+            # 先清空输入框（可能有默认内容）
+            file_logger.info("[转账] 清空ID输入框...")
+            await self.adb.clear_input(device_id)
+            await asyncio.sleep(0.3)
+            
+            # 输入收款人ID
+            file_logger.info(f"[转账] 开始输入收款人ID: {recipient_id}")
+            input_success = await self.adb.input_text(device_id, recipient_id)
+            file_logger.info(f"[转账] ID输入结果: {'成功' if input_success else '失败'}")
+            
+            if not input_success:
+                file_logger.warning("[转账] ID输入失败，尝试逐字符输入...")
+                # 降级方案：逐字符输入
+                for char in recipient_id:
+                    char_success = await self.adb.input_text(device_id, char)
+                    if not char_success:
+                        file_logger.error(f"[转账] 输入字符 '{char}' 失败")
+                    await asyncio.sleep(0.1)
+            
             await asyncio.sleep(TimeoutsConfig.TRANSFER_INPUT_WAIT)
             
             # 9. 查找并点击提交按钮
             file_logger.info("[转账] 步骤9: 点击提交按钮")
             
             submit_button_element = None
-            for element in element_result.elements:
+            for element in elements:
                 if element.class_name == '提交按钮':
                     submit_button_element = element
                     break
@@ -1074,9 +1173,9 @@ class BalanceTransfer:
             
             await asyncio.sleep(TimeoutsConfig.WAIT_MEDIUM)
             
-            # 8. 验证确认弹窗并点击确认
+            # 10. 验证确认弹窗并点击确认
             concise.action("确认转账信息")
-            file_logger.info("[转账] 步骤8: 验证确认弹窗")
+            file_logger.info("[转账] 步骤10: 验证确认弹窗")
             
             # 解析弹窗信息
             dialog_info = await self.parse_confirm_dialog(device_id, log_callback)
@@ -1181,8 +1280,8 @@ class BalanceTransfer:
                 log_callback=lambda msg: file_logger.info(f"  [等待] {msg}")
             )
             
-            # 9. 验证转账结果并获取转账后余额
-            file_logger.info("[转账] 步骤9: 验证转账结果")
+            # 11. 验证转账结果并获取转账后余额
+            file_logger.info("[转账] 步骤11: 验证转账结果")
             
             # [2026-03-02] 修复：如果不在钱包页或个人页，尝试按返回键返回
             if not page_result:
@@ -1252,58 +1351,57 @@ class BalanceTransfer:
                     if page_result and page_result.state == PageState.PROFILE_LOGGED:
                         file_logger.info(f"[转账] ✓ 已在个人页，开始获取转账后余额")
                         
-                        # 检测页面元素（使用YOLO检测器）
+                        # 检测页面元素（使用个人页面专用YOLO模型）
                         file_logger.info(f"[转账] 检测页面元素...")
-                        element_result = await self.detector.detect_page(
+                        element_result = await self.detector.detect_elements_yolo(
                             device_id, 
-                            use_cache=False, 
-                            detect_elements=True
+                            model_key='profile_detailed',  # 使用个人页面专用模型检测余额
+                            conf_threshold=0.25
                         )
                         
-                        # [2026-03-05] 修复数组比较错误：检查 elements 是否为 None 并且长度大于 0
-                        if element_result and element_result.elements is not None and len(element_result.elements) > 0:
-                            for element in element_result.elements:
-                                if element.class_name == '余额数字':
-                                    file_logger.info(f"[转账] 检测到余额元素，位置: {element.center}, 置信度: {element.confidence:.2f}")
+                        # [2026-03-12] 修复原因：处理detect_elements_yolo返回的字典格式
+                        if element_result and '余额数字' in element_result:
+                            for detection in element_result['余额数字']:
+                                file_logger.info(f"[转账] 检测到余额元素，位置: {detection['center']}, 置信度: {detection['confidence']:.2f}")
+                                
+                                # 截图并OCR识别余额区域
+                                try:
+                                    from .screen_capture import ScreenCapture
+                                    from .ocr_thread_pool import OCRThreadPool
+                                    from PIL import Image
+                                    import cv2
+                                    import re
                                     
-                                    # 截图并OCR识别余额区域
-                                    try:
-                                        from .screen_capture import ScreenCapture
-                                        from .ocr_thread_pool import OCRThreadPool
-                                        from PIL import Image
-                                        import cv2
-                                        import re
-                                        
-                                        screen_capture = ScreenCapture(self.adb)
-                                        screenshot = await screen_capture.capture(device_id)
-                                        
-                                        # 裁剪余额区域
-                                        x1, y1, x2, y2 = element.bbox
-                                        padding = 10
-                                        x1 = max(0, x1 - padding)
-                                        y1 = max(0, y1 - padding)
-                                        x2 = min(screenshot.shape[1], x2 + padding)
-                                        y2 = min(screenshot.shape[0], y2 + padding)
-                                        
-                                        balance_region = screenshot[y1:y2, x1:x2]
-                                        balance_pil = Image.fromarray(cv2.cvtColor(balance_region, cv2.COLOR_BGR2RGB))
-                                        
-                                        # OCR识别
-                                        ocr_pool = OCRThreadPool()
-                                        ocr_result = await ocr_pool.recognize(balance_pil)
-                                        
-                                        # [2026-03-05] 修复数组比较错误：检查 texts 是否为 None 并且长度大于 0
-                                        if ocr_result and ocr_result.texts is not None and len(ocr_result.texts) > 0:
-                                            for text in ocr_result.texts:
-                                                balance_match = re.search(r'[\d.]+', text)
-                                                if balance_match:
-                                                    final_balance = float(balance_match.group(0))
-                                                    file_logger.info(f"[转账] OCR识别到转账后余额: {final_balance:.2f} 元")
-                                                    break
-                                    except Exception as e:
-                                        file_logger.error(f"[转账] OCR识别余额失败: {e}", exc_info=True)
+                                    screen_capture = ScreenCapture(self.adb)
+                                    screenshot = await screen_capture.capture(device_id)
                                     
-                                    break
+                                    # 裁剪余额区域
+                                    x1, y1, x2, y2 = detection['bbox']
+                                    padding = 10
+                                    x1 = max(0, x1 - padding)
+                                    y1 = max(0, y1 - padding)
+                                    x2 = min(screenshot.shape[1], x2 + padding)
+                                    y2 = min(screenshot.shape[0], y2 + padding)
+                                    
+                                    balance_region = screenshot[y1:y2, x1:x2]
+                                    balance_pil = Image.fromarray(cv2.cvtColor(balance_region, cv2.COLOR_BGR2RGB))
+                                    
+                                    # OCR识别
+                                    ocr_pool = OCRThreadPool()
+                                    ocr_result = await ocr_pool.recognize(balance_pil)
+                                    
+                                    # [2026-03-05] 修复数组比较错误：检查 texts 是否为 None 并且长度大于 0
+                                    if ocr_result and ocr_result.texts is not None and len(ocr_result.texts) > 0:
+                                        for text in ocr_result.texts:
+                                            balance_match = re.search(r'[\d.]+', text)
+                                            if balance_match:
+                                                final_balance = float(balance_match.group(0))
+                                                file_logger.info(f"[转账] OCR识别到转账后余额: {final_balance:.2f} 元")
+                                                break
+                                except Exception as e:
+                                    file_logger.error(f"[转账] OCR识别余额失败: {e}", exc_info=True)
+                                
+                                break
                 
                 # ========== 转账金额获取策略（三级降级）==========
                 calculated_amount = None

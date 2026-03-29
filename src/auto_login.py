@@ -110,7 +110,7 @@ class AutoLogin:
             if result:
                 confidence = getattr(result, 'confidence', 0)
                 details = getattr(result, 'details', '')
-                print(f"[登录检测] 页面: {result.state.value}, 置信度: {confidence:.2%}, 详情: {details}")
+                # [2026-03-29] 静默：正常检测不输出到控制台
             
             # [2026-03-09] 直接返回登录专用模型的结果，不再验证
             return result
@@ -373,43 +373,11 @@ class AutoLogin:
                 log("✓ 已经登录，无需重复登录")
                 return LoginResult(success=True, used_cache=True)
             
-            # [2026-03-05] 修复：如果检测到profile_ad（可能是文章页），说明已登录，需要导航回个人页
+            # [2026-03-15] 修复原因：profile_ad表示个人页广告，说明已登录成功
+            # 如果检测到profile_ad，说明已登录，直接返回成功
             if current_state == PageState.PROFILE_AD:
-                log("检测到异常页面（可能是文章页），尝试导航回个人页验证登录状态...")
-                from .navigator import Navigator
-                navigator = Navigator(self.adb, self.detector)
-                
-                # 先返回首页
-                nav_success = await navigator.navigate_to_home(device_id)
-                if nav_success:
-                    await asyncio.sleep(1)
-                    
-                    # 再导航到个人页
-                    nav_success = await navigator.navigate_to_profile(device_id)
-                    if nav_success:
-                        # 清除缓存，重新检测
-                        if self.login_detector and hasattr(self.login_detector, 'clear_cache'):
-                            self.login_detector.clear_cache()
-                        
-                        page_result = await self._detect_page(device_id, use_cache=False)
-                        current_state = page_result.state
-                        log(f"导航后的页面状态: {current_state.value}")
-                        
-                        # 如果已登录，返回成功
-                        if current_state == PageState.PROFILE_LOGGED:
-                            log("✓ 已经登录，无需重复登录")
-                            return LoginResult(success=True, used_cache=True)
-                        
-                        # [2026-03-05] 修复：如果未登录，继续正常登录流程
-                        if current_state == PageState.PROFILE:
-                            log("检测到未登录，继续正常登录流程...")
-                            # 不要在这里return，让代码继续执行到下面的登录逻辑
-                        else:
-                            log(f"⚠️ 导航后仍然是异常状态: {current_state.value}")
-                            return LoginResult(success=False, error_message=f"无法确定登录状态: {current_state.value}")
-                else:
-                    log("⚠️ 导航失败，无法验证登录状态")
-                    return LoginResult(success=False, error_message="导航失败")
+                log("✓ 检测到个人页广告，说明已登录成功")
+                return LoginResult(success=True, used_cache=True)
             
             # 3. 如果在首页，直接点击"我的"按钮验证登录状态
             # [2026-03-05] 修复原因：不要调用navigator.navigate_to_profile，因为它使用通用分类器，结果可能不一致
@@ -472,65 +440,17 @@ class AutoLogin:
                 
                 return result
             
-            # 5. [2026-03-13] 新增：如果在积分页，按返回键返回个人页，然后导航到首页
+            # 5. [2026-03-17] 修复原因：如果在积分页，说明已经登录成功，直接返回成功
             if current_state == PageState.POINTS_PAGE:
-                log("检测到积分页，按返回键返回个人页...")
-                await self.adb.press_back(device_id)
-                await asyncio.sleep(2.0)
-                
-                # 清除缓存，重新检测页面状态
-                if self.login_detector and hasattr(self.login_detector, 'clear_cache'):
-                    self.login_detector.clear_cache()
-                
-                page_result = await self._detect_page(device_id, use_cache=False)
-                current_state = page_result.state
-                log(f"返回后页面状态: {current_state.value}")
-                
-                # 如果到达个人页已登录状态，导航到首页
-                if current_state == PageState.PROFILE_LOGGED:
-                    log("✓ 已经登录，导航到首页...")
-                    # 点击首页标签
-                    await self.adb.tap(device_id, 90, 920)
-                    await asyncio.sleep(2.0)
-                    
-                    # 验证是否到达首页
-                    if self.login_detector and hasattr(self.login_detector, 'clear_cache'):
-                        self.login_detector.clear_cache()
-                    
-                    page_result = await self._detect_page(device_id, use_cache=False)
-                    current_state = page_result.state
-                    log(f"导航后页面状态: {current_state.value}")
-                    
-                    if current_state == PageState.HOME:
-                        log("✓ 已到达首页，登录成功")
-                        return LoginResult(success=True, used_cache=True)
-                    else:
-                        log(f"⚠️ 导航后不在首页: {current_state.value}")
-                        return LoginResult(success=False, error_message=f"无法到达首页: {current_state.value}")
-                
-                # 如果到达个人页未登录状态，继续登录流程
-                if current_state == PageState.PROFILE:
-                    log("检测到未登录，继续登录流程...")
-                    # 导航到登录页面
-                    nav_to_login_success = await self.navigate_to_login(device_id, log_callback)
-                    if not nav_to_login_success:
-                        log("❌ 无法导航到登录页面")
-                        return LoginResult(success=False, error_message="无法导航到登录页面")
-                    
-                    # 验证是否到达登录页面
-                    if self.login_detector and hasattr(self.login_detector, 'clear_cache'):
-                        self.login_detector.clear_cache()
-                    
-                    page_result = await self._detect_page(device_id, use_cache=False)
-                    current_state = page_result.state
-                    log(f"导航后的页面: {current_state.value}")
-                    
-                    if current_state == PageState.LOGIN:
-                        log("当前在登录页面，执行正常登录流程...")
-                        result = await self._do_normal_login(device_id, phone, password, log_callback, gui_logger, step_number)
-                        return result
+                log("✓ 检测到积分页，说明已登录成功")
+                return LoginResult(success=True, used_cache=True)
             
-            # 6. 其他未知状态，返回错误
+            # 6. [2026-03-17] 修复原因：添加对profile_ad和points_page的明确处理
+            if current_state in [PageState.PROFILE_AD, PageState.POINTS_PAGE]:
+                log(f"✓ 检测到已登录状态: {current_state.value}")
+                return LoginResult(success=True, used_cache=True)
+            
+            # 7. 其他未知状态，返回错误
             log(f"❌ 无法确定登录状态，当前页面: {current_state.value}")
             log(f"提示：请检查是否需要手动处理弹窗或其他干扰")
             return LoginResult(success=False, error_message=f"无法确定登录状态: {current_state.value}")
@@ -626,11 +546,14 @@ class AutoLogin:
             await self._tap_with_fallback(device_id, self.PHONE_INPUT, log_callback)
             await wait_after_action(min_wait=0.3, max_wait=0.8)
             
-            # 清空手机号输入框
+            # [2026-03-15] 修改原因：修复手机号输入框清空不彻底导致号码拼接问题
+            # [2026-03-29] 修复：先按End移到末尾，再退格删除，避免光标在中间删不干净
             log("清空手机号输入框...")
-            for _ in range(15):
-                await self.adb.key_event(device_id, 67)
-                await asyncio.sleep(0.03)
+            await self.adb.key_event(device_id, 123)  # End键，移到末尾
+            await asyncio.sleep(0.1)
+            for _ in range(30):
+                await self.adb.key_event(device_id, 67)  # 退格
+                await asyncio.sleep(0.02)
             
             # 输入手机号
             log(f"输入手机号: {phone}")
@@ -644,11 +567,14 @@ class AutoLogin:
             await self._tap_with_fallback(device_id, self.PASSWORD_INPUT, log_callback)
             await wait_after_action(min_wait=0.3, max_wait=0.8)
             
-            # 清空密码输入框
+            # [2026-03-15] 修改原因：修复密码输入框清空不彻底导致密码拼接问题
+            # [2026-03-29] 修复：先按End移到末尾，再退格删除，避免光标在中间删不干净
             log("清空密码输入框...")
-            for _ in range(15):
-                await self.adb.key_event(device_id, 67)
-                await asyncio.sleep(0.03)
+            await self.adb.key_event(device_id, 123)  # End键，移到末尾
+            await asyncio.sleep(0.1)
+            for _ in range(30):
+                await self.adb.key_event(device_id, 67)  # 退格
+                await asyncio.sleep(0.02)
             
             # 输入密码
             log(f"输入密码: {'*' * len(password)}")
@@ -747,9 +673,9 @@ class AutoLogin:
                             return LoginResult(success=True)
                     
                     # [2026-03-05] 修复原因：登录成功后可能跳转到积分页，但登录专用模型识别不出来
-                    # 所以这里不处理积分页，让 ximeng_automation.py 来处理
-                    if current_state in [PageState.PROFILE, PageState.PROFILE_LOGGED]:
-                        log("✓ 登录成功！")
+                    # [2026-03-17] 修复原因：添加profile_ad和points_page的明确处理
+                    if current_state in [PageState.PROFILE, PageState.PROFILE_LOGGED, PageState.PROFILE_AD, PageState.POINTS_PAGE]:
+                        log(f"✓ 登录成功，当前页面: {current_state.value}")
                         concise_logger.success("登录成功")
                         return LoginResult(success=True)
                     
@@ -793,7 +719,7 @@ class AutoLogin:
             
             # [2026-03-05] 修复原因：登录成功后可能跳转到积分页，但登录专用模型识别不出来
             # 所以这里不处理积分页，让 ximeng_automation.py 来处理
-            if current_state in [PageState.PROFILE, PageState.PROFILE_LOGGED]:
+            if current_state in [PageState.PROFILE, PageState.PROFILE_LOGGED, PageState.PROFILE_AD]:
                 log("✓ 登录成功！")
                 concise_logger.success("登录成功")
                 return LoginResult(success=True)
@@ -826,10 +752,16 @@ class AutoLogin:
             elif current_state == PageState.LOGIN:
                 log("仍在登录页面，登录可能失败")
                 return LoginResult(success=False, error_message="登录超时，仍在登录页面")
-            else:
-                # 不在登录页面，认为登录成功
-                log(f"✓ 登录完成，当前页面: {current_state.value}")
+            # [2026-03-17] 修复原因：profile_ad、points_page等状态也表示登录成功，不应该返回异常
+            elif current_state in [PageState.PROFILE_AD, PageState.POINTS_PAGE]:
+                log(f"✓ 登录成功，当前页面: {current_state.value}")
+                concise_logger.success("登录成功")
                 return LoginResult(success=True)
+            else:
+                # [2026-03-14] 修复原因：只有明确到达已知的成功页面才算登录成功
+                # 未知页面状态应该返回失败，避免误判
+                log(f"❌ 登录后页面状态异常: {current_state.value}")
+                return LoginResult(success=False, error_message=f"登录后页面状态异常: {current_state.value}")
             
         except Exception as e:
             log(f"登录异常: {e}")

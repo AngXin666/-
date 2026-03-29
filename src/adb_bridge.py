@@ -26,6 +26,10 @@ class ADBBridge:
     # [2026-03-03] 全局步骤计数器
     _click_step_counter = 0
     
+    # [2026-03-29] ADB命令超时设置（秒）
+    ADB_COMMAND_TIMEOUT = 10.0  # ADB命令默认超时10秒
+    ADB_SCREENCAP_TIMEOUT = 5.0  # 截图命令超时5秒
+    
     def __init__(self, adb_path: Optional[str] = None):
         """初始化 ADB 桥接器
         
@@ -37,13 +41,27 @@ class ADBBridge:
             self.adb_path = adb_path
         else:
             self.adb_path = "adb"
+        
+        # [2026-03-29] 添加ADB服务器重启标志，避免频繁重启
+        self._last_restart_time = 0
+        self._restart_cooldown = 60  # 重启冷却时间60秒
     
-    def _run_adb(self, *args, device_id: Optional[str] = None) -> subprocess.CompletedProcess:
-        """执行 ADB 命令（隐藏 CMD 窗口）"""
+    def _run_adb(self, *args, device_id: Optional[str] = None, timeout: float = None) -> subprocess.CompletedProcess:
+        """执行 ADB 命令（隐藏 CMD 窗口）
+        
+        Args:
+            *args: ADB命令参数
+            device_id: 设备ID
+            timeout: 超时时间（秒），None表示使用默认超时
+        """
         cmd = [self.adb_path]
         if device_id:
             cmd.extend(["-s", device_id])
         cmd.extend(args)
+        
+        # [2026-03-29] 添加超时参数，避免ADB命令卡住
+        if timeout is None:
+            timeout = self.ADB_COMMAND_TIMEOUT
         
         return subprocess.run(
             cmd, 
@@ -51,12 +69,61 @@ class ADBBridge:
             text=True, 
             encoding='utf-8',
             startupinfo=STARTUPINFO,
-            creationflags=CREATE_NO_WINDOW
+            creationflags=CREATE_NO_WINDOW,
+            timeout=timeout  # 添加超时参数
         )
     
-    async def _run_adb_async(self, *args, device_id: Optional[str] = None) -> subprocess.CompletedProcess:
-        """异步执行 ADB 命令"""
-        return await asyncio.to_thread(self._run_adb, *args, device_id=device_id)
+    async def _run_adb_async(self, *args, device_id: Optional[str] = None, timeout: float = None) -> subprocess.CompletedProcess:
+        """异步执行 ADB 命令
+        
+        Args:
+            *args: ADB命令参数
+            device_id: 设备ID
+            timeout: 超时时间（秒），None表示使用默认超时
+        
+        [2026-03-29] 修复原因：使用asyncio.create_subprocess_exec真正异步执行，避免阻塞
+        """
+        if timeout is None:
+            timeout = self.ADB_COMMAND_TIMEOUT
+        
+        cmd = [self.adb_path]
+        if device_id:
+            cmd.extend(["-s", device_id])
+        cmd.extend(args)
+        
+        try:
+            # 使用asyncio.create_subprocess_exec真正异步执行
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                startupinfo=STARTUPINFO,
+                creationflags=CREATE_NO_WINDOW
+            )
+            
+            # 使用asyncio.wait_for控制超时
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(),
+                timeout=timeout
+            )
+            
+            # 构造返回对象（兼容subprocess.CompletedProcess）
+            class AsyncResult:
+                def __init__(self, returncode, stdout, stderr):
+                    self.returncode = returncode
+                    self.stdout = stdout.decode('utf-8', errors='ignore') if stdout else ""
+                    self.stderr = stderr.decode('utf-8', errors='ignore') if stderr else ""
+            
+            return AsyncResult(process.returncode, stdout, stderr)
+            
+        except asyncio.TimeoutError:
+            # 超时后杀死进程
+            try:
+                process.kill()
+                await process.wait()
+            except:
+                pass
+            raise subprocess.TimeoutExpired(cmd, timeout)
     
     async def connect(self, device_id: str) -> bool:
         """连接到指定设备
@@ -90,9 +157,38 @@ class ADBBridge:
             
         Returns:
             命令输出
+        
+        [2026-03-29] 修复原因：添加重试机制、详细日志和自动重启ADB服务器
         """
-        result = await self._run_adb_async("shell", command, device_id=device_id)
-        return result.stdout
+        max_retries = 2  # 最多重试2次
+        retry_delay = 0.5  # 重试间隔0.5秒
+        
+        for attempt in range(max_retries + 1):
+            try:
+                result = await self._run_adb_async("shell", command, device_id=device_id)
+                return result.stdout
+            except subprocess.TimeoutExpired as e:
+                if attempt < max_retries:
+                    # 超时后等待一下再重试
+                    cmd_preview = command[:50] + "..." if len(command) > 50 else command
+                    print(f"[ADB] shell 超时 (尝试 {attempt + 1}/{max_retries + 1})，命令: {cmd_preview}，{retry_delay}秒后重试...")
+                    await asyncio.sleep(retry_delay)
+                    continue
+                else:
+                    # 重试次数用完，尝试重启ADB服务器
+                    cmd_preview = command[:50] + "..." if len(command) > 50 else command
+                    print(f"[ADB] shell 超时失败 (已重试{max_retries}次)，命令: {cmd_preview}")
+                    
+                    # 如果是简单命令（如echo test）超时，说明ADB服务器有问题，尝试重启
+                    if 'echo' in command or 'test' in command:
+                        print(f"[ADB] 检测到简单命令超时，尝试重启ADB服务器...")
+                        await self.restart_adb_server()
+                    
+                    return ""
+            except Exception as e:
+                cmd_preview = command[:50] + "..." if len(command) > 50 else command
+                print(f"[ADB] shell 异常，命令: {cmd_preview}: {e}")
+                return ""
 
     async def tap(self, device_id: str, x: int, y: int) -> bool:
         """点击指定坐标
@@ -105,97 +201,7 @@ class ADBBridge:
         Returns:
             操作是否成功
         """
-        # [2026-03-03] 调试日志：记录所有点击操作并截图
-        import time
-        import traceback
-        from datetime import datetime
-        import os
-        
-        # 步骤计数器递增
-        ADBBridge._click_step_counter += 1
-        step_number = ADBBridge._click_step_counter
-        
-        # 获取调用栈信息（找出是哪里调用的tap）
-        stack = traceback.extract_stack()
-        caller_info = ""
-        step_name = "未知步骤"
-        if len(stack) >= 2:
-            caller = stack[-2]
-            caller_info = f"{caller.filename}:{caller.lineno} in {caller.name}"
-            # 提取步骤名称（从函数名推断）
-            if 'startup' in caller.name.lower():
-                step_name = "启动流程"
-            elif 'checkin' in caller.name.lower() or 'sign' in caller.name.lower():
-                step_name = "签到流程"
-            elif 'login' in caller.name.lower():
-                step_name = "登录流程"
-            elif 'navigate' in caller.name.lower():
-                step_name = "页面导航"
-            else:
-                step_name = caller.name
-        
-        # 使用 datetime 获取毫秒
-        now = datetime.now()
-        time_str = now.strftime('%H:%M:%S') + f".{now.microsecond // 1000:03d}"
-        timestamp = now.strftime('%Y%m%d_%H%M%S_%f')[:-3]
-        
-        # 点击前截图
-        screenshot_path = None
-        try:
-            # 创建截图目录
-            screenshot_dir = "click_screenshots"
-            os.makedirs(screenshot_dir, exist_ok=True)
-            
-            # 截图文件名（包含步骤编号）
-            screenshot_path = f"{screenshot_dir}/step_{step_number:03d}_{timestamp}.png"
-            
-            # 在设备上截图
-            device_screenshot = "/sdcard/temp_screenshot.png"
-            await self._run_adb_async(
-                "shell", f"screencap -p {device_screenshot}",
-                device_id=device_id
-            )
-            
-            # 从设备拉取截图
-            result = await self._run_adb_async(
-                "pull", device_screenshot, screenshot_path,
-                device_id=device_id
-            )
-            
-            # 删除设备上的临时文件
-            await self._run_adb_async(
-                "shell", f"rm {device_screenshot}",
-                device_id=device_id
-            )
-            
-            # 检查文件是否成功保存
-            if not os.path.exists(screenshot_path) or os.path.getsize(screenshot_path) == 0:
-                screenshot_path = "截图失败: 文件为空"
-        except Exception as e:
-            screenshot_path = f"截图失败: {e}"
-        
-        # 写入日志文件
-        log_message = f"""[DEBUG-点击] ========================================
-[DEBUG-点击] 步骤编号: 第 {step_number} 步
-[DEBUG-点击] 时间: {time_str}
-[DEBUG-点击] 步骤名称: {step_name}
-[DEBUG-点击] 设备: {device_id}
-[DEBUG-点击] 坐标: ({x}, {y})
-[DEBUG-点击] 调用位置: {caller_info}
-[DEBUG-点击] 截图文件: {screenshot_path}
-[DEBUG-点击] ========================================
-
-"""
-        
-        try:
-            with open("click_debug.log", "a", encoding="utf-8") as f:
-                f.write(log_message)
-        except:
-            pass
-        
-        # 同时打印到控制台
-        print(log_message.strip())
-        
+        # [2026-03-29] 修复：移除调试截图逻辑，避免截图操作干扰触摸事件导致上划手势
         try:
             result = await self._run_adb_async(
                 "shell", f"input tap {x} {y}",
@@ -227,6 +233,34 @@ class ADBBridge:
         except Exception:
             return False
     
+    async def get_screen_size(self, device_id: str) -> Optional[tuple]:
+        """获取屏幕尺寸
+        
+        Args:
+            device_id: 设备 ID
+            
+        Returns:
+            (width, height) 或 None
+        """
+        try:
+            result = await self._run_adb_async(
+                "shell", "wm size",
+                device_id=device_id
+            )
+            
+            if result.returncode == 0:
+                output = result.stdout.strip()
+                # 输出格式通常是: "Physical size: 1080x1920"
+                if ":" in output:
+                    size_part = output.split(":")[-1].strip()
+                    if "x" in size_part:
+                        width, height = size_part.split("x")
+                        return (int(width), int(height))
+            
+            return None
+        except Exception:
+            return None
+    
     async def input_text(self, device_id: str, text: str) -> bool:
         """输入文本
         
@@ -248,6 +282,30 @@ class ADBBridge:
         except Exception:
             return False
     
+    async def clear_input(self, device_id: str) -> bool:
+        """清空当前输入框
+        
+        Args:
+            device_id: 设备 ID
+            
+        Returns:
+            操作是否成功
+        """
+        try:
+            # 全选并删除
+            result1 = await self._run_adb_async(
+                "shell", "input keyevent KEYCODE_CTRL_A",
+                device_id=device_id
+            )
+            await asyncio.sleep(0.1)
+            result2 = await self._run_adb_async(
+                "shell", "input keyevent KEYCODE_DEL",
+                device_id=device_id
+            )
+            return result1.returncode == 0 and result2.returncode == 0
+        except Exception:
+            return False
+    
     async def screencap(self, device_id: str) -> bytes:
         """截取屏幕
         
@@ -257,12 +315,14 @@ class ADBBridge:
         Returns:
             PNG 图像数据
         """
+        # [2026-03-29] 添加超时参数，避免截图命令卡住
         cmd = [self.adb_path, "-s", device_id, "exec-out", "screencap", "-p"]
         result = subprocess.run(
             cmd, 
             capture_output=True,
             startupinfo=STARTUPINFO,
-            creationflags=CREATE_NO_WINDOW
+            creationflags=CREATE_NO_WINDOW,
+            timeout=self.ADB_SCREENCAP_TIMEOUT  # 截图命令5秒超时
         )
         return result.stdout
     
@@ -309,6 +369,7 @@ class ADBBridge:
                 # 所以我们先尝试monkey,如果失败则尝试am start
                 cmd = f"monkey -p {package_name} -c android.intent.category.LAUNCHER 1"
             
+            # [2026-03-12] 优化日志：移除CMD控制台的DEBUG启动信息
             result = await self._run_adb_async("shell", cmd, device_id=device_id)
             
             # 检查是否成功
@@ -319,11 +380,13 @@ class ADBBridge:
             if not activity_name:
                 # 尝试使用am start启动主Activity
                 cmd = f"am start -W -S {package_name}"
+                # [2026-03-12] 优化日志：移除CMD控制台的DEBUG启动信息
                 result = await self._run_adb_async("shell", cmd, device_id=device_id)
                 return result.returncode == 0
             
             return False
-        except Exception:
+        except Exception as e:
+            # [2026-03-12] 优化日志：移除CMD控制台的DEBUG启动信息
             return False
     
     async def stop_app(self, device_id: str, package_name: str) -> bool:
@@ -335,15 +398,32 @@ class ADBBridge:
             
         Returns:
             操作是否成功
+        
+        [2026-03-29] 修复原因：添加重试机制和详细日志，解决ADB命令偶发超时问题
         """
-        try:
-            result = await self._run_adb_async(
-                "shell", f"am force-stop {package_name}",
-                device_id=device_id
-            )
-            return result.returncode == 0
-        except Exception:
-            return False
+        max_retries = 2  # 最多重试2次
+        retry_delay = 0.5  # 重试间隔0.5秒
+        
+        for attempt in range(max_retries + 1):
+            try:
+                result = await self._run_adb_async(
+                    "shell", f"am force-stop {package_name}",
+                    device_id=device_id
+                )
+                return result.returncode == 0
+            except subprocess.TimeoutExpired as e:
+                if attempt < max_retries:
+                    # 超时后等待一下再重试
+                    print(f"[ADB] stop_app 超时 (尝试 {attempt + 1}/{max_retries + 1})，{retry_delay}秒后重试...")
+                    await asyncio.sleep(retry_delay)
+                    continue
+                else:
+                    # 重试次数用完，返回失败
+                    print(f"[ADB] stop_app 超时失败 (已重试{max_retries}次): {e}")
+                    return False
+            except Exception as e:
+                print(f"[ADB] stop_app 异常: {e}")
+                return False
     
     async def is_app_installed(self, device_id: str, package_name: str) -> bool:
         """检查应用是否已安装
@@ -552,6 +632,43 @@ class ADBBridge:
     async def press_home(self, device_id: str) -> bool:
         """按 Home 键"""
         return await self.key_event(device_id, 3)
+    
+    async def restart_adb_server(self) -> bool:
+        """重启ADB服务器
+        
+        Returns:
+            是否成功
+        
+        [2026-03-29] 添加原因：解决ADB服务器卡住导致命令超时的问题
+        """
+        import time
+        
+        # 检查冷却时间，避免频繁重启
+        current_time = time.time()
+        if current_time - self._last_restart_time < self._restart_cooldown:
+            print(f"[ADB] 跳过重启（冷却中，剩余{int(self._restart_cooldown - (current_time - self._last_restart_time))}秒）")
+            return False
+        
+        try:
+            print("[ADB] 正在重启ADB服务器...")
+            
+            # 1. 停止ADB服务器
+            result = await self._run_adb_async("kill-server", timeout=5.0)
+            await asyncio.sleep(1.0)
+            
+            # 2. 启动ADB服务器
+            result = await self._run_adb_async("start-server", timeout=10.0)
+            await asyncio.sleep(2.0)
+            
+            # 更新重启时间
+            self._last_restart_time = current_time
+            
+            print("[ADB] ✓ ADB服务器重启成功")
+            return True
+            
+        except Exception as e:
+            print(f"[ADB] ❌ ADB服务器重启失败: {e}")
+            return False
     
     async def pull(self, device_id: str, remote_path: str, local_path: str) -> bool:
         """从设备拉取文件到本地

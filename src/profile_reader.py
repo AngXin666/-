@@ -71,10 +71,9 @@ class ProfileReader:
             # [2026-03-11] 添加详细的类型检查（保存到文件）
             from .logger import get_logger
             debug_logger = get_logger()
-            debug_logger.info(f"[ProfileReader] 传入检测器类型: {type(yolo_detector)}")
-            debug_logger.info(f"[ProfileReader] 检测器类名: {yolo_detector.__class__.__name__}")
-            print(f"[ProfileReader] 传入检测器类型: {type(yolo_detector)}")
-            print(f"[ProfileReader] 检测器类名: {yolo_detector.__class__.__name__}")
+            # [2026-03-12] 优化日志：移除CMD控制台的ProfileReader技术信息
+            # [2026-03-11] 优化日志：移除控制台输出
+            # [2026-03-11] 优化日志：移除控制台输出
             
             # 检查是否是YOLO检测器（PageDetectorIntegrated 或 PageDetectorDL）
             if hasattr(yolo_detector, 'detect_page'):
@@ -82,24 +81,21 @@ class ProfileReader:
                 if yolo_detector.__class__.__name__ == 'PageDetectorIntegrated':
                     self._integrated_detector = yolo_detector
                     debug_logger.info(f"[ProfileReader] ✓ 使用PageDetectorIntegrated检测器")
-                    print(f"[ProfileReader] ✓ 使用PageDetectorIntegrated检测器")
+                    # [2026-03-11] 优化日志：移除控制台输出
                 else:
                     debug_logger.warning(f"[ProfileReader] ⚠️ 检测器有detect_page方法但不是PageDetectorIntegrated: {yolo_detector.__class__.__name__}")
                     debug_logger.info(f"[ProfileReader] ✓ 使用传入的检测器（可能不支持元素检测）")
-                    print(f"[ProfileReader] ⚠️ 检测器有detect_page方法但不是PageDetectorIntegrated: {yolo_detector.__class__.__name__}")
+                    # [2026-03-11] 优化日志：移除控制台输出
                     self._integrated_detector = yolo_detector
-                    print(f"[ProfileReader] ✓ 使用传入的检测器（可能不支持元素检测）")
             # 检查是否是PageDetector对象，提取其中的_yolo_detector
             elif hasattr(yolo_detector, '_yolo_detector'):
                 self._yolo_detector = yolo_detector._yolo_detector
                 debug_logger.info(f"[ProfileReader] ✓ YOLO检测器已初始化（从PageDetector提取）")
-                print(f"[ProfileReader] ✓ YOLO检测器已初始化（从PageDetector提取）")
             else:
                 self._yolo_detector = yolo_detector
                 debug_logger.info(f"[ProfileReader] ✓ YOLO检测器已初始化")
-                print(f"[ProfileReader] ✓ YOLO检测器已初始化")
         else:
-            print(f"[ProfileReader] ✗ 检测器为None，将使用OCR降级方案")
+            pass  # [2026-03-11] 优化日志：检测器为None
         
         # 初始化静默日志记录器
         self._silent_log = get_silent_logger()
@@ -167,7 +163,8 @@ class ProfileReader:
             return result
             
         except Exception as e:
-            print(f"获取个人信息失败: {e}")
+            # [2026-03-11] 优化日志：删除CMD输出
+            pass
             return result
     
     async def _get_dynamic_data_only(self, device_id: str) -> Dict[str, any]:
@@ -218,13 +215,13 @@ class ProfileReader:
             debug_logger = get_logger()
             debug_logger.info(f"  [DEBUG-_get_dynamic_data_only] self._integrated_detector类型: {type(self._integrated_detector)}")
             debug_logger.info(f"  [DEBUG-_get_dynamic_data_only] 检测器类名: {self._integrated_detector.__class__.__name__ if self._integrated_detector else 'None'}")
-            print(f"  [DEBUG-_get_dynamic_data_only] self._integrated_detector类型: {type(self._integrated_detector)}")
-            print(f"  [DEBUG-_get_dynamic_data_only] 检测器类名: {self._integrated_detector.__class__.__name__ if self._integrated_detector else 'None'}")
+            # [2026-03-11] 优化日志：移除控制台输出
+            # [2026-03-11] 优化日志：移除控制台输出
             if self._integrated_detector:
                 debug_logger.info(f"  [DEBUG-_get_dynamic_data_only] 是否有find_button_yolo: {hasattr(self._integrated_detector, 'find_button_yolo')}")
                 debug_logger.info(f"  [DEBUG-_get_dynamic_data_only] 是否有detect_page: {hasattr(self._integrated_detector, 'detect_page')}")
-                print(f"  [DEBUG-_get_dynamic_data_only] 是否有find_button_yolo: {hasattr(self._integrated_detector, 'find_button_yolo')}")
-                print(f"  [DEBUG-_get_dynamic_data_only] 是否有detect_page: {hasattr(self._integrated_detector, 'detect_page')}")
+                # [2026-03-11] 优化日志：移除控制台输出
+                # [2026-03-11] 优化日志：移除控制台输出
             
             if self._integrated_detector:
                 detection_result = await self._integrated_detector.detect_page(
@@ -476,8 +473,6 @@ class ProfileReader:
             
         except Exception as e:
             self._silent_log.log(f"  ! 获取动态数据失败: {e}")
-            import traceback
-            traceback.print_exc()
             return result
     
     async def get_identity_only(self, device_id: str, account: Optional[str] = None) -> Dict[str, any]:
@@ -502,14 +497,14 @@ class ProfileReader:
         }
         
         if not HAS_PIL or not self._ocr_pool:
-            print("  ! PIL 或 OCR 库未安装")
+            # [2026-03-11] 优化日志：删除CMD输出
             return result
         
         try:
             # 截图
             screenshot_data = await self.adb.screencap(device_id)
             if not screenshot_data:
-                print("  ! 截图失败")
+                # [2026-03-11] 优化日志：删除CMD输出
                 return result
             
             image = Image.open(BytesIO(screenshot_data))
@@ -523,7 +518,7 @@ class ProfileReader:
                     conf_threshold=0.3
                 )
                 
-                print(f"  [YOLO] 检测到 {len(detections)} 个目标")
+                # [2026-03-11] 优化日志：移除控制台输出
                 
                 if detections:
                     # 并行OCR识别
@@ -537,10 +532,10 @@ class ProfileReader:
                         
                         if '昵称' in det.class_name and result['nickname'] is None:
                             # 添加调试日志
-                            print(f"  [YOLO调试] 检测到昵称区域:")
-                            print(f"    - 坐标: ({x1}, {y1}, {x2}, {y2})")
-                            print(f"    - 置信度: {det.confidence:.2%}")
-                            print(f"    - 类别: {det.class_name}")
+                            # [2026-03-11] 优化日志：移除控制台输出
+                            # [2026-03-11] 优化日志：移除控制台输出
+                            # [2026-03-11] 优化日志：移除控制台输出
+                            # [2026-03-11] 优化日志：移除控制台输出
                             
                             ocr_tasks.append(('nickname', det.class_name, self._ocr_pool.recognize(region_enhanced, timeout=5.0)))
                             detection_info.append(('nickname', (x1, y1, x2, y2)))
@@ -561,9 +556,9 @@ class ProfileReader:
                                 continue
                             
                             # 添加OCR调试日志
-                            print(f"  [OCR调试] 识别到 {len(ocr_result.texts)} 个文本:")
+                            # [2026-03-11] 优化日志：移除控制台输出
                             for j, text in enumerate(ocr_result.texts):
-                                print(f"    [{j}] '{text}'")
+                                pass  # [2026-03-11] 优化日志：移除控制台输出
                             
                             # 处理昵称
                             if field_type == 'nickname':
@@ -577,7 +572,7 @@ class ProfileReader:
                                 )
                                 if nickname:
                                     result['nickname'] = nickname
-                                    print(f"  ✓ 昵称: {result['nickname']}")
+                                    # [2026-03-11] 优化日志：移除控制台输出
                             
                             # 处理用户ID
                             elif field_type == 'user_id':
@@ -587,21 +582,21 @@ class ProfileReader:
                                     match = re.search(r'(\d{6,})', text)
                                     if match:
                                         result['user_id'] = match.group(1)
-                                        print(f"  ✓ 用户ID: {result['user_id']}")
+                                        # [2026-03-11] 优化日志：移除控制台输出
                                         break
             
             # 如果YOLO检测失败，降级到区域OCR
             if result['nickname'] is None or result['user_id'] is None:
                 # [2026-03-06] 优先使用区域OCR识别昵称
                 if result['nickname'] is None:
-                    print(f"  [区域OCR] YOLO未检测到昵称，尝试区域OCR...")
+                    # [2026-03-11] 优化日志：移除控制台输出
                     result['nickname'] = await self._extract_nickname_from_region(device_id, image)
                     if result['nickname']:
-                        print(f"  [区域OCR] 昵称: {result['nickname']}")
+                        pass  # [2026-03-11] 优化日志：移除控制台输出
                 
                 # 如果区域OCR也失败，或者需要识别用户ID，使用全屏OCR
                 if result['nickname'] is None or result['user_id'] is None:
-                    print(f"  [全屏OCR] 区域OCR失败或需要识别用户ID，尝试全屏OCR...")
+                    # [2026-03-11] 优化日志：移除控制台输出
                     enhanced_image = enhance_for_ocr(image)
                     ocr_result = await self._ocr_pool.recognize(enhanced_image, timeout=10.0)
                     
@@ -615,19 +610,17 @@ class ProfileReader:
                         if result['nickname'] is None:
                             result['nickname'] = self._extract_nickname(texts)
                             if result['nickname']:
-                                print(f"  [全屏OCR] 昵称: {result['nickname']}")
+                                pass  # [2026-03-11] 优化日志：移除控制台输出
                         
                         if result['user_id'] is None:
                             result['user_id'] = self._extract_user_id(texts)
                         if result['user_id']:
-                            print(f"  [全屏OCR] 用户ID: {result['user_id']}")
+                            pass  # [2026-03-11] 优化日志：移除控制台输出
             
             return result
             
         except Exception as e:
-            print(f"  ! 获取身份信息失败: {e}")
-            import traceback
-            traceback.print_exc()
+            # [2026-03-11] 优化日志：移除控制台输出
             return result
     
     async def get_full_profile(self, device_id: str, account: Optional[str] = None, step_number: int = 3, gui_logger = None) -> Dict[str, any]:
@@ -651,8 +644,8 @@ class ProfileReader:
         import time
         from .concise_logger import ConciseLogger
         
-        # 创建简洁日志记录器
-        concise_logger = ConciseLogger("profile_reader", gui_logger, None)
+        # [2026-03-11] 优化日志：不输出到GUI，避免CMD显示过多日志
+        concise_logger = ConciseLogger("profile_reader", None, None)
         
         # 记录步骤开始
         concise_logger.step(step_number, "获取资料")
@@ -666,28 +659,37 @@ class ProfileReader:
             'balance': None,
             'points': None,
             'vouchers': None,
+            'instance_closed': False,  # [2026-03-14] 添加：标记实例是否关闭
         }
         
         if not HAS_PIL or not self._ocr_pool:
-            print("  ! PIL 或 OCR 库未安装")
+            # [2026-03-11] 优化日志：删除CMD输出
             concise_logger.error("PIL 或 OCR 库未安装")
             return result
         
         try:
-            # 记录操作：进入个人页（假设已经在个人页）
+            # [2026-03-14] 修复原因：删除页面验证和导航逻辑，调用方负责确保在个人页
+            # 只测试截图，如果截图失败说明设备已断开
+            test_screenshot = await self.adb.screencap(device_id)
+            if not test_screenshot:
+                concise_logger.error("设备连接已断开")
+                result['instance_closed'] = True
+                return result
+            
+            # 记录操作：进入个人页
             concise_logger.action("进入个人页")
             
             # 截图
             screenshot_start = time.time()
             screenshot_data = await self.adb.screencap(device_id)
             if not screenshot_data:
-                print("  ! 截图失败")
+                # [2026-03-11] 优化日志：删除CMD输出
                 concise_logger.error("截图失败")
                 return result
             
             image = Image.open(BytesIO(screenshot_data))
             screenshot_time = time.time() - screenshot_start
-            print(f"  [性能] 截图耗时: {screenshot_time:.3f}秒")
+            # [2026-03-11] 优化日志：移除控制台输出
             
             # [2026-03-02] 统一术语：优先使用YOLO识别器检测页面类型
             use_yolo_fallback = True  # 标记是否需要降级到YOLO检测器
@@ -696,7 +698,7 @@ class ProfileReader:
             # 直接尝试检测关闭按钮元素，不依赖页面类型判断
             if self._integrated_detector:
                 detect_start = time.time()
-                print(f"  [YOLO] 开始检测页面元素...")
+                # [2026-03-11] 优化日志：移除控制台输出
                 
                 # 检测页面元素（查找关闭按钮）
                 from .page_detector import PageState
@@ -707,7 +709,7 @@ class ProfileReader:
                 )
                 
                 detect_time = time.time() - detect_start
-                print(f"  [性能] YOLO识别器耗时: {detect_time:.3f}秒")
+                # [2026-03-11] 优化日志：移除控制台输出
                 
                 # 检查是否检测到关闭按钮（可能有弹窗）
                 # [2026-03-05] 修复数组比较错误：使用 is not None 和 len() 检查
@@ -720,7 +722,7 @@ class ProfileReader:
                 
                 # 如果检测到关闭按钮，说明可能有弹窗，需要处理
                 if has_close_button:
-                    print(f"  [YOLO] ⚠️ 检测到弹窗关闭按钮")
+                    # [2026-03-11] 优化日志：移除控制台输出
                     
                     # 记录操作：关闭提示弹窗
                     concise_logger.action("关闭提示弹窗")
@@ -731,7 +733,7 @@ class ProfileReader:
                     close_start_time = time.time()
                     
                     for attempt in range(1, max_attempts + 1):
-                        print(f"  [弹窗处理] 第 {attempt}/{max_attempts} 次尝试...")
+                        # [2026-03-11] 优化日志：移除控制台输出
                         
                         # 步骤1：YOLO检测关闭按钮并点击
                         clicked = False
@@ -748,22 +750,22 @@ class ProfileReader:
                                 # 查找关闭按钮
                                 for element in element_result.elements:
                                     if "关闭" in element.class_name or "确认" in element.class_name or "确定" in element.class_name:
-                                        print(f"  [YOLO] 找到关闭按钮: {element.class_name} (置信度: {element.confidence:.2%})")
+                                        # [2026-03-11] 优化日志：移除控制台输出
                                         
                                         # 点击关闭按钮
                                         x1, y1, x2, y2 = element.bbox
                                         center_x = (x1 + x2) // 2
                                         center_y = (y1 + y2) // 2
                                         await self.adb.tap(device_id, center_x, center_y)
-                                        print(f"  [YOLO] 已点击关闭按钮 ({center_x}, {center_y})")
+                                        # [2026-03-11] 优化日志：移除控制台输出
                                         clicked = True
                                         await asyncio.sleep(0.5)
                                         break
                         except Exception as e:
-                            print(f"  [YOLO] ⚠️ YOLO检测失败: {e}")
+                            pass  # [2026-03-11] 优化日志：移除控制台输出
                         
                         # 步骤2：OCR确认是否关闭成功
-                        print(f"  [OCR确认] 检查是否已返回个人页...")
+                        # [2026-03-11] 优化日志：移除控制台输出
                         screenshot_data = await self.adb.screencap(device_id)
                         if screenshot_data:
                             image = Image.open(BytesIO(screenshot_data))
@@ -782,10 +784,10 @@ class ProfileReader:
                                 has_popup = any(keyword in texts for keyword in popup_keywords)
                                 
                                 if has_profile and not has_popup:
-                                    print(f"  [OCR确认] ✓ 已返回个人页")
+                                    # [2026-03-11] 优化日志：移除控制台输出
                                     break
                                 elif has_popup:
-                                    print(f"  [OCR确认] ⚠️ 仍在弹窗页面，尝试按返回键...")
+                                    # [2026-03-11] 优化日志：移除控制台输出
                                     await self.adb.press_back(device_id)
                                     await asyncio.sleep(0.5)
                                     
@@ -803,29 +805,28 @@ class ProfileReader:
                                             has_popup = any(keyword in texts for keyword in popup_keywords)
                                             
                                             if has_profile and not has_popup:
-                                                print(f"  [返回键] ✓ 已返回个人页")
+                                                # [2026-03-11] 优化日志：移除控制台输出
                                                 break
                         
                         # 检查是否超时（累计计时，不清零）
                         elapsed = time.time() - close_start_time
                         if elapsed >= 15.0:
-                            print(f"  [弹窗处理] ⚠️ 超时（{elapsed:.1f}秒），停止尝试")
+                            # [2026-03-11] 优化日志：移除控制台输出
                             break
                         
                         # 如果不是最后一次尝试，等待5秒后重试
                         if attempt < max_attempts:
                             remaining = retry_interval - (time.time() - close_start_time - (attempt - 1) * retry_interval)
                             if remaining > 0:
-                                print(f"  [弹窗处理] 等待 {remaining:.1f}秒后重试...")
+                                # [2026-03-11] 优化日志：移除控制台输出
                                 await asyncio.sleep(remaining)
 
                 
                 # 现在开始检测页面元素（昵称、余额等）
-                # 记录操作：获取详细资料
-                concise_logger.action("获取详细资料")
+                # [2026-03-12] 优化日志：移除获取详细资料的技术日志
                 
                 yolo_start = time.time()
-                print(f"  [YOLO] 开始检测页面元素...")
+                # [2026-03-11] 优化日志：移除控制台输出
                 # [2026-02-22] 删除调试日志
                 
                 # 使用YOLO识别器的detect_page方法，启用元素检测
@@ -836,7 +837,7 @@ class ProfileReader:
                 )
                 
                 yolo_time = time.time() - yolo_start
-                print(f"  [性能] YOLO识别器耗时: {yolo_time:.3f}秒")
+                # [2026-03-11] 优化日志：移除控制台输出
                 
                 # [2026-03-01] 修复：检查 elements 属性是否存在（PageDetectorDL 不支持元素检测）
                 # [2026-03-05] 修复数组比较错误：使用 is not None 和 len() 检查
@@ -847,15 +848,15 @@ class ProfileReader:
                 if hasattr(detection_result, 'elements') and detection_result.elements is not None:
                     has_elements = len(detection_result.elements) > 0
                     if has_elements:
-                        print(f"  [YOLO] 检测到 {len(detection_result.elements)} 个元素")
+                        # [2026-03-11] 优化日志：移除控制台输出
                         # 打印检测到的元素详情
                         for elem in detection_result.elements:
                             pass  # [2026-02-22] 删除调试日志
                     else:
-                        print(f"  [YOLO] YOLO检测完成，但未检测到元素")
+                        pass  # [2026-03-11] 优化日志：移除控制台输出
                 else:
                     # PageDetectionResult类型，没有elements属性，跳过YOLO元素检测
-                    print(f"  [YOLO] 检测器类型不支持元素检测，跳过YOLO优化")
+                    pass  # [2026-03-11] 优化日志：移除控制台输出
                     has_elements = False
                 
                 # ===== 优化：全屏OCR一次，然后根据YOLO位置匹配文本 =====
@@ -864,18 +865,18 @@ class ProfileReader:
                     ocr_start = time.time()
                     
                     # 全屏OCR识别（只调用一次）
-                    print(f"  [全屏OCR] 开始识别...")
+                    # [2026-03-11] 优化日志：移除控制台输出
                     enhanced_image = enhance_for_ocr(image)
                     full_ocr_result = await self._ocr_pool.recognize(enhanced_image)
                     
                     ocr_time = time.time() - ocr_start
-                    print(f"  [性能] 全屏OCR耗时: {ocr_time:.3f}秒")
+                    # [2026-03-11] 优化日志：移除控制台输出
                     
                     # [2026-03-05] 修复数组比较错误：检查 texts 和 boxes 是否为 None 并且长度大于 0
                     if (full_ocr_result and 
                         full_ocr_result.texts is not None and len(full_ocr_result.texts) > 0 and 
                         full_ocr_result.boxes is not None and len(full_ocr_result.boxes) > 0):
-                        print(f"  [全屏OCR] 识别到 {len(full_ocr_result.texts)} 个文本")
+                        # [2026-03-11] 优化日志：移除控制台输出
                         
                         # 根据YOLO检测到的元素位置，从全屏OCR结果中匹配文本
                         for element in detection_result.elements:
@@ -897,16 +898,16 @@ class ProfileReader:
                                 if x1 <= ocr_center_x <= x2 and y1 <= ocr_center_y <= y2:
                                     matched_texts.append(text)
                             
-                            print(f"  [匹配调试] 元素: {element.class_name}, 位置: ({x1}, {y1}, {x2}, {y2}), 匹配到 {len(matched_texts)} 个文本: {matched_texts}")
+                            # [2026-03-11] 优化日志：移除控制台输出
                             
                             if not matched_texts:
                                 # 检测到元素但没有匹配到OCR文本
-                                print(f"  ⚠️ 元素 {element.class_name} 没有匹配到任何OCR文本")
+                                # [2026-03-11] 优化日志：移除控制台输出
                                 # 对于积分和优惠券，如果检测到区域但没有文本，设置为0
                                 if '积分' in element.class_name and result['points'] is None:
                                     result['points'] = 0
-                                    print(f"  [降级] 积分区域未识别到文本，设置为0")
-                                    print(f"  [降级] 优惠券区域未识别到文本，设置为0")
+                                    # [2026-03-11] 优化日志：移除控制台输出
+                                    # [2026-03-11] 优化日志：移除控制台输出
                                 continue
                             
                             # 处理昵称
@@ -918,7 +919,7 @@ class ProfileReader:
                                 )
                                 if nickname:
                                     result['nickname'] = nickname
-                                    print(f"  ✓ 昵称: {result['nickname']}")
+                                    # [2026-03-11] 优化日志：移除控制台输出
                             
                             # 处理用户ID
                             elif 'ID' in element.class_name and result['user_id'] is None:
@@ -929,7 +930,7 @@ class ProfileReader:
                                     match = re.search(r'(\d{6,})', text)
                                     if match:
                                         result['user_id'] = match.group(1)
-                                        print(f"  ✓ 用户ID: {result['user_id']}")
+                                        # [2026-03-11] 优化日志：移除控制台输出
                                         break
                             
                             # 处理余额、积分、抵扣券、优惠券
@@ -953,7 +954,7 @@ class ProfileReader:
                                                     combined_value = float(combined)
                                                     if combined_value > float(first):
                                                         all_numbers[0] = str(combined_value)
-                                                        print(f"  [OCR修正] 合并数字: {first} + {second} = {combined_value}")
+                                                        # [2026-03-11] 优化日志：移除控制台输出
                                                 except ValueError:
                                                     pass
                                         except (IndexError, ValueError):
@@ -980,28 +981,28 @@ class ProfileReader:
                                         value = max(valid_numbers)
                                         
                                         # 添加详细调试日志
-                                        print(f"  [数据映射调试] 元素: {element.class_name}, 值: {value}, 匹配文本: {combined_text}")
+                                        # [2026-03-11] 优化日志：移除控制台输出
                                         
                                         if '余额' in element.class_name and result['balance'] is None:
                                             result['balance'] = value
-                                            print(f"  ✓ 余额: {result['balance']:.2f} 元")
+                                            # [2026-03-11] 优化日志：移除控制台输出
                                         elif '积分' in element.class_name and result['points'] is None:
                                             result['points'] = int(value)
-                                            print(f"  ✓ 积分: {result['points']}")
+                                            # [2026-03-11] 优化日志：移除控制台输出
                                         elif '抵扣' in element.class_name:
                                             if result['vouchers'] is None or value > result['vouchers']:
                                                 result['vouchers'] = value
-                                                print(f"  ✓ 抵扣券: {result['vouchers']}")
+                                                # [2026-03-11] 优化日志：移除控制台输出
                                         else:
-                                            print(f"  ⚠️ 未匹配到任何字段！元素类别: {element.class_name}")
+                                            pass  # [2026-03-11] 优化日志：移除控制台输出
                                 else:
                                     # 匹配到文本但没有数字
-                                    print(f"  ⚠️ 元素 {element.class_name} 匹配到文本但没有数字: {combined_text}")
+                                    pass  # [2026-03-11] 优化日志：移除控制台输出
                                     # 对于积分和优惠券，如果匹配到区域但没有数字，设置为0
                                     if '积分' in element.class_name and result['points'] is None:
                                         result['points'] = 0
-                                        print(f"  [降级] 积分区域没有数字，设置为0")
-                                        print(f"  [降级] 优惠券区域没有数字，设置为0")
+                                        # [2026-03-11] 优化日志：移除控制台输出
+                                        # [2026-03-11] 优化日志：移除控制台输出
                 
                 # [2026-03-02] 统一术语：如果YOLO识别器成功检测到元素，则不需要降级到YOLO
                 # [2026-03-01] 修复：检查 elements 属性是否存在
@@ -1021,10 +1022,10 @@ class ProfileReader:
                 # 并行执行YOLO检测
                 profile_detections, balance_detections = await asyncio.gather(*yolo_tasks)
                 yolo_time = time.time() - yolo_start
-                print(f"  [性能] YOLO检测耗时: {yolo_time:.3f}秒")
+                # [2026-03-11] 优化日志：移除控制台输出
                 
-                print(f"  [YOLO并行] profile_logged检测到 {len(profile_detections)} 个目标")
-                print(f"  [YOLO并行] balance检测到 {len(balance_detections)} 个目标")
+                # [2026-03-11] 优化日志：移除控制台输出
+                # [2026-03-11] 优化日志：移除控制台输出
                 
                 # ===== 并行优化：同时进行OCR识别 =====
                 ocr_start = time.time()
@@ -1038,10 +1039,10 @@ class ProfileReader:
                     
                     if '昵称' in det.class_name and result['nickname'] is None:
                         # 添加调试日志
-                        print(f"  [YOLO调试] 检测到昵称区域:")
-                        print(f"    - 坐标: ({x1}, {y1}, {x2}, {y2})")
-                        print(f"    - 置信度: {det.confidence:.2%}")
-                        print(f"    - 类别: {det.class_name}")
+                        # [2026-03-11] 优化日志：移除控制台输出
+                        # [2026-03-11] 优化日志：移除控制台输出
+                        # [2026-03-11] 优化日志：移除控制台输出
+                        # [2026-03-11] 优化日志：移除控制台输出
                         
                         ocr_tasks.append(('nickname', det.class_name, det.bbox, self._ocr_pool.recognize(region_enhanced, timeout=3.0)))
                     elif 'ID' in det.class_name and result['user_id'] is None:
@@ -1058,7 +1059,7 @@ class ProfileReader:
                 if ocr_tasks:
                     ocr_results = await asyncio.gather(*[task[3] for task in ocr_tasks])
                     ocr_time = time.time() - ocr_start
-                    print(f"  [性能] OCR识别耗时: {ocr_time:.3f}秒")
+                    # [2026-03-11] 优化日志：移除控制台输出
                     
                     # 处理OCR结果
                     for i, (field_type, class_name, bbox, _) in enumerate(ocr_tasks):
@@ -1069,9 +1070,9 @@ class ProfileReader:
                             continue
                         
                         # 添加OCR调试日志
-                        print(f"  [OCR调试] 识别到 {len(ocr_result.texts)} 个文本:")
+                        # [2026-03-11] 优化日志：移除控制台输出
                         for j, text in enumerate(ocr_result.texts):
-                            print(f"    [{j}] '{text}'")
+                            pass  # [2026-03-11] 优化日志：移除控制台输出
                         
                         # 处理昵称
                         if field_type == 'nickname':
@@ -1082,7 +1083,7 @@ class ProfileReader:
                             )
                             if nickname:
                                 result['nickname'] = nickname
-                                print(f"  ✓ 昵称: {result['nickname']}")
+                                # [2026-03-11] 优化日志：移除控制台输出
                         
                         # 处理用户ID
                         elif field_type == 'user_id':
@@ -1092,7 +1093,7 @@ class ProfileReader:
                                 match = re.search(r'(\d{6,})', text)
                                 if match:
                                     result['user_id'] = match.group(1)
-                                    print(f"  ✓ 用户ID: {result['user_id']}")
+                                    # [2026-03-11] 优化日志：移除控制台输出
                                     break
                         
                         # 处理余额、积分、抵扣券、优惠券
@@ -1117,7 +1118,7 @@ class ProfileReader:
                                                 combined_value = float(combined)
                                                 if combined_value > float(first):
                                                     all_numbers[0] = str(combined_value)
-                                                    print(f"  [OCR修正] 合并数字: {first} + {second} = {combined_value}")
+                                                    # [2026-03-11] 优化日志：移除控制台输出
                                             except ValueError:
                                                 pass
                                     except (IndexError, ValueError):
@@ -1146,18 +1147,18 @@ class ProfileReader:
                                     
                                     if '余额' in class_name and result['balance'] is None:
                                         result['balance'] = value
-                                        print(f"  ✓ 余额: {result['balance']:.2f} 元")
+                                        # [2026-03-11] 优化日志：移除控制台输出
                                     elif '积分' in class_name and result['points'] is None:
                                         result['points'] = int(value)
-                                        print(f"  ✓ 积分: {result['points']}")
+                                        # [2026-03-11] 优化日志：移除控制台输出
                                     elif '抵扣' in class_name and result['vouchers'] is None:
                                         result['vouchers'] = value
-                                        print(f"  ✓ 抵扣券: {result['vouchers']}")
+                                        # [2026-03-11] 优化日志：移除控制台输出
             
             # 如果YOLO检测失败，降级到串行OCR方法
             if result['nickname'] is None or result['user_id'] is None:
                 fallback_start = time.time()
-                print(f"  [降级] YOLO检测未获取到昵称或用户ID，使用全屏OCR...")
+                # [2026-03-11] 优化日志：移除控制台输出
                 # 使用OCR图像预处理模块增强图像
                 enhanced_image = enhance_for_ocr(image)
                 ocr_result = await self._ocr_pool.recognize(enhanced_image, timeout=5.0)
@@ -1176,7 +1177,7 @@ class ProfileReader:
                         result['user_id'] = self._extract_user_id(texts)
                 
                 fallback_time = time.time() - fallback_start
-                print(f"  [性能] 降级OCR耗时: {fallback_time:.3f}秒")
+                # [2026-03-11] 优化日志：移除控制台输出
             
             # 手机号只能从登录账号中提取
             if account:
@@ -1186,7 +1187,7 @@ class ProfileReader:
             # 只在关键字段（余额）缺失时才降级，其他字段可以为None
             if result['balance'] is None:
                 region_start = time.time()
-                print(f"  [降级] YOLO检测未获取到余额，使用全屏OCR...")
+                # [2026-03-11] 优化日志：移除控制台输出
                 region_results = await self._recognize_regions(device_id, image)
                 
                 if result['balance'] is None:
@@ -1197,15 +1198,15 @@ class ProfileReader:
                     result['vouchers'] = region_results.get('vouchers')
                 
                 region_time = time.time() - region_start
-                print(f"  [性能] 全屏OCR耗时: {region_time:.3f}秒")
+                # [2026-03-11] 优化日志：移除控制台输出
             
             total_time = time.time() - start_time
-            print(f"  [性能] 总耗时: {total_time:.3f}秒")
+            # [2026-03-11] 优化日志：移除控制台输出
             
             # 记录成功日志
-            concise_logger.action("获取详细资料")
+            # 记录成功日志
+            # [2026-03-12] 优化日志：移除获取详细资料的技术日志
             concise_logger.success("资料获取完成")
-            
             # 添加分隔线
             if concise_logger.gui_logger:
                 concise_logger.gui_logger.info("=" * 60)
@@ -1225,10 +1226,8 @@ class ProfileReader:
             return result
             
         except Exception as e:
-            print(f"  ! 获取完整个人资料失败: {e}")
+            # [2026-03-11] 优化日志：移除控制台输出
             concise_logger.error("获取资料失败", e)
-            import traceback
-            traceback.print_exc()
             return result
     
     def _is_chinese_char(self, char: str) -> bool:
@@ -1377,11 +1376,11 @@ class ProfileReader:
             str: 提取的昵称,如果没有找到则返回None
         """
         if not texts:
-            print(f"  [昵称提取] 未识别到任何文本")
+            # [2026-03-11] 优化日志：移除控制台输出
             return None
         
-        print(f"  [昵称提取] 开始提取昵称,OCR文本数量: {len(texts)}")
-        print(f"  [昵称提取] 所有文本: {texts}")
+        # [2026-03-11] 优化日志：移除控制台输出
+        # [2026-03-11] 优化日志：移除控制台输出
         
         # 会员等级标识关键字
         member_keywords = [
@@ -1400,7 +1399,7 @@ class ProfileReader:
         if detection_bbox:
             x1, y1, x2, y2 = detection_bbox
             region_center = ((x1 + x2) / 2, (y1 + y2) / 2)
-            print(f"  [昵称提取] 检测区域中心: ({region_center[0]:.1f}, {region_center[1]:.1f})")
+            # [2026-03-11] 优化日志：移除控制台输出
         
         # 遍历所有文本
         for i, text in enumerate(texts):
@@ -1413,7 +1412,7 @@ class ProfileReader:
             for member_kw in member_keywords:
                 if member_kw in text:
                     nickname_candidate = text.split(member_kw)[0].strip()
-                    print(f"  [昵称提取] 发现会员标签'{member_kw}',提取昵称: '{nickname_candidate}'")
+                    # [2026-03-11] 优化日志：移除控制台输出
                     break
             
             if not nickname_candidate:
@@ -1444,7 +1443,7 @@ class ProfileReader:
                             position_info['region_center_x'] = region_center[0]
                             position_info['region_center_y'] = region_center[1]
                 except Exception as e:
-                    print(f"  [昵称提取] 位置信息处理失败: {e}")
+                    pass  # [2026-03-11] 优化日志：移除控制台输出
             
             # 计算置信度
             confidence = self._calculate_nickname_confidence(
@@ -1453,21 +1452,21 @@ class ProfileReader:
             )
             
             # 记录调试信息
-            print(f"  [候选评分] '{nickname_candidate}': {confidence:.2f}")
+            # [2026-03-11] 优化日志：移除控制台输出
             
             if confidence > 0:
                 candidates.append((nickname_candidate, confidence))
         
         # 按置信度排序
         if not candidates:
-            print(f"  [昵称提取] 所有候选文本都被过滤")
+            # [2026-03-11] 优化日志：移除控制台输出
             return None
         
         candidates.sort(key=lambda x: x[1], reverse=True)
         
         # 输出最终选择
         best_candidate = candidates[0]
-        print(f"  [最终选择] '{best_candidate[0]}' (置信度: {best_candidate[1]:.2f})")
+        # [2026-03-11] 优化日志：移除控制台输出
         
         return best_candidate[0]
     
@@ -1491,7 +1490,7 @@ class ProfileReader:
         Returns:
             dict: 完整个人资料（累积最佳结果）
         """
-        print("  正在获取账户信息...")
+        # [2026-03-11] 优化日志：移除控制台输出
         
         # 提取手机号（登录时就有）
         phone = None
@@ -1532,7 +1531,7 @@ class ProfileReader:
         for attempt in range(max_retries):
             try:
                 # 始终执行完整识别，以检测用户改名
-                print(f"[ProfileReader] 📝 执行完整识别（检测改名）")
+                # [2026-03-11] 优化日志：移除控制台输出
                 self._silent_log.log(f"[尝试 {attempt + 1}/{max_retries}] 开始完整OCR识别...")
                 profile = await self.get_full_profile(device_id, account=account, gui_logger=gui_logger, step_number=step_number)
                 
@@ -1591,7 +1590,7 @@ class ProfileReader:
                 missing_fields = [f for f in all_fields if best_result.get(f) is None]
                 
                 if not missing_fields:
-                    print(f"  ✓ 成功获取个人资料数据")
+                    # [2026-03-11] 优化日志：移除控制台输出
                     self._log_collection_summary(collected_fields, [])
                     
                     # 使用 ConciseLogger 显示详细资料（如果提供了 gui_logger）
@@ -1599,7 +1598,8 @@ class ProfileReader:
                         from .concise_logger import ConciseLogger
                         import logging
                         file_logger = logging.getLogger(__name__)
-                        concise = ConciseLogger("profile_reader", gui_logger, file_logger)
+                        # [2026-03-11] 优化日志：不输出到GUI，避免CMD显示过多日志
+                        concise = ConciseLogger("profile_reader", None, file_logger)
                         
                         # 显示成功消息
                         concise.success("资料获取完成")
@@ -1648,27 +1648,27 @@ class ProfileReader:
         missing_fields = [f for f in all_fields if best_result.get(f) is None]
         
         if missing_fields:
-            print(f"\n  ! 经过 {max_retries} 次尝试后，仍有字段缺失")
+            pass  # [2026-03-11] 优化日志：移除控制台输出
             
             # 优先使用缓存作为降级方案
             if phone and (best_result.get('nickname') is None or best_result.get('user_id') is None):
-                print(f"  [缓存降级] 尝试使用缓存数据...")
+                pass  # [2026-03-11] 优化日志：移除控制台输出
                 
                 if best_result.get('nickname') is None and cached_nickname:
                     best_result['nickname'] = cached_nickname
                     collected_fields.append('nickname')
-                    print(f"  [缓存降级] OK 使用缓存昵称: {cached_nickname}")
+                    # [2026-03-11] 优化日志：移除控制台输出
                 
                 if best_result.get('user_id') is None and cached_user_id:
                     best_result['user_id'] = cached_user_id
                     collected_fields.append('user_id')
-                    print(f"  [缓存降级] OK 使用缓存用户ID: {cached_user_id}")
+                    # [2026-03-11] 优化日志：移除控制台输出
             
             # 重新检查缺失字段
             missing_fields = [f for f in all_fields if best_result.get(f) is None]
             
             if missing_fields:
-                print(f"  开始尝试其他备选方案...")
+                pass  # [2026-03-11] 优化日志：移除控制台输出
             
             fallback_success = []
             fallback_failed = []
@@ -1676,107 +1676,107 @@ class ProfileReader:
             # 尝试备选方案获取缺失字段
             if best_result.get('balance') is None:
                 try:
-                    print(f"  [备选方案] 尝试获取余额...")
+                    # [2026-03-11] 优化日志：移除控制台输出
                     balance = await self.get_balance_fallback(device_id)
                     if balance is not None:
                         best_result['balance'] = balance
                         fallback_success.append('余额')
                         collected_fields.append('balance')
-                        print(f"  [备选方案] OK 成功获取余额: {balance:.2f} 元")
+                        # [2026-03-11] 优化日志：移除控制台输出
                     else:
                         fallback_failed.append('余额')
-                        print(f"  [备选方案] X 余额获取失败")
+                        # [2026-03-11] 优化日志：移除控制台输出
                 except Exception as e:
                     fallback_failed.append('余额')
-                    print(f"  [备选方案] X 余额获取出错: {str(e)}")
+                    # [2026-03-11] 优化日志：移除控制台输出
             
             if best_result.get('user_id') is None:
                 try:
-                    print(f"  [备选方案] 尝试获取用户ID...")
+                    # [2026-03-11] 优化日志：移除控制台输出
                     user_id = await self.get_user_id_fallback(device_id)
                     if user_id is not None:
                         best_result['user_id'] = user_id
                         fallback_success.append('用户ID')
                         collected_fields.append('user_id')
-                        print(f"  [备选方案] OK 成功获取用户ID: {user_id}")
+                        # [2026-03-11] 优化日志：移除控制台输出
                     else:
                         fallback_failed.append('用户ID')
-                        print(f"  [备选方案] X 用户ID获取失败")
+                        # [2026-03-11] 优化日志：移除控制台输出
                 except Exception as e:
                     fallback_failed.append('用户ID')
-                    print(f"  [备选方案] X 用户ID获取出错: {str(e)}")
+                    # [2026-03-11] 优化日志：移除控制台输出
             
             if best_result.get('nickname') is None:
                 try:
-                    print(f"  [备选方案] 尝试获取昵称...")
+                    # [2026-03-11] 优化日志：移除控制台输出
                     nickname = await self.get_nickname_fallback(device_id)
                     if nickname is not None:
                         best_result['nickname'] = nickname
                         fallback_success.append('昵称')
                         collected_fields.append('nickname')
-                        print(f"  [备选方案] OK 成功获取昵称: {nickname}")
+                        # [2026-03-11] 优化日志：移除控制台输出
                     else:
                         fallback_failed.append('昵称')
-                        print(f"  [备选方案] X 昵称获取失败")
+                        # [2026-03-11] 优化日志：移除控制台输出
                 except Exception as e:
                     fallback_failed.append('昵称')
-                    print(f"  [备选方案] X 昵称获取出错: {str(e)}")
+                    # [2026-03-11] 优化日志：移除控制台输出
             
             if best_result.get('phone') is None:
                 try:
-                    print(f"  [备选方案] 尝试获取手机号...")
+                    # [2026-03-11] 优化日志：移除控制台输出
                     phone = await self.get_phone_fallback(device_id)
                     if phone is not None:
                         best_result['phone'] = phone
                         fallback_success.append('手机号')
                         collected_fields.append('phone')
-                        print(f"  [备选方案] OK 成功获取手机号: {phone}")
+                        # [2026-03-11] 优化日志：移除控制台输出
                     else:
                         fallback_failed.append('手机号')
-                        print(f"  [备选方案] X 手机号获取失败")
+                        # [2026-03-11] 优化日志：移除控制台输出
                 except Exception as e:
                     fallback_failed.append('手机号')
-                    print(f"  [备选方案] X 手机号获取出错: {str(e)}")
+                    # [2026-03-11] 优化日志：移除控制台输出
             
             if best_result.get('points') is None:
                 try:
-                    print(f"  [备选方案] 尝试获取积分...")
+                    # [2026-03-11] 优化日志：移除控制台输出
                     points = await self.get_points_fallback(device_id)
                     if points is not None:
                         best_result['points'] = points
                         fallback_success.append('积分')
                         collected_fields.append('points')
-                        print(f"  [备选方案] OK 成功获取积分: {points}")
+                        # [2026-03-11] 优化日志：移除控制台输出
                     else:
                         fallback_failed.append('积分')
-                        print(f"  [备选方案] X 积分获取失败")
+                        # [2026-03-11] 优化日志：移除控制台输出
                 except Exception as e:
                     fallback_failed.append('积分')
-                    print(f"  [备选方案] X 积分获取出错: {str(e)}")
+                    # [2026-03-11] 优化日志：移除控制台输出
             
             if best_result.get('vouchers') is None:
                 try:
-                    print(f"  [备选方案] 尝试获取抵扣券...")
+                    # [2026-03-11] 优化日志：移除控制台输出
                     vouchers = await self.get_vouchers_fallback(device_id)
                     if vouchers is not None:
                         best_result['vouchers'] = vouchers
                         fallback_success.append('抵扣券')
                         collected_fields.append('vouchers')
-                        print(f"  [备选方案] OK 成功获取抵扣券: {vouchers}")
+                        # [2026-03-11] 优化日志：移除控制台输出
                     else:
                         fallback_failed.append('抵扣券')
-                        print(f"  [备选方案] X 抵扣券获取失败")
+                        # [2026-03-11] 优化日志：移除控制台输出
                 except Exception as e:
                     fallback_failed.append('抵扣券')
-                    print(f"  [备选方案] X 抵扣券获取出错: {str(e)}")
+                    # [2026-03-11] 优化日志：移除控制台输出
             
             # 显示备选方案总结
             if fallback_success or fallback_failed:
-                print(f"\n  备选方案总结:")
+                pass  # [2026-03-11] 优化日志：移除控制台输出
                 if fallback_success:
-                    print(f"  OK 成功: {', '.join(fallback_success)}")
+                    pass  # [2026-03-11] 优化日志：移除控制台输出
                 if fallback_failed:
-                    print(f"  X 失败: {', '.join(fallback_failed)}")
+                    pass  # [2026-03-11] 优化日志：移除控制台输出
         
         # 显示最终收集结果
         final_missing = [f for f in all_fields if best_result.get(f) is None]
@@ -1799,7 +1799,8 @@ class ProfileReader:
             from .concise_logger import ConciseLogger
             import logging
             file_logger = logging.getLogger(__name__)
-            concise = ConciseLogger("profile_reader", gui_logger, file_logger)
+            # [2026-03-11] 优化日志：不输出到GUI，避免CMD显示过多日志
+            concise = ConciseLogger("profile_reader", None, file_logger)
             
             # 显示成功消息
             if not final_missing:
@@ -1832,13 +1833,13 @@ class ProfileReader:
             collected_fields: 成功收集的字段列表
             failed_fields: 收集失败的字段列表
         """
-        print(f"\n  数据收集总结:")
+        # [2026-03-11] 优化日志：移除控制台输出
         if collected_fields:
-            print(f"  OK 成功获取: {', '.join(collected_fields)}")
+            pass  # [2026-03-11] 优化日志：移除控制台输出
         
         if failed_fields:
-            print(f"  X 获取失败: {', '.join(failed_fields)}")
-            print(f"  ! 部分字段缺失，但不影响整体流程继续执行")
+            pass  # [2026-03-11] 优化日志：移除控制台输出
+            pass  # [2026-03-11] 优化日志：移除控制台输出
     
     async def _recognize_regions(self, device_id: str, full_image: 'Image.Image') -> Dict[str, any]:
         """使用全屏OCR + 关键字定位识别余额、积分、抵扣券、优惠券
@@ -1868,7 +1869,7 @@ class ProfileReader:
             return result
         
         try:
-            print(f"  [全屏OCR] 开始全屏OCR识别...")
+            # [2026-03-11] 优化日志：移除控制台输出
             
             # 全屏OCR识别
             enhanced_image = enhance_for_ocr(full_image)
@@ -1876,43 +1877,41 @@ class ProfileReader:
             
             # [2026-03-05] 修复数组比较错误：检查 texts 是否为 None 或长度为 0
             if not ocr_result or ocr_result.texts is None or len(ocr_result.texts) == 0:
-                print(f"  [全屏OCR] ❌ OCR识别失败")
+                # [2026-03-11] 优化日志：移除控制台输出
                 return result
             
             texts = ocr_result.texts
             boxes = ocr_result.boxes if hasattr(ocr_result, 'boxes') and ocr_result.boxes is not None else None
             
-            print(f"  [全屏OCR] ✓ 识别到 {len(texts)} 个文本")
-            print(f"  [全屏OCR调试] 所有识别文本: {texts[:20]}")  # 只打印前20个
+            # [2026-03-11] 优化日志：移除控制台输出
+            # [2026-03-11] 优化日志：移除控制台输出
             
             # 如果有位置信息，使用位置辅助提取
             if boxes is not None and len(boxes) == len(texts):
-                print(f"  [全屏OCR调试] 使用位置辅助提取")
+                # [2026-03-11] 优化日志：移除控制台输出
                 result = self._extract_values_with_positions(texts, boxes)
             else:
                 # 没有位置信息，使用文本顺序提取
-                print(f"  [全屏OCR调试] 使用文本顺序提取")
+                # [2026-03-11] 优化日志：移除控制台输出
                 result = self._extract_values_from_texts(texts)
             
             # 打印结果
-            print(f"  [全屏OCR调试] 提取结果:")
-            print(f"    - balance: {result['balance']}")
-            print(f"    - points: {result['points']}")
-            print(f"    - vouchers: {result['vouchers']}")
+            # [2026-03-11] 优化日志：移除控制台输出
+            # [2026-03-11] 优化日志：移除控制台输出
+            # [2026-03-11] 优化日志：移除控制台输出
+            # [2026-03-11] 优化日志：移除控制台输出
             
             if result['balance'] is not None:
-                print(f"  [全屏OCR] ✓ 余额: {result['balance']:.2f}")
+                pass  # [2026-03-11] 优化日志：移除控制台输出
             if result['points'] is not None:
-                print(f"  [全屏OCR] ✓ 积分: {result['points']}")
+                pass  # [2026-03-11] 优化日志：移除控制台输出
             if result['vouchers'] is not None:
-                print(f"  [全屏OCR] ✓ 抵扣券: {result['vouchers']}")
+                pass  # [2026-03-11] 优化日志：移除控制台输出
             
             return result
             
         except Exception as e:
-            print(f"  [全屏OCR] ❌ 异常: {e}")
-            import traceback
-            traceback.print_exc()
+            # [2026-03-11] 优化日志：移除控制台输出
             return result
     
     def _extract_values_with_positions(self, texts: List[str], boxes: List) -> Dict[str, any]:
@@ -1935,7 +1934,7 @@ class ProfileReader:
             'vouchers': None,
         }
         
-        print(f"  [位置提取调试] 开始使用位置信息提取数值")
+        # [2026-03-11] 优化日志：移除控制台输出
         
         # 构建文本-位置映射
         text_positions = []
@@ -1986,7 +1985,7 @@ class ProfileReader:
             y_min, y_max = min(keyword_y_values), max(keyword_y_values)
             
             if y_max - y_min < 10:
-                print(f"  [位置提取调试] 检测到网格布局，关键字在同一行 (y={y_min:.0f}-{y_max:.0f})")
+                pass  # [2026-03-11] 优化日志：移除控制台输出
                 
                 # 网格布局：按列匹配
                 # 找出所有数值，按y坐标分组
@@ -2009,7 +2008,7 @@ class ProfileReader:
                 keyword_y = keyword_y_values[0]
                 above_numbers = [n for n in number_positions if n['y'] < keyword_y - 10]
                 
-                print(f"  [位置提取调试] 关键字y坐标: {keyword_y:.0f}, 找到 {len(above_numbers)} 个上方数值")
+                # [2026-03-11] 优化日志：移除控制台输出
                 
                 if above_numbers:
                     # 找出最接近关键字的那一行数值
@@ -2030,10 +2029,10 @@ class ProfileReader:
                     closest_y = max(y_groups.keys())
                     closest_numbers = y_groups[closest_y]
                     
-                    print(f"  [位置提取调试] 找到最接近的数值行 (y={closest_y:.0f}), 包含 {len(closest_numbers)} 个数值")
+                    # [2026-03-11] 优化日志：移除控制台输出
                     
                     if len(closest_numbers) >= 3:
-                        print(f"  [位置提取调试] 使用网格布局匹配")
+                        pass  # [2026-03-11] 优化日志：移除控制台输出
                         
                         # 按列匹配：为每个关键字找到x坐标最接近的数值
                         for kw in found_keywords:
@@ -2052,17 +2051,17 @@ class ProfileReader:
                             
                             if best_match:
                                 result[field] = best_match['value']
-                                print(f"  [位置提取调试]   ✓ {field} = {best_match['value']} (文本: '{best_match['text']}', x偏差: {best_distance:.0f}px)")
+                                # [2026-03-11] 优化日志：移除控制台输出
                         
-                        print(f"  [位置提取调试] 网格布局提取完成:")
-                        print(f"    - balance: {result['balance']}")
-                        print(f"    - points: {result['points']}")
-                        print(f"    - vouchers: {result['vouchers']}")
+                        # [2026-03-11] 优化日志：移除控制台输出
+                        # [2026-03-11] 优化日志：移除控制台输出
+                        # [2026-03-11] 优化日志：移除控制台输出
+                        # [2026-03-11] 优化日志：移除控制台输出
                         
                         return result
         
         # 如果不是网格布局，使用原来的逻辑
-        print(f"  [位置提取调试] 未检测到网格布局，使用逐个匹配")
+        # [2026-03-11] 优化日志：移除控制台输出
         
         # 查找关键字并提取附近的数字
         keywords = {
@@ -2072,7 +2071,7 @@ class ProfileReader:
         }
         
         for field, keyword_list in keywords.items():
-            print(f"  [位置提取调试] 查找字段: {field}, 关键字: {keyword_list}")
+            # [2026-03-11] 优化日志：移除控制台输出
             
             for keyword in keyword_list:
                 # 查找关键字
@@ -2080,7 +2079,7 @@ class ProfileReader:
                 for pos in text_positions:
                     if keyword in pos['text']:
                         keyword_pos = pos
-                        print(f"  [位置提取调试]   找到关键字 '{keyword}' 在文本 '{pos['text']}' (位置: {pos['center_x']:.0f}, {pos['center_y']:.0f})")
+                        # [2026-03-11] 优化日志：移除控制台输出
                         break
                 
                 if keyword_pos:
@@ -2128,7 +2127,7 @@ class ProfileReader:
                                 score = alignment_score + distance_score
                                 direction = "上方"
                             
-                            print(f"  [位置提取调试]   候选值: {value} (文本: '{pos['text']}', 方向: {direction}, 对齐偏差: {y_diff if is_right else x_diff:.0f}px, 得分: {score:.0f})")
+                            # [2026-03-11] 优化日志：移除控制台输出
                             
                             candidates.append({
                                 'value': value,
@@ -2142,15 +2141,15 @@ class ProfileReader:
                         candidates.sort(key=lambda x: x['score'])
                         selected = candidates[0]
                         result[field] = selected['value']
-                        print(f"  [位置提取调试]   ✓ 选择: {field} = {selected['value']} (文本: '{selected['text']}', 方向: {selected['direction']})")
+                        # [2026-03-11] 优化日志：移除控制台输出
                         break  # 找到就跳出keyword循环
                     else:
-                        print(f"  [位置提取调试]   ✗ 未找到候选值")
+                        pass  # [2026-03-11] 优化日志：移除控制台输出
         
-        print(f"  [位置提取调试] 提取完成:")
-        print(f"    - balance: {result['balance']}")
-        print(f"    - points: {result['points']}")
-        print(f"    - vouchers: {result['vouchers']}")
+        # [2026-03-11] 优化日志：移除控制台输出
+        # [2026-03-11] 优化日志：移除控制台输出
+        # [2026-03-11] 优化日志：移除控制台输出
+        # [2026-03-11] 优化日志：移除控制台输出
         
         return result
     
@@ -2243,7 +2242,7 @@ class ProfileReader:
         try:
             # 使用定义好的昵称区域坐标
             x1, y1, x2, y2 = self.REGIONS['nickname']
-            print(f"  [昵称区域OCR] 裁剪区域: ({x1}, {y1}, {x2}, {y2})")
+            # [2026-03-11] 优化日志：移除控制台输出
             
             # 裁剪昵称区域
             nickname_region = image.crop((x1, y1, x2, y2))
@@ -2255,10 +2254,10 @@ class ProfileReader:
             ocr_result = await self._ocr_pool.recognize(enhanced_region, timeout=5.0)
             
             if not ocr_result or ocr_result.texts is None or len(ocr_result.texts) == 0:
-                print(f"  [昵称区域OCR] 未识别到任何文本")
+                # [2026-03-11] 优化日志：移除控制台输出
                 return None
             
-            print(f"  [昵称区域OCR] 识别到 {len(ocr_result.texts)} 个文本: {ocr_result.texts}")
+            # [2026-03-11] 优化日志：移除控制台输出
             
             # 排除关键字
             exclude_keywords = [
@@ -2303,7 +2302,7 @@ class ProfileReader:
                 for member_kw in member_keywords:
                     if member_kw in text:
                         nickname_candidate = text.split(member_kw)[0].strip()
-                        print(f"  [昵称区域OCR] 发现会员标签 '{member_kw}'，提取昵称: '{nickname_candidate}'")
+                        # [2026-03-11] 优化日志：移除控制台输出
                         break
                 
                 if not nickname_candidate:
@@ -2314,7 +2313,7 @@ class ProfileReader:
                 for kw in exclude_keywords:
                     if kw in nickname_candidate:
                         has_keyword = True
-                        print(f"  [昵称区域OCR] 跳过：包含排除关键字 '{kw}'")
+                        # [2026-03-11] 优化日志：移除控制台输出
                         break
                 if has_keyword:
                     continue
@@ -2326,19 +2325,17 @@ class ProfileReader:
                     if text_len == 1:
                         single_char_exclude = ['我', '的', '首', '页', '设', '置']
                         if nickname_candidate in single_char_exclude:
-                            print(f"  [昵称区域OCR] 跳过：单字排除")
+                            # [2026-03-11] 优化日志：移除控制台输出
                             continue
                     
-                    print(f"  [昵称区域OCR] ✓ 找到昵称: '{nickname_candidate}'")
+                    # [2026-03-11] 优化日志：移除控制台输出
                     return nickname_candidate
             
-            print(f"  [昵称区域OCR] 未找到合适的昵称")
+            # [2026-03-11] 优化日志：移除控制台输出
             return None
             
         except Exception as e:
-            print(f"  [昵称区域OCR] 识别失败: {e}")
-            import traceback
-            traceback.print_exc()
+            # [2026-03-11] 优化日志：移除控制台输出
             return None
     
     def _extract_nickname(self, texts: List[str]) -> Optional[str]:
@@ -2354,8 +2351,8 @@ class ProfileReader:
         Returns:
             str: 昵称，未找到返回 None
         """
-        print(f"  [昵称提取] 开始提取昵称，OCR文本数量: {len(texts)}")
-        print(f"  [昵称提取] 前15个文本: {texts[:15]}")
+        # [2026-03-11] 优化日志：移除控制台输出
+        # [2026-03-11] 优化日志：移除控制台输出
         
         # 策略1: 基于ID位置提取昵称
         # 先找到ID的位置
@@ -2366,13 +2363,13 @@ class ProfileReader:
                 # 确认是用户ID（包含数字）
                 if re.search(r'(?:用户)?[Ii][Dd][:：]?(\d+)', text_no_space):
                     id_index = i
-                    print(f"  [昵称提取] 找到ID位置: 索引 {i}, 文本: '{text}'")
+                    # [2026-03-11] 优化日志：移除控制台输出
                     break
         
         if id_index >= 0:
             # [2026-03-05] 修复昵称识别：扩大检查范围到ID之前的5个文本
             # 在ID之前的文本中查找昵称（通常在ID的前1-5个位置）
-            print(f"  [昵称提取] 在ID之前查找昵称...")
+            # [2026-03-11] 优化日志：移除控制台输出
             
             # 会员标签关键字
             member_keywords = [
@@ -2423,35 +2420,35 @@ class ProfileReader:
                 if text_box is not None:
                     x_min = min(text_box[0][0], text_box[1][0], text_box[2][0], text_box[3][0])
                     if x_min > 400:
-                        print(f"  [昵称提取] 检查ID之前的文本 {i}: '{text}' - 跳过：位置在右上角 (x={x_min})")
+                        # [2026-03-11] 优化日志：移除控制台输出
                         continue
                 
-                print(f"  [昵称提取] 检查ID之前的文本 {i}: '{text}'")
+                # [2026-03-11] 优化日志：移除控制台输出
                 
                 # 跳过空文本
                 if not text:
-                    print(f"    - 跳过：空文本")
+                    # [2026-03-11] 优化日志：移除控制台输出
                     continue
                 
                 # 跳过纯数字
                 if text.isdigit():
-                    print(f"    - 跳过：纯数字")
+                    # [2026-03-11] 优化日志：移除控制台输出
                     continue
                 
                 # 跳过数字+空格组合（如"1 0"、"10"等）
                 text_no_space = text.replace(" ", "").replace("\t", "")
                 if text_no_space.isdigit() and len(text_no_space) <= 3:
-                    print(f"    - 跳过：数字组合 '{text}'")
+                    # [2026-03-11] 优化日志：移除控制台输出
                     continue
                 
                 # 跳过时间格式
                 if re.match(r'\d+:\d+', text):
-                    print(f"    - 跳过：时间格式")
+                    # [2026-03-11] 优化日志：移除控制台输出
                     continue
                 
                 # 跳过包含冒号的文本
                 if ':' in text or '：' in text:
-                    print(f"    - 跳过：包含冒号")
+                    # [2026-03-11] 优化日志：移除控制台输出
                     continue
                 
                 # 处理会员标签
@@ -2459,11 +2456,11 @@ class ProfileReader:
                 for member_kw in member_keywords:
                     if member_kw in text:
                         nickname_candidate = text.split(member_kw)[0].strip()
-                        print(f"    - 发现会员标签 '{member_kw}'，提取昵称: '{nickname_candidate}'")
+                        # [2026-03-11] 优化日志：移除控制台输出
                         break
                 
                 if not nickname_candidate:
-                    print(f"    - 跳过：提取后为空")
+                    # [2026-03-11] 优化日志：移除控制台输出
                     continue
                 
                 # 检查排除关键字
@@ -2471,7 +2468,7 @@ class ProfileReader:
                 for kw in exclude_keywords:
                     if kw in nickname_candidate:
                         has_keyword = True
-                        print(f"    - 跳过：包含排除关键字 '{kw}'")
+                        # [2026-03-11] 优化日志：移除控制台输出
                         break
                 if has_keyword:
                     continue
@@ -2483,33 +2480,33 @@ class ProfileReader:
                     if text_len == 1:
                         single_char_exclude = ['我', '的', '首', '页', '设', '置']
                         if nickname_candidate in single_char_exclude:
-                            print(f"    - 跳过：单字排除")
+                            # [2026-03-11] 优化日志：移除控制台输出
                             continue
                     
-                    print(f"  [昵称提取] ✓ 基于ID位置找到昵称: '{nickname_candidate}'")
+                    # [2026-03-11] 优化日志：移除控制台输出
                     return nickname_candidate
                 else:
-                    print(f"    - 跳过：长度不符 ({text_len} 字符)")
+                    pass  # [2026-03-11] 优化日志：移除控制台输出
         
         # 策略2: 查找"昵称"关键字（备选）
-        print(f"  [昵称提取] 策略1失败，尝试查找'昵称'关键字...")
+        # [2026-03-11] 优化日志：移除控制台输出
         for text in texts:
             if "昵称" in text:
                 match = re.search(r'昵称[:：\s]+(.+)', text)
                 if match:
                     nickname = match.group(1).strip()
                     if nickname:
-                        print(f"  [昵称提取] ✓ 通过关键字找到昵称: {nickname}")
+                        # [2026-03-11] 优化日志：移除控制台输出
                         return nickname
                 
                 if text.startswith("昵称"):
                     nickname = text[2:].strip()
                     if nickname:
-                        print(f"  [昵称提取] ✓ 通过关键字找到昵称: {nickname}")
+                        # [2026-03-11] 优化日志：移除控制台输出
                         return nickname
         
         # 策略3: 在前10个文本中查找（最后的备选）
-        print(f"  [昵称提取] 策略2失败，在前10个文本中查找...")
+        # [2026-03-11] 优化日志：移除控制台输出
         
         # [2026-03-05] 修复昵称识别：添加品牌名称过滤
         # [2026-03-06] 添加"溪"、"西"单字：OCR可能把"溪盟山泉"识别成单字
@@ -2566,10 +2563,10 @@ class ProfileReader:
                     if nickname_candidate in single_char_exclude:
                         continue
                 
-                print(f"  [昵称提取] ✓ 在前10个文本中找到昵称: '{nickname_candidate}'")
+                # [2026-03-11] 优化日志：移除控制台输出
                 return nickname_candidate
         
-        print(f"  [昵称提取] ✗ 所有策略都失败，未找到昵称")
+        # [2026-03-11] 优化日志：移除控制台输出
         return None
     
     def _extract_user_id(self, texts: List[str]) -> Optional[str]:
@@ -2685,7 +2682,7 @@ class ProfileReader:
         Returns:
             float: 余额，未找到返回 None
         """
-        print(f"  [余额提取] 开始提取余额，OCR文本数量: {len(texts)}")
+        # [2026-03-11] 优化日志：移除控制台输出
         
         # 策略1: 查找包含"余额"的文本
         for text in texts:
@@ -2697,7 +2694,7 @@ class ProfileReader:
                 if match:
                     try:
                         balance = float(match.group(1))
-                        print(f"  [余额提取] OK 策略1成功: 在文本'{text}'中找到余额 {balance}")
+                        # [2026-03-11] 优化日志：移除控制台输出
                         return balance
                     except ValueError:
                         pass
@@ -2706,7 +2703,7 @@ class ProfileReader:
         # 余额通常是最远的那个数值（第一个数值）
         for i, text in enumerate(texts):
             if "余额" in text:
-                print(f"  [余额提取] 在索引{i}找到'余额'标签: '{text}'")
+                # [2026-03-11] 优化日志：移除控制台输出
                 candidates = []
                 
                 # 检查前面的文本块，扩大到5个，收集所有候选值
@@ -2719,11 +2716,11 @@ class ProfileReader:
                             # 合理性检查：余额通常在0-10000之间
                             if 0 <= balance <= 10000:
                                 candidates.append((j, balance))  # 保存索引和值
-                                print(f"  [余额提取] 候选值: 索引{j}, 文本'{texts[j]}', 余额{balance}")
+                                # [2026-03-11] 优化日志：移除控制台输出
                         except ValueError:
                             pass
                 
-                print(f"  [余额提取] 找到{len(candidates)}个候选值")
+                # [2026-03-11] 优化日志：移除控制台输出
                 
                 # 优先选择非零值，如果有多个非零值，选择最远的（索引最小的）
                 # 因为页面布局通常是：余额、积分、抵扣券，余额离标签最远
@@ -2731,12 +2728,12 @@ class ProfileReader:
                 if non_zero:
                     # 按索引排序，选择最远的（索引最小的）
                     non_zero.sort(key=lambda x: x[0])
-                    print(f"  [余额提取] OK 策略2成功: 选择最远的非零值 索引{non_zero[0][0]}, 余额{non_zero[0][1]}")
+                    # [2026-03-11] 优化日志：移除控制台输出
                     return non_zero[0][1]
                 elif candidates:
                     # 如果都是0，返回最远的
                     candidates.sort(key=lambda x: x[0])
-                    print(f"  [余额提取] OK 策略2成功: 选择最远的值（都是0） 索引{candidates[0][0]}, 余额{candidates[0][1]}")
+                    # [2026-03-11] 优化日志：移除控制台输出
                     return candidates[0][1]
         
         # 策略3: 查找带"元"的数字（但不包含"余额"）
@@ -2748,12 +2745,12 @@ class ProfileReader:
                     try:
                         balance = float(match.group(1))
                         if 0 <= balance <= 10000:
-                            print(f"  [余额提取] OK 策略3成功: 在文本'{text}'中找到余额 {balance}")
+                            # [2026-03-11] 优化日志：移除控制台输出
                             return balance
                     except ValueError:
                         pass
         
-        print(f"  [余额提取] X 所有策略都失败，未找到余额")
+        # [2026-03-11] 优化日志：移除控制台输出
         return None
     
     def _parse_points(self, texts: list) -> Optional[int]:
@@ -3086,7 +3083,7 @@ class ProfileReader:
             return region_results.get('balance')
             
         except Exception as e:
-            print(f"  ! 获取余额失败: {e}")
+            # [2026-03-11] 优化日志：移除控制台输出
             return None
     
     # ==================== 备选方案方法 ====================
@@ -3163,7 +3160,8 @@ class ProfileReader:
             return None
             
         except Exception as e:
-            print(f"  ! 备选方案获取余额失败: {e}")
+            # [2026-03-11] 优化日志：删除CMD输出
+            pass
             return None
     
     async def get_user_id_fallback(self, device_id: str) -> Optional[str]:
@@ -3224,7 +3222,8 @@ class ProfileReader:
             return None
             
         except Exception as e:
-            print(f"  ! 备选方案获取用户ID失败: {e}")
+            # [2026-03-11] 优化日志：删除CMD输出
+            pass
             return None
     
     async def get_nickname_fallback(self, device_id: str) -> Optional[str]:
@@ -3300,7 +3299,8 @@ class ProfileReader:
             return None
             
         except Exception as e:
-            print(f"  ! 备选方案获取昵称失败: {e}")
+            # [2026-03-11] 优化日志：删除CMD输出
+            pass
             return None
     
     async def get_phone_fallback(self, device_id: str) -> Optional[str]:
@@ -3360,7 +3360,8 @@ class ProfileReader:
             return None
             
         except Exception as e:
-            print(f"  ! 备选方案获取手机号失败: {e}")
+            # [2026-03-11] 优化日志：删除CMD输出
+            pass
             return None
     
     async def get_points_fallback(self, device_id: str) -> Optional[int]:
@@ -3439,7 +3440,8 @@ class ProfileReader:
             return None
             
         except Exception as e:
-            print(f"  ! 备选方案获取积分失败: {e}")
+            # [2026-03-11] 优化日志：删除CMD输出
+            pass
             return None
     
     async def get_vouchers_fallback(self, device_id: str) -> Optional[float]:
@@ -3521,5 +3523,6 @@ class ProfileReader:
             return None
             
         except Exception as e:
-            print(f"  ! 备选方案获取抵扣券失败: {e}")
+            # [2026-03-11] 优化日志：删除CMD输出
+            pass
             return None

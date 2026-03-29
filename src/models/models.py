@@ -282,3 +282,12 @@ CSV_COLUMNS = [
     'error_message',         # 错误信息
     'timestamp'              # 时间戳
 ]
+
+
+@dataclass
+class ProcessResult:
+    """[2026-03-10] 新增：账号处理结果（验号专用）"""
+    success: bool
+    error_message: Optional[str] = None
+    nickname: Optional[str] = None
+    user_id: Optional[str] = None

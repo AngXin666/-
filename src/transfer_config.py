@@ -15,6 +15,9 @@ class TransferConfig:
         self.config_file = Path("transfer_config.json")
         self.min_balance = 0.0  # 最小保留余额
         self.min_transfer_amount = 30.0  # 起步金额（最小转账金额）
+        # [2026-03-24] 新增：签到次数条件
+        self.min_checkin_days_enabled = False  # 是否启用签到次数条件
+        self.min_checkin_days = 7  # 最小签到次数
         self.recipient_ids = []  # 1级收款用户ID列表（兼容旧版本）
         self.level_recipients = {  # 多级收款账号配置
             1: [],  # 1级收款账号
@@ -47,6 +50,10 @@ class TransferConfig:
                     data = json.load(f)
                     self.min_balance = data.get('min_balance', 0.0)
                     self.min_transfer_amount = data.get('min_transfer_amount', 30.0)
+                    
+                    # [2026-03-24] 新增：加载签到次数条件
+                    self.min_checkin_days_enabled = data.get('min_checkin_days_enabled', False)
+                    self.min_checkin_days = data.get('min_checkin_days', 7)
                     
                     # 加载多级收款账号配置
                     level_recipients = data.get('level_recipients', {})
@@ -106,6 +113,8 @@ class TransferConfig:
             data = {
                 'min_balance': self.min_balance,
                 'min_transfer_amount': self.min_transfer_amount,
+                'min_checkin_days_enabled': self.min_checkin_days_enabled,  # [2026-03-24] 新增
+                'min_checkin_days': self.min_checkin_days,  # [2026-03-24] 新增
                 'recipient_ids': self.recipient_ids,  # 保留用于兼容
                 'level_recipients': {
                     '1': self.level_recipients[1],
@@ -210,13 +219,14 @@ class TransferConfig:
         }
         return mode_names.get(self.transfer_target_mode, '未知模式')
     
-    def should_transfer(self, user_id: str, balance: float, current_level: int = 0) -> bool:
+    def should_transfer(self, user_id: str, balance: float, current_level: int = 0, checkin_total_times: int = None) -> bool:
         """判断是否应该转账
         
         Args:
             user_id: 用户ID
             balance: 当前余额
             current_level: 当前转账级别（0表示初始账号，1-3表示收款账号级别）
+            checkin_total_times: 签到总次数（可选）
             
         Returns:
             bool: 是否应该转账
@@ -224,6 +234,19 @@ class TransferConfig:
         # 如果未启用，不转账
         if not self.enabled:
             return False
+        
+        # [2026-03-25] 新增：检查签到次数条件
+        if self.min_checkin_days_enabled:
+            if checkin_total_times is None:
+                # 如果没有提供签到次数，不转账
+                # [2026-03-29] 静默：正常流程不输出到控制台
+                return False
+            if checkin_total_times < self.min_checkin_days:
+                # 签到次数不足，不转账
+                # [2026-03-29] 静默：正常流程不输出到控制台
+                return False
+            else:
+                pass  # [2026-03-29] 静默：正常流程不输出到控制台
         
         # 如果是初始账号（level=0）
         if current_level == 0:
@@ -419,81 +442,38 @@ class TransferConfig:
             # 获取账号的管理员
             user = manager.get_account_user(phone)
             if user and user.enabled:
-                print(f"  [转账配置] 账号管理员: {user.user_name}")
+                # [2026-03-29] 静默：正常流程不输出到控制台
                 
                 # 优先级1：管理员配置的收款人
                 if user.transfer_recipients and len(user.transfer_recipients) > 0:
-                    print(f"  [转账配置] 使用管理员配置的收款人 ({len(user.transfer_recipients)}个)")
                     if selector:
-                        # 使用选择器选择（支持随机/轮询）
                         try:
                             recipient = selector.select_recipient(
                                 user.transfer_recipients,
                                 sender_phone=phone,
-                                key=user.user_id  # 使用管理员ID作为轮询键
+                                key=user.user_id
                             )
                             if recipient:
-                                print(f"  [转账配置] 选中收款人: {recipient}")
                                 return recipient
-                            else:
-                                print(f"  [转账配置] 选择器返回None（可能所有收款人都是发送人自己）")
                         except ValueError as e:
                             print(f"  [转账配置] 选择器错误: {e}")
                     else:
-                        # 没有选择器，使用第一个（但要确保不是发送人自己）
                         for recipient in user.transfer_recipients:
                             if recipient != phone:
-                                print(f"  [转账配置] 选中收款人: {recipient}")
                                 return recipient
-                        print(f"  [转账配置] 所有收款人都是发送人自己，无法选择")
                 
                 # 优先级2：管理员自己的ID
-                print(f"  [转账配置] 管理员未配置收款人，使用管理员自己的ID")
                 if user.user_id.startswith('user_'):
                     manager_id = user.user_id.replace('user_', '')
-                    print(f"  [转账配置] 管理员ID: {manager_id}")
                     return manager_id
                 else:
                     return user.user_id
             else:
-                print(f"  [转账配置] 账号未分配管理员或管理员已禁用，使用系统配置")
+                # [2026-03-29] 静默：正常流程不输出到控制台
+                return None
                 
         except Exception as e:
-            print(f"  [转账配置] 获取收款人失败: {e}，使用系统配置")
-        
-        # 优先级3：系统配置的收款人（支持轮询/随机选择）
-        print(f"  [转账配置] 使用系统配置的收款人")
-        system_recipients = self.get_recipients(1)  # 获取1级收款账号
-        
-        if system_recipients:
-            print(f"  [转账配置] 系统配置有 {len(system_recipients)} 个收款人")
-            if selector:
-                # 使用选择器选择（支持随机/轮询）
-                try:
-                    recipient = selector.select_recipient(
-                        system_recipients,
-                        sender_phone=phone,
-                        key="system"  # 使用"system"作为轮询键
-                    )
-                    if recipient:
-                        print(f"  [转账配置] 选中系统收款人: {recipient}")
-                        return recipient
-                    else:
-                        print(f"  [转账配置] 选择器返回None（可能所有收款人都是发送人自己）")
-                        return None
-                except Exception as e:
-                    print(f"  [转账配置] 选择器错误: {e}")
-                    return None
-            else:
-                # 没有选择器，使用第一个（但要确保不是发送人自己）
-                for recipient in system_recipients:
-                    if recipient != phone:
-                        print(f"  [转账配置] 选中系统收款人: {recipient}")
-                        return recipient
-                print(f"  [转账配置] 所有系统收款人都是发送人自己，无法选择")
-                return None
-        else:
-            print(f"  [转账配置] 系统未配置收款人")
+            print(f"  [转账配置] 获取收款人失败: {e}，跳过转账")
             return None
 
 

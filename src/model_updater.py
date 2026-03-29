@@ -100,7 +100,8 @@ class ModelVersionManager:
         model_files = {
             "page_classifier": "page_classifier_pytorch_best.pth",
             "page_classes": "page_classes.json",
-            "yolo_registry": "yolo_model_registry.json",
+            # [2026-03-12] 修改路径：模型文件移动到models目录
+            "yolo_registry": "models/yolo_model_registry.json",
             "page_yolo_mapping": "page_yolo_mapping.json"
         }
         

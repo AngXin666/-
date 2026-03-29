@@ -12,15 +12,17 @@ from .user_manager import UserManager, User
 class UserManagementDialog:
     """用户管理对话框"""
     
-    def __init__(self, parent, log_callback: Optional[Callable] = None):
+    def __init__(self, parent, log_callback: Optional[Callable] = None, on_accounts_changed: Optional[Callable] = None):
         """初始化用户管理对话框
         
         Args:
             parent: 父窗口
             log_callback: 日志回调函数
+            on_accounts_changed: 账号变更回调函数（添加/删除账号时调用）
         """
         self.parent = parent
         self.log = log_callback if log_callback else print
+        self.on_accounts_changed = on_accounts_changed  # [2026-03-20] 新增：账号变更回调
         
         # [2026-02-28] 记住上次导出字段选择
         self.last_export_fields = {
@@ -2204,6 +2206,10 @@ class UserManagementDialog:
             # 刷新用户列表（更新账号数量）
             self._refresh_user_list()
             
+            # [2026-03-20] 修复原因：通知主界面刷新账号显示
+            if self.on_accounts_changed:
+                self.on_accounts_changed()
+            
         except Exception as e:
             messagebox.showerror("错误", f"写入账号文件失败: {e}", parent=self.dialog)
     
@@ -2371,6 +2377,10 @@ class UserManagementDialog:
         
         # 刷新用户列表
         self._refresh_user_list()
+        
+        # [2026-03-20] 修复原因：通知主界面刷新账号显示
+        if self.on_accounts_changed:
+            self.on_accounts_changed()
     
     def _batch_clear_all_accounts(self):
         """清空所有账号"""

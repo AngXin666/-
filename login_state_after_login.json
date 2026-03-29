@@ -1,0 +1,74 @@
+{
+  "timestamp": "2026-03-19T01:04:20.468065",
+  "device_id": "127.0.0.1:16544",
+  "package_name": "com.ry.xmsc",
+  "state": "after_login",
+  "files": {
+    "shared_prefs/lcdpr.xml": {
+      "size": 856,
+      "mtime": 1773853318,
+      "exists": true
+    },
+    "databases/DCStorage": {
+      "size": 40960,
+      "mtime": 1773853443,
+      "exists": true
+    },
+    "databases/DCStorage-shm": {
+      "exists": false
+    },
+    "databases/DCStorage-wal": {
+      "exists": false
+    },
+    "shared_prefs/com.ry.xmsc_preferences.xml": {
+      "size": 1381,
+      "mtime": 1772863008,
+      "exists": true
+    },
+    "shared_prefs/ContextData.xml": {
+      "size": 176,
+      "mtime": 1769957828,
+      "exists": true
+    },
+    "shared_prefs/virtualImeiAndImsi.xml": {
+      "size": 184,
+      "mtime": 1769957828,
+      "exists": true
+    },
+    "shared_prefs/vkeyid_settings.xml": {
+      "size": 1229,
+      "mtime": 1772863007,
+      "exists": true
+    },
+    "shared_prefs/vkeyid_profiles_v3.xml": {
+      "size": 460,
+      "mtime": 1772774211,
+      "exists": true
+    },
+    "shared_prefs/vkeyid_profiles_v4.xml": {
+      "size": 659,
+      "mtime": 1772774211,
+      "exists": true
+    },
+    "shared_prefs/Alvin2.xml": {
+      "size": 130,
+      "mtime": 1769957828,
+      "exists": true
+    },
+    "shared_prefs/alipay_tid_storage.xml": {
+      "size": 355,
+      "mtime": 1769957829,
+      "exists": true
+    },
+    "shared_prefs/alipay_vkey_random.xml": {
+      "size": 146,
+      "mtime": 1769957828,
+      "exists": true
+    },
+    "files/.DC4278477faeb9.txt": {
+      "size": 32,
+      "mtime": 1769342847,
+      "exists": true
+    }
+  }
+}

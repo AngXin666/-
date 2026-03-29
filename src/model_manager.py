@@ -71,7 +71,7 @@
     
     配置文件：
     --------
-    在项目根目录创建 model_config.json 文件：
+    在models目录创建 model_config.json 文件：
     
     {
       "models": {
@@ -270,13 +270,14 @@ class ModelManager:
     def _load_config(self) -> Dict[str, Any]:
         """加载配置文件（带默认值）
         
-        尝试从model_config.json加载配置，如果文件不存在或加载失败，
+        尝试从models/model_config.json加载配置，如果文件不存在或加载失败，
         则使用默认配置。用户配置会递归合并到默认配置中。
         
         Returns:
             Dict[str, Any]: 合并后的配置字典
         """
-        config_path = 'model_config.json'
+        # [2026-03-12] 修改路径：模型配置文件移动到models目录
+        config_path = 'models/model_config.json'
         
         # 默认配置
         default_config = {
@@ -316,6 +317,11 @@ class ModelManager:
                     'device': 'auto'
                 },
                 'login_detector': {
+                    'enabled': True,
+                    'device': 'auto'
+                },
+                # [2026-03-10] 新增：验号专用检测器
+                'validation_detector': {
                     'enabled': True,
                     'device': 'auto'
                 }
@@ -625,6 +631,7 @@ class ModelManager:
         
         # 要加载的模型列表
         # [2026-03-03] 新增：添加通用分类器和5个专用检测器（启动、资料、签到、转账、登录）
+        # [2026-03-10] 新增：添加验号专用检测器
         # 注意：通用分类器必须在专用检测器之前加载，因为专用检测器需要使用通用分类器作为降级方案
         models_to_load = [
             ('page_detector_integrated', self._load_page_detector_integrated),
@@ -635,6 +642,7 @@ class ModelManager:
             ('checkin_detector', self._load_checkin_detector),
             ('transfer_detector', self._load_transfer_detector),
             ('login_detector', self._load_login_detector),
+            ('validation_detector', self._load_validation_detector),  # 验号专用检测器
         ]
         
         self._loading_stats.total_models = len(models_to_load)
@@ -818,7 +826,8 @@ class ModelManager:
             adb=adb_bridge,
             classifier_model_path=model_path,
             classes_path=classes_path,
-            yolo_registry_path='yolo_model_registry.json',
+            # [2026-03-12] 修改路径：YOLO注册表文件移动到models目录
+            yolo_registry_path='models/yolo_model_registry.json',
             mapping_path='page_yolo_mapping.json',
             log_callback=self._log_callback
         )
@@ -979,7 +988,11 @@ class ModelManager:
             raise RuntimeError(
                 "PageDetectorIntegrated未初始化，请先调用initialize_all_models()"
             )
-        return self._models['page_detector_integrated']
+        
+        # [2026-03-11] 优化日志：删除DEBUG日志
+        model_instance = self._models['page_detector_integrated']
+        
+        return model_instance
     
     def get_ocr_thread_pool(self) -> 'OCRThreadPool':
         """获取OCR线程池（线程安全）
@@ -1017,7 +1030,8 @@ class ModelManager:
         
         # 通用分类器路径
         model_path = self.models_dir / 'page_classifier_pytorch_best.pth'
-        classes_path = self.models_dir / 'page_classes.json'
+        # [2026-03-10] 修复原因：类别文件在config目录，不在models目录
+        classes_path = self.base_dir / 'config' / 'page_classes.json'
         
         if not model_path.exists() or not classes_path.exists():
             return None
@@ -1179,6 +1193,39 @@ class ModelManager:
             fallback_classifier=general_classifier
         )
     
+    def _load_validation_detector(self, adb_bridge) -> 'PageDetectorDL':
+        """[2026-03-10] 加载验号专用检测器（MobileNetV3）
+        
+        验号专用检测器用于账号验证流程中的页面识别，包括：
+        - 登录页面的各种状态
+        - 验证码页面
+        - 账号异常页面
+        - 验证成功/失败页面
+        
+        Args:
+            adb_bridge: ADB桥接器实例
+        
+        Returns:
+            PageDetectorDL: 验号专用检测器实例
+        """
+        from .page_detector_dl import PageDetectorDL
+        
+        model_path = self.models_dir / 'page_classifier_validation_best.pth'
+        classes_path = self.models_dir / 'page_classes_validation.json'
+        
+        if not model_path.exists() or not classes_path.exists():
+            # 如果专用模型不存在，返回None（业务类会降级使用通用分类器）
+            return None
+        
+        # 传入通用分类器作为降级方案
+        general_classifier = self.get_general_classifier()
+        return PageDetectorDL(
+            adb_bridge, 
+            model_path=str(model_path), 
+            classes_path=str(classes_path),
+            fallback_classifier=general_classifier
+        )
+    
     def get_startup_detector(self) -> Optional['PageDetectorDL']:
         """获取启动专用检测器（线程安全）
         
@@ -1218,6 +1265,14 @@ class ModelManager:
             PageDetectorDL: 登录专用检测器实例，如果未加载则返回None
         """
         return self._models.get('login_detector')
+    
+    def get_validation_detector(self) -> Optional['PageDetectorDL']:
+        """[2026-03-10] 获取验号专用检测器（线程安全）
+        
+        Returns:
+            PageDetectorDL: 验号专用检测器实例，如果未加载则返回None
+        """
+        return self._models.get('validation_detector')
     
     def cleanup(self):
         """清理所有模型资源

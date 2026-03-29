@@ -193,7 +193,8 @@ class XimengAutomation:
     async def handle_startup_flow_integrated(self, device_id: str, log_callback=None, stop_check=None,
                                             package_name: str = "com.ry.xmsc", activity_name: str = None,
                                             max_retries: int = 3, file_logger=None, 
-                                            phone: str = None, password: str = None, app_already_started: bool = False) -> bool:
+                                            phone: str = None, password: str = None, app_already_started: bool = False,
+                                            cache_restored: bool = False) -> bool:
         """处理应用启动流程 - 使用启动专用检测器（GPU加速）
         
         优化点：
@@ -207,9 +208,11 @@ class XimengAutomation:
         8. [2026-03-11] 新增：支持应用已启动模式，避免重复启动
         9. [2026-03-11] 修复：移除重复的缓存恢复逻辑，避免应用被意外关闭
         10. [2026-03-11] 优化：精简GUI日志输出，减少CMD控制台噪音
+        11. [2026-03-14] 修复：缓存恢复模式下，检测到登录页时先等待缓存生效，避免立即登录
         
         流程：启动页 -> 用户协议弹窗(关闭) -> 广告页(等待) -> 首页弹窗(关闭) -> 主页
               或：启动页 -> 登录页(直接登录) -> 主页
+              或：缓存恢复 -> 启动页 -> 等待缓存生效 -> 主页（如果缓存有效）
         
         Args:
             device_id: 设备 ID
@@ -222,6 +225,7 @@ class XimengAutomation:
             phone: 手机号（用于登录）
             password: 密码（用于登录）
             app_already_started: 应用是否已启动（True时跳过启动步骤）
+            cache_restored: 是否已恢复缓存（True时检测到登录页会先等待缓存生效）
             
         Returns:
             是否成功
@@ -465,6 +469,15 @@ class XimengAutomation:
                             file_logger.info("OCR验证失败，跳过登录逻辑")
                         continue
                     
+                    # [2026-03-14] 修复原因：如果已恢复缓存但检测到登录页，说明缓存失效
+                    # 应该返回False，让外部清理缓存并重新登录
+                    if cache_restored:
+                        if file_logger:
+                            file_logger.warning("检测到登录页，缓存可能失效")
+                            file_logger.info("返回失败，让外部清理缓存并重新登录")
+                        concise.error("缓存失效，需要重新登录")
+                        return False
+                    
                     if phone and password:
                         # 有账号密码，直接登录
                         concise.action("检测到登录页，开始登录")
@@ -481,10 +494,12 @@ class XimengAutomation:
                             await self.auto_login._tap_with_fallback(device_id, self.auto_login.PHONE_INPUT, log_callback)
                             await asyncio.sleep(0.5)
                             
-                            # 清空手机号输入框
-                            for _ in range(15):
+                            # [2026-03-29] 修复：改用End键移到末尾再退格，避免光标在中间删不干净
+                            await self.adb.key_event(device_id, 123)  # End键
+                            await asyncio.sleep(0.1)
+                            for _ in range(30):
                                 await self.adb.key_event(device_id, 67)
-                                await asyncio.sleep(0.03)
+                                await asyncio.sleep(0.02)
                             
                             await self.adb.input_text(device_id, phone)
                             await asyncio.sleep(1.0)
@@ -497,10 +512,12 @@ class XimengAutomation:
                             await self.auto_login._tap_with_fallback(device_id, self.auto_login.PASSWORD_INPUT, log_callback)
                             await asyncio.sleep(0.5)
                             
-                            # 清空密码输入框
-                            for _ in range(15):
+                            # [2026-03-29] 修复：改用End键移到末尾再退格，避免光标在中间删不干净
+                            await self.adb.key_event(device_id, 123)  # End键
+                            await asyncio.sleep(0.1)
+                            for _ in range(30):
                                 await self.adb.key_event(device_id, 67)
-                                await asyncio.sleep(0.03)
+                                await asyncio.sleep(0.02)
                             
                             await self.adb.input_text(device_id, password)
                             await asyncio.sleep(1.0)
@@ -744,14 +761,14 @@ class XimengAutomation:
             file_logger.error("启动流程失败，已达到最大重试次数")
         return False
     async def _navigate_to_profile_with_ad_handling(self, device_id: str, log_callback=None) -> bool:
-        """导航到个人页并处理广告（统一方法）
+        """导航到个人页并处理广告（优化版）
         
+        # [2026-03-17] 优化原因：提高只登录模式的导航速度
         核心逻辑：
-        1. 点击"我的"按钮
-        2. 高频扫描页面状态（每0.05秒）
-        3. 检测到广告 → 立即关闭 → 继续扫描
-        4. 检测到正常个人页 → 返回成功
-        5. 超时（5秒）→ 返回失败
+        1. 优先使用固定坐标点击"我的"按钮（避免YOLO检测开销）
+        2. 降低扫描频率（每200毫秒）减少页面检测调用
+        3. 减少总扫描时间（3秒）提高响应速度
+        4. 添加早期退出条件
         
         Args:
             device_id: 设备ID
@@ -762,57 +779,9 @@ class XimengAutomation:
         """
         log = log_callback if log_callback else self._silent_log.info
         
-        # 定义一个辅助函数：尝试检测并点击按钮（YOLO + OCR）
-        async def try_detect_and_tap(button_name: str, model_name: str = '首页') -> bool:
-            """尝试使用YOLO和OCR检测并点击按钮
-            
-            Returns:
-                bool: 是否成功检测并点击
-            """
-            # 1. 尝试YOLO（直接使用按钮名称，不添加后缀）
-            button_pos = await self.detector.find_button_yolo(
-                device_id, 
-                model_name,
-                button_name,  # 直接使用按钮名称
-                conf_threshold=0.3
-            )
-            
-            if button_pos:
-                log(f"  YOLO检测到'{button_name}'按钮: {button_pos}")
-                await self.adb.tap(device_id, button_pos[0], button_pos[1])
-                return True
-            
-            # 2. 降级到OCR
-            log(f"  YOLO未检测到，尝试OCR...")
-            ocr_pos = await self.screen_capture.find_text_location(device_id, button_name)
-            
-            if ocr_pos:
-                log(f"  OCR检测到'{button_name}'按钮: {ocr_pos}")
-                await self.adb.tap(device_id, ocr_pos[0], ocr_pos[1])
-                return True
-            
-            return False
-        
-        # 尝试检测并点击"我的"按钮
-        success = await try_detect_and_tap("我的")
-        
-        if not success:
-            log(f"  未检测到'我的'按钮，可能不在首页，尝试先导航到首页...")
-            
-            # 尝试点击首页按钮
-            home_success = await try_detect_and_tap("首页")
-            
-            if home_success:
-                log(f"  已点击首页，等待页面加载...")
-                await asyncio.sleep(0.5)
-                
-                # 再次尝试点击"我的"按钮
-                success = await try_detect_and_tap("我的")
-            
-            # 如果所有检测方法都失败，返回失败
-            if not success:
-                log(f"  ❌ 所有检测方法都失败，无法导航到个人页")
-                return False
+        # [2026-03-17] 优化：优先使用固定坐标，避免YOLO检测开销
+        log(f"  点击'我的'按钮（使用固定坐标）...")
+        await self.adb.tap(device_id, 480, 920)  # 使用Navigator的标准坐标
         
         # 点击"我的"按钮后，等待1秒，然后按返回键（预防性关闭广告）
         log(f"  等待1秒后按返回键（预防性关闭广告）...")
@@ -820,14 +789,18 @@ class XimengAutomation:
         await self.adb.press_back(device_id)
         
         # 清除缓存
-        self.detector.clear_cache(device_id)
+        if hasattr(self.detector, 'clear_cache'):
+            self.detector.clear_cache(device_id)
+        if hasattr(self.profile_detector, 'clear_cache'):
+            self.profile_detector.clear_cache(device_id)
         
-        # 高频扫描，最多5秒
-        max_scan_time = 5.0
-        scan_interval = 0.05  # 每50毫秒扫描一次
+        # [2026-03-17] 优化：降低扫描频率和总时间，提高性能
+        max_scan_time = 3.0  # 从5秒减少到3秒
+        scan_interval = 0.2  # 从50毫秒增加到200毫秒，减少80%的检测调用
         start_time = asyncio.get_event_loop().time()
         
         ad_closed_count = 1  # 已经按了一次返回键（预防性关闭）
+        consecutive_success_count = 0  # 连续成功检测计数
         
         while (asyncio.get_event_loop().time() - start_time) < max_scan_time:
             # [2026-03-02] 修复原因：使用资料专用模型检测页面
@@ -843,50 +816,49 @@ class XimengAutomation:
             from .page_detector import PageState
             current_state = page_result.state
             
-            # 检测到正常个人页 → 成功
+            # 检测到正常个人页 → 连续检测确认后返回成功
             if current_state in [PageState.PROFILE, PageState.PROFILE_LOGGED]:
-                elapsed = asyncio.get_event_loop().time() - start_time
-                log(f"  ✓ 到达个人页（耗时: {int(elapsed)}秒，关闭广告: {ad_closed_count}次）")
-                return True
+                consecutive_success_count += 1
+                
+                # [2026-03-17] 优化：连续2次检测到个人页就确认成功，避免过度等待
+                if consecutive_success_count >= 2:
+                    elapsed = asyncio.get_event_loop().time() - start_time
+                    log(f"  ✓ 到达个人页（耗时: {elapsed:.1f}秒，关闭广告: {ad_closed_count}次）")
+                    return True
+                
+                # 第一次检测到，等待确认
+                await asyncio.sleep(scan_interval)
+                continue
+            else:
+                # 重置连续成功计数
+                consecutive_success_count = 0
             
             # 检测到广告 → 立即关闭
-            elif current_state == PageState.PROFILE_AD:
+            if current_state == PageState.PROFILE_AD:
                 log(f"  ⚠️ 检测到个人页广告，立即关闭...")
                 
-                # 方法1: 使用YOLO检测关闭按钮
-                close_button_pos = await self.detector.find_button_yolo(
-                    device_id, 
-                    '个人页广告',
-                    '确认按钮',
-                    conf_threshold=0.5
-                )
-                
-                if close_button_pos:
-                    log(f"  YOLO检测到关闭按钮: {close_button_pos}")
-                    await self.adb.tap(device_id, close_button_pos[0], close_button_pos[1])
-                else:
-                    # 方法2: 使用返回键关闭（更可靠）
-                    log(f"  YOLO未检测到按钮，使用返回键关闭")
-                    await self.adb.press_back(device_id)
-                
+                # [2026-03-17] 优化：直接使用返回键关闭，避免YOLO检测开销
+                await self.adb.press_back(device_id)
                 ad_closed_count += 1
                 
                 # 等待0.3秒让广告关闭动画完成
                 await asyncio.sleep(0.3)
                 
                 # 清除缓存
-                self.detector.clear_cache(device_id)
+                if hasattr(self.detector, 'clear_cache'):
+                    self.detector.clear_cache(device_id)
+                if hasattr(self.profile_detector, 'clear_cache'):
+                    self.profile_detector.clear_cache(device_id)
                 
                 # 继续扫描（可能还有广告，或者已经到达个人页）
                 continue
             
             # 其他状态 → 继续扫描
-            else:
-                await asyncio.sleep(scan_interval)
+            await asyncio.sleep(scan_interval)
         
         # 超时
         elapsed = asyncio.get_event_loop().time() - start_time
-        log(f"  ❌ 导航到个人页超时（耗时: {int(elapsed)}秒，关闭广告: {ad_closed_count}次）")
+        log(f"  ❌ 导航到个人页超时（耗时: {elapsed:.1f}秒，关闭广告: {ad_closed_count}次）")
         return False
     
     async def run_full_workflow(self, device_id: str, account: Account, skip_login: bool = False, workflow_config: dict = None) -> AccountResult:
@@ -1183,10 +1155,12 @@ class XimengAutomation:
                     concise.action("快速模式：有缓存，跳过获取资料")
                 else:
                     # [2026-03-11] 优化日志：简化快速签到模式的日志输出
+                    # [2026-03-19] 修复原因：快速签到模式检测到无缓存时，必须切换为完整流程并获取资料
                     file_logger.info("快速签到模式：检测到无登录缓存，自动切换为完整流程")
                     concise.action("快速模式：无缓存，切换为完整流程")
-                    # 自动切换为完整流程
+                    # 自动切换为完整流程，确保会获取资料并保存缓存
                     enable_profile = True
+                    file_logger.info("已启用资料获取，登录后将保存缓存")
             
             # 根据最终的 enable_profile 决定是否获取资料
             if not enable_profile:
@@ -1390,6 +1364,45 @@ class XimengAutomation:
                         has_balance = profile_data and profile_data.get('balance') is not None
                         has_nickname = profile_data and profile_data.get('nickname') is not None
                         has_user_id = profile_data and profile_data.get('user_id') is not None
+                        instance_closed = profile_data and profile_data.get('instance_closed') is True
+                        
+                        # [2026-03-14] 修复原因：检测到实例关闭，重启实例并重试
+                        if instance_closed:
+                            file_logger.warning("检测到实例已关闭，尝试重启实例...")
+                            log("⚠️ 实例已关闭，正在重启...")
+                            
+                            # 从device_id提取实例ID
+                            try:
+                                port = int(device_id.split(':')[1])
+                                instance_id = (port - 16384) // 32
+                            except:
+                                instance_id = 0
+                            
+                            # 重启实例
+                            from .emulator_controller import EmulatorController
+                            controller = EmulatorController()
+                            restart_success = await controller.launch_instance(instance_id, timeout=60)
+                            
+                            if restart_success:
+                                file_logger.info(f"实例 {instance_id} 重启成功")
+                                log(f"✓ 实例 {instance_id} 重启成功，继续执行...")
+                                
+                                # 等待实例完全启动
+                                await asyncio.sleep(3)
+                                
+                                # 重新启动应用
+                                await self.adb.start_app(device_id, "com.ry.xmsc")
+                                await asyncio.sleep(2)
+                                
+                                # 继续重试
+                                if attempt < 2:
+                                    log(f"  等待1秒后重试...")
+                                    await asyncio.sleep(1)
+                                continue
+                            else:
+                                file_logger.error(f"实例 {instance_id} 重启失败")
+                                log(f"❌ 实例 {instance_id} 重启失败")
+                                break
                         
                         # ===== 核心逻辑：基于获取资料的结果判断是否成功 =====
                         if has_balance and has_nickname and has_user_id:
@@ -1683,9 +1696,54 @@ class XimengAutomation:
                     
                     # 直接调用 do_checkin，它会自动处理导航和返回首页
                     # 传递登录回调，以便在缓存失效时可以直接登录
+                    # [2026-03-29] 修复：签到页跳登录页时，用签到专用模型判断是否离开登录页
+                    # 不能用auto_login.login()，因为登录专用模型没有登录页检测，会误判
+                    checkin_page_classifier = self.daily_checkin.page_classifier
+                    
                     async def login_callback_wrapper(dev_id, phone_num, pwd):
-                        """登录回调包装器"""
-                        return await self.auto_login.login(dev_id, phone_num, pwd)
+                        """登录回调包装器（签到页跳登录页专用，使用签到专用模型检测）"""
+                        try:
+                            # 直接输入账号密码（已在登录页，不需要导航）
+                            await self.auto_login._tap_with_fallback(dev_id, self.auto_login.PHONE_INPUT, None)
+                            await asyncio.sleep(0.3)
+                            await self.auto_login._tap_with_fallback(dev_id, self.auto_login.PHONE_INPUT, None)
+                            await asyncio.sleep(0.5)
+                            # [2026-03-29] 修复：改用End键移到末尾再退格，避免光标在中间删不干净
+                            await self.adb.key_event(dev_id, 123)  # End键
+                            await asyncio.sleep(0.1)
+                            for _ in range(30):
+                                await self.adb.key_event(dev_id, 67)
+                                await asyncio.sleep(0.02)
+                            await self.adb.input_text(dev_id, phone_num)
+                            await asyncio.sleep(1.0)
+                            
+                            await self.auto_login._tap_with_fallback(dev_id, self.auto_login.PASSWORD_INPUT, None)
+                            await asyncio.sleep(0.3)
+                            await self.auto_login._tap_with_fallback(dev_id, self.auto_login.PASSWORD_INPUT, None)
+                            await asyncio.sleep(0.5)
+                            # [2026-03-29] 修复：改用End键移到末尾再退格，避免光标在中间删不干净
+                            await self.adb.key_event(dev_id, 123)  # End键
+                            await asyncio.sleep(0.1)
+                            for _ in range(30):
+                                await self.adb.key_event(dev_id, 67)
+                                await asyncio.sleep(0.02)
+                            await self.adb.input_text(dev_id, pwd)
+                            await asyncio.sleep(1.0)
+                            
+                            await self.auto_login._click_agreement_with_retry(dev_id, None, max_retries=3)
+                            await asyncio.sleep(0.5)
+                            await self.auto_login._tap_with_fallback(dev_id, self.auto_login.LOGIN_BUTTON, None)
+                            await asyncio.sleep(1.5)
+                            
+                            # 用签到专用模型等待离开登录页（最多10秒）
+                            for _ in range(20):
+                                await asyncio.sleep(0.5)
+                                page_r = await checkin_page_classifier.detect_page(dev_id, use_cache=False)
+                                if page_r and page_r.state != PageState.LOGIN:
+                                    return LoginResult(success=True)
+                            return LoginResult(success=False, error_message="登录超时")
+                        except Exception as e:
+                            return LoginResult(success=False, error_message=str(e))
                     
                     # [2026-03-13] 修复原因：签到前必须导航到首页
                     # 签到流程需要在首页点击签到按钮
@@ -1717,9 +1775,9 @@ class XimengAutomation:
                         # 保存总签到次数
                         result.checkin_total_times = checkin_result.get('total_times')
                         
+                        # [2026-03-25] 修复缩进错误：添加条件判断
                         # 如果签到成功但未获取到总次数,从数据库历史记录中获取
-                        if result.checkin_total_times is None:
-                            file_logger.info("签到成功但未获取到总次数,尝试从数据库历史记录中获取...")
+                        if not result.checkin_total_times:
                             from .local_db import LocalDatabase
                             db = LocalDatabase()
                             latest_record = db.get_latest_record_by_phone(account.phone)
@@ -1823,6 +1881,16 @@ class XimengAutomation:
                         file_logger.info("签到完成")
                         concise.success("签到完成")
                         
+                        # [2026-03-14] 修复原因：验证签到次数识别是否正确
+                        # 如果签到次数=0但有余额，从数据库获取历史记录验证
+                        if result.checkin_total_times == 0 and result.checkin_balance_after and result.checkin_balance_after > 0:
+                            from .local_db import LocalDatabase
+                            db = LocalDatabase()
+                            latest_record = db.get_latest_record_by_phone(account.phone)
+                            if latest_record and latest_record.get('checkin_total_times', 0) > 0:
+                                file_logger.warning(f"⚠️ 签到次数识别可能错误：当前识别为0，但历史记录为{latest_record.get('checkin_total_times')}")
+                                concise.action(f"签到次数异常：当前0，历史{latest_record.get('checkin_total_times')}")
+                        
                         # 记录签到次数和奖励
                         if result.checkin_total_times:
                             file_logger.info(f"总签到次数: {result.checkin_total_times}")
@@ -1837,6 +1905,10 @@ class XimengAutomation:
                         
                         # 添加简洁日志：签到失败
                         concise.error(f"签到失败: {result.error_message}")
+                        
+                        # [2026-03-29] 修复：签到失败直接返回，不继续执行后续步骤（避免误判为成功）
+                        result.success = False
+                        return result
                     
                 except Exception as e:
                     # 签到异常，设置错误类型
@@ -1844,7 +1916,10 @@ class XimengAutomation:
                     result.error_type = ErrorType.CHECKIN_EXCEPTION
                     result.error_message = str(e)
                     file_logger.error(f"签到流程出错: {str(e)}")
-                    file_logger.info("跳过签到，继续执行后续流程")
+                    
+                    # [2026-03-29] 修复：签到异常直接返回，不继续执行后续步骤
+                    result.success = False
+                    return result
             
             # 优化：移除签到后的1秒等待，直接进入下一步
             # await asyncio.sleep(1)  # 已移除
@@ -1944,7 +2019,8 @@ class XimengAutomation:
                                 file_logger.info(f"最终余额: {result.balance_after:.2f} 元（签到前余额，无签到后余额）")
                         
                         # 检查3：余额达到转账条件吗？
-                        elif transfer_config.should_transfer(result.user_id, result.checkin_balance_after, current_level=0):
+                        # [2026-03-25] 修复：传递签到次数参数，签到流程已获取并存储
+                        elif transfer_config.should_transfer(result.user_id, result.checkin_balance_after, current_level=0, checkin_total_times=result.checkin_total_times):
                             # 检查4：有收款人配置吗？
                             recipient_id = transfer_config.get_transfer_recipient_enhanced(
                                 phone=account.phone,

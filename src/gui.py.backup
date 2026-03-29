@@ -115,6 +115,12 @@ class AutomationGUI:
         self.saved_accounts = {}
         self.saved_accounts_lock = threading.Lock()
         
+        # [2026-03-17] 新增：锁定账号集合（锁定的账号不参与脚本任务）
+        self.locked_accounts = set()  # 存储被锁定的手机号
+        self.locked_instances = set()  # 存储被锁定的实例ID
+        self.user_locked_instances = set()  # [2026-03-24] 新增：用户手动锁定的实例（运行完成后不清空）
+        self.account_instance_mapping = {}  # 账号到实例的映射 {phone: instance_id}
+        
         # 模拟器实例池管理
         self.instance_pool = []  # 可用的实例编号池 [0, 1, 2, ...]
         self.instance_lock = threading.Lock()  # 实例池访问锁
@@ -147,6 +153,9 @@ class AutomationGUI:
         
         # 自动检测并注册新模型（延迟1秒执行，确保GUI完全加载）
         self.root.after(1000, self._auto_check_new_models)
+        
+        # [2026-03-21] 新增：从数据库加载管理员列表（延迟1.5秒执行，确保GUI完全加载）
+        self.root.after(1500, self._load_owners_from_database)
     
     def _center_window(self):
         """将主窗口居中显示在屏幕中间"""
@@ -499,6 +508,9 @@ class AutomationGUI:
         # 窗口排列按钮
         ttk.Button(control_frame, text="📐 窗口排列", command=self._open_window_arranger, width=10).pack(side=tk.LEFT, padx=(0, 5))
         
+        # [2026-03-10] 新增：自动验号按钮
+        ttk.Button(control_frame, text="✅ 自动验号", command=self._open_account_validator, width=10).pack(side=tk.LEFT, padx=(0, 5))
+        
         # === 进度区域 ===
         progress_frame = ttk.LabelFrame(main_frame, text="进度", padding="5")
         progress_frame.pack(fill=tk.X, pady=(0, 10))
@@ -521,18 +533,20 @@ class AutomationGUI:
         stats_container = tk.Frame(log_frame)
         stats_container.pack(fill=tk.X, pady=(0, 5))
         
-        # 单行统计：总计、成功、失败、总余额、总签到奖励
+        # 单行统计：总计、成功、失败、总余额、总签到奖励、已勾选/未勾选
         self.total_var = tk.StringVar(value="总计: 0")
         self.success_var = tk.StringVar(value="成功: 0")
         self.failed_var = tk.StringVar(value="失败: 0")
         self.total_balance_var = tk.StringVar(value="总余额: 0.00 元")
         self.total_checkin_reward_var = tk.StringVar(value="总签到奖励: 0.00 元")
+        self.selection_stats_var = tk.StringVar(value="已勾选: 0 | 未勾选: 0")
         
         tk.Label(stats_container, textvariable=self.total_var, font=("Microsoft YaHei UI", 9), fg="blue").pack(side=tk.LEFT, padx=(0, 10))
         tk.Label(stats_container, textvariable=self.success_var, font=("Microsoft YaHei UI", 9), fg="green").pack(side=tk.LEFT, padx=(0, 10))
         tk.Label(stats_container, textvariable=self.failed_var, font=("Microsoft YaHei UI", 9), fg="red").pack(side=tk.LEFT, padx=(0, 10))
         tk.Label(stats_container, textvariable=self.total_balance_var, font=("Microsoft YaHei UI", 9), fg="purple").pack(side=tk.LEFT, padx=(0, 10))
-        tk.Label(stats_container, textvariable=self.total_checkin_reward_var, font=("Microsoft YaHei UI", 9), fg="darkgreen").pack(side=tk.LEFT)
+        tk.Label(stats_container, textvariable=self.total_checkin_reward_var, font=("Microsoft YaHei UI", 9), fg="darkgreen").pack(side=tk.LEFT, padx=(0, 10))
+        tk.Label(stats_container, textvariable=self.selection_stats_var, font=("Microsoft YaHei UI", 9), fg="blue").pack(side=tk.LEFT)
         
         # 创建 Notebook（标签页容器）
         self.log_notebook = ttk.Notebook(log_frame)
@@ -666,11 +680,12 @@ class AutomationGUI:
         
         ttk.Button(button_row, text="全选", command=self._select_all_results, width=8).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(button_row, text="反选", command=self._invert_selection, width=8).pack(side=tk.LEFT, padx=(0, 5))
-        ttk.Button(button_row, text="撤回", command=self._undo_selection, width=8).pack(side=tk.LEFT, padx=(0, 5))
         
         # 快速筛选按钮
         ttk.Button(button_row, text="🔍 执行失败", command=self._filter_failed, width=10).pack(side=tk.LEFT, padx=(10, 5))
-        ttk.Button(button_row, text="💰 有余额", command=self._filter_has_balance, width=10).pack(side=tk.LEFT, padx=(0, 5))
+        # [2026-03-21] 新增：未处理筛选按钮
+        ttk.Button(button_row, text="⏳ 未处理", command=self._filter_unprocessed, width=10).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(button_row, text="� 有余额", command=self._filter_has_balance, width=10).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(button_row, text="📭 无余额", command=self._filter_no_balance, width=10).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(button_row, text="🔄 显示全部", command=self._show_all, width=10).pack(side=tk.LEFT, padx=(0, 5))
         
@@ -681,6 +696,18 @@ class AutomationGUI:
         self.main_search_entry.pack(side=tk.LEFT, padx=(0, 5))
         self.main_search_entry.bind('<Return>', lambda e: self._search_main_table())
         ttk.Button(button_row, text="🔍 搜索", command=self._search_main_table, width=8).pack(side=tk.LEFT, padx=(0, 5))
+        # [2026-03-28] 新增：连续搜索复选框，勾选后在当前结果上继续搜索
+        ttk.Checkbutton(button_row, text="连续搜索", variable=self.continuous_search_var).pack(side=tk.LEFT, padx=(0, 5))
+        
+        # [2026-03-21] 新增：管理员选择框
+        ttk.Label(button_row, text="管理员:", width=8).pack(side=tk.LEFT, padx=(10, 5))
+        self.owner_filter_var = tk.StringVar(value="全部")
+        self.owner_filter_combo = ttk.Combobox(button_row, textvariable=self.owner_filter_var, 
+                                                state='readonly', width=35)
+        self.owner_filter_combo['values'] = ('全部',)  # 初始值，后续动态更新
+        self.owner_filter_combo.current(0)
+        self.owner_filter_combo.pack(side=tk.LEFT, padx=(0, 5), ipadx=50)  # 增加内部填充
+        self.owner_filter_combo.bind('<<ComboboxSelected>>', lambda e: self._filter_by_owner())
         
         # 创建Treeview表格 (带勾选框)
         # [2026-03-01] 删除优惠券：个人页已经没有优惠券了
@@ -693,7 +720,8 @@ class AutomationGUI:
         
         # show="tree headings" 显示勾选框列和数据列
         # [2026-03-03] 修改：增加表格高度从15到22，因为删除了错误日志框
-        self.results_tree = ttk.Treeview(results_frame, columns=columns, show="tree headings", height=22)
+        # [2026-03-14] 修改：启用多选模式（extended），支持Shift和Ctrl多选
+        self.results_tree = ttk.Treeview(results_frame, columns=columns, show="tree headings", height=22, selectmode='extended')
         
         # 配置勾选框列(第一列) - 使用自定义绘制
         self.results_tree.heading("#0", text="", anchor=tk.CENTER)
@@ -734,10 +762,28 @@ class AutomationGUI:
         # [2026-02-28] 添加右键菜单功能
         self.results_tree.bind("<Button-3>", self._show_account_context_menu)
         
+        # [2026-03-14] 添加拖拽选择功能
+        self._drag_start_item = None  # 拖拽起始项
+        self.results_tree.bind("<ButtonPress-1>", self._on_drag_start)
+        self.results_tree.bind("<B1-Motion>", self._on_drag_motion)
+        self.results_tree.bind("<ButtonRelease-1>", self._on_drag_end)
+        
+        # [2026-03-21] 新增：绑定滚动事件，监听用户手动滚动
+        self.results_tree.bind("<MouseWheel>", self._on_results_tree_scroll)
+        self.results_tree.bind("<Button-4>", self._on_results_tree_scroll)  # Linux
+        self.results_tree.bind("<Button-5>", self._on_results_tree_scroll)  # Linux
+        
+        # [2026-03-21] 新增：绑定滚动条拖动事件
+        # 注意：滚动条将在后面创建，这里先保存引用以便后续绑定
+        
         # 添加滚动条
         results_scrollbar_y = ttk.Scrollbar(results_frame, orient=tk.VERTICAL, command=self.results_tree.yview)
         results_scrollbar_x = ttk.Scrollbar(results_frame, orient=tk.HORIZONTAL, command=self.results_tree.xview)
         self.results_tree.configure(yscrollcommand=results_scrollbar_y.set, xscrollcommand=results_scrollbar_x.set)
+        
+        # [2026-03-21] 新增：绑定垂直滚动条拖动事件
+        results_scrollbar_y.bind("<B1-Motion>", lambda e: self._on_results_tree_scroll(e))
+        results_scrollbar_y.bind("<ButtonRelease-1>", lambda e: self._check_results_tree_scroll_position())
         
         # 布局
         self.results_tree.grid(row=1, column=0, sticky="nsew")
@@ -753,10 +799,11 @@ class AutomationGUI:
         self.results_tree.tag_configure("neutral", foreground="black")
         self.results_tree.tag_configure("checked", foreground="blue")  # 已完成的行用蓝色
         
-        # 初始化勾选状态字典和历史记录
+        # 初始化勾选状态字典
         self.checked_items = {}  # {item_id: True/False}
-        self.selection_history = []  # 最多保存5个历史状态
         self.all_tree_items = []  # 存储所有表格项目ID（用于筛选恢复）
+        # [2026-03-28] 新增：连续搜索模式，勾选后在当前结果上继续搜索
+        self.continuous_search_var = tk.BooleanVar(value=False)
         
         # [2026-02-22] 添加：勾选操作计数器,每5次保存一次
         self.selection_change_count = 0
@@ -811,8 +858,12 @@ class AutomationGUI:
             实例编号，如果没有可用实例则返回 None
         """
         with self.instance_lock:
-            if self.instance_pool:
-                return self.instance_pool.pop(0)
+            # [2026-03-17] 修复原因：过滤掉锁定的实例
+            available_instances = [inst for inst in self.instance_pool if inst not in self.locked_instances]
+            if available_instances:
+                instance_id = available_instances.pop(0)
+                self.instance_pool.remove(instance_id)
+                return instance_id
             return None
     
     def _release_instance(self, instance_id: int):
@@ -822,7 +873,8 @@ class AutomationGUI:
             instance_id: 要释放的实例编号
         """
         with self.instance_lock:
-            if instance_id not in self.instance_pool:
+            # [2026-03-17] 修复原因：不释放锁定的实例
+            if instance_id not in self.locked_instances and instance_id not in self.instance_pool:
                 self.instance_pool.append(instance_id)
                 self.instance_pool.sort()  # 保持有序
     
@@ -1025,9 +1077,28 @@ class AutomationGUI:
                         import traceback
                         traceback.print_exc()
             
-            # ===== 步骤3: 只显示账号文件中的账号（不显示历史记录中的其他账号）=====
-            if not current_accounts:
+            # ===== 步骤3: 合并账号文件和历史记录中的账号 =====
+            # [2026-03-05] 修改原因：显示所有账号（账号文件 + 数据库历史记录）
+            # 从数据库获取所有历史账号
+            all_history_phones = set(history_dict.keys()) if history_dict else set()
+            
+            # 合并：账号文件中的账号 + 历史记录中的账号
+            all_phones_to_display = current_phones | all_history_phones
+            
+            # 如果没有任何账号，直接返回
+            if not all_phones_to_display:
                 return
+            
+            # 为历史记录中但不在账号文件中的账号创建 Account 对象
+            for phone in all_history_phones:
+                if phone not in current_phones:
+                    # 从历史记录中获取密码（如果有）
+                    hist_record = history_dict.get(phone, {})
+                    password = hist_record.get('密码', '')
+                    # 创建 Account 对象
+                    from .account_manager import Account
+                    account = Account(phone=phone, password=password)
+                    current_accounts.append(account)
             
             # ===== 步骤4: 清空表格并重新填充 =====
             
@@ -1045,9 +1116,8 @@ class AutomationGUI:
             for item in all_items:
                 self.results_tree.delete(item)
             
-            # 清空勾选状态和历史记录
+            # 清空勾选状态
             self.checked_items.clear()
-            self.selection_history.clear()
             
             # 清空筛选缓存
             self.all_tree_items = []
@@ -1219,6 +1289,9 @@ class AutomationGUI:
                 if restored_selection_count > 0:
                     self._log(f"✅ 已恢复 {restored_selection_count} 个账号的勾选状态")
             
+            # [2026-03-15] 恢复勾选状态后，重新统计以更新勾选数量显示
+            self._update_stats_from_table()
+            
             # ===== 步骤9: 更新筛选缓存 =====
             # 保存所有项目ID，用于筛选功能
             self.all_tree_items = list(self.results_tree.get_children())
@@ -1388,6 +1461,20 @@ class AutomationGUI:
                     
                     # 简洁日志：检测结果
                     self.root.after(0, lambda: self._log(f"✅ 检测到 {count} 个运行中的实例"))
+                    
+                    # [2026-03-21] 新增：如果正在运行，将新检测到的实例加入实例池
+                    if self.is_running:
+                        with self.instance_lock:
+                            # 找出新增的实例（不在当前实例池和锁定实例中的）
+                            current_instances = set(self.instance_pool) | self.locked_instances
+                            new_instances = [inst for inst in running_instances if inst not in current_instances]
+                            
+                            if new_instances:
+                                # 将新实例加入实例池
+                                self.instance_pool.extend(new_instances)
+                                self.instance_pool.sort()
+                                self.root.after(0, lambda n=len(new_instances): 
+                                              self._log(f"✅ 已将 {n} 个新实例加入执行队列"))
                     
                     # 自动调整并行数
                     if auto_adjust:
@@ -2257,61 +2344,129 @@ class AutomationGUI:
         self._update_stats_from_table()
     
     def _show_account_context_menu(self, event):
-        """[2026-02-28] 显示账号列表的右键菜单"""
-        # 选中右键点击的项
+        """[2026-02-28] 显示账号列表的右键菜单
+        [2026-03-14] 新增：支持多选批量操作"""
+        # 获取右键点击的项
         item = self.results_tree.identify_row(event.y)
         if not item:
             return
         
-        # 选中该项
-        self.results_tree.selection_set(item)
+        # 获取当前选中的所有项
+        selected_items = self.results_tree.selection()
         
-        # 获取账号信息
-        values = self.results_tree.item(item, "values")
-        if not values or len(values) < 3:
-            return
+        # 如果右键点击的项不在选中列表中，则只选中该项
+        if item not in selected_items:
+            self.results_tree.selection_set(item)
+            selected_items = (item,)
         
-        phone = values[0]  # 手机号
-        user_id = values[2]  # 用户ID
+        # 获取选中项的数量
+        selected_count = len(selected_items)
         
         # 创建右键菜单
         context_menu = tk.Menu(self.results_tree, tearoff=0)
         
-        # 复制功能
-        context_menu.add_command(
-            label=f"📋 复制手机号: {phone}",
-            command=lambda: self._copy_to_clipboard(phone)
-        )
-        
-        if user_id and user_id != '-':
+        # 如果只选中一项，显示单项操作菜单
+        if selected_count == 1:
+            # 获取账号信息
+            values = self.results_tree.item(item, "values")
+            if not values or len(values) < 3:
+                return
+            
+            phone = values[0]  # 手机号
+            user_id = values[2]  # 用户ID
+            
+            # 复制功能
             context_menu.add_command(
-                label=f"📋 复制用户ID: {user_id}",
-                command=lambda: self._copy_to_clipboard(user_id)
+                label=f"📋 复制手机号: {phone}",
+                command=lambda: self._copy_to_clipboard(phone)
             )
-        
-        context_menu.add_separator()
-        
-        # 单独运行功能
-        context_menu.add_command(
-            label="▶️ 单独运行此账号",
-            command=lambda: self._run_single_account(phone)
-        )
-        
-        context_menu.add_separator()
-        
-        # 清理缓存功能
-        context_menu.add_command(
-            label="🧹 清理登录缓存",
-            command=lambda: self._clear_account_cache(phone)
-        )
-        
-        context_menu.add_separator()
-        
-        # 删除功能
-        context_menu.add_command(
-            label="🗑️ 删除此账号",
-            command=lambda: self._delete_single_account(phone)
-        )
+            
+            if user_id and user_id != '-':
+                context_menu.add_command(
+                    label=f"📋 复制用户ID: {user_id}",
+                    command=lambda: self._copy_to_clipboard(user_id)
+                )
+            
+            context_menu.add_separator()
+            
+            # [2026-03-17] 新增：锁定/解锁功能
+            is_locked = self._is_account_locked(phone)
+            if is_locked:
+                context_menu.add_command(
+                    label="🔓 解锁此账号",
+                    command=lambda: self._unlock_account(phone)
+                )
+            else:
+                context_menu.add_command(
+                    label="🔒 锁定此账号",
+                    command=lambda: self._lock_account(phone)
+                )
+            
+            # [2026-03-24] 新增：锁定/解锁此账号所在实例
+            instance_id = self.account_instance_mapping.get(phone)
+            if instance_id is not None:
+                is_instance_locked = instance_id in self.user_locked_instances
+                if is_instance_locked:
+                    context_menu.add_command(
+                        label=f"🔓 解锁实例{instance_id}（此账号所在窗口）",
+                        command=lambda i=instance_id: self._unlock_instance(i)
+                    )
+                else:
+                    context_menu.add_command(
+                        label=f"🔒 锁定实例{instance_id}（此账号所在窗口）",
+                        command=lambda i=instance_id: self._lock_instance(i)
+                    )
+            
+            context_menu.add_separator()
+            
+            # 单独运行功能
+            context_menu.add_command(
+                label="▶️ 单独运行此账号",
+                command=lambda: self._run_single_account(phone)
+            )
+            
+            context_menu.add_separator()
+            
+            # 清理缓存功能
+            context_menu.add_command(
+                label="🧹 清理登录缓存",
+                command=lambda: self._clear_account_cache(phone)
+            )
+            
+            context_menu.add_separator()
+            
+            # 删除功能
+            context_menu.add_command(
+                label="🗑️ 删除此账号",
+                command=lambda: self._delete_single_account(phone)
+            )
+        else:
+            # 多选时，显示批量操作菜单
+            context_menu.add_command(
+                label=f"✅ 批量勾选 ({selected_count}项)",
+                command=lambda: self._batch_check_items(selected_items, True)
+            )
+            
+            context_menu.add_command(
+                label=f"❌ 批量取消勾选 ({selected_count}项)",
+                command=lambda: self._batch_check_items(selected_items, False)
+            )
+            
+            context_menu.add_separator()
+            
+            # 批量清理缓存
+            context_menu.add_command(
+                label=f"🧹 批量清理缓存 ({selected_count}项)",
+                command=lambda: self._batch_clear_cache(selected_items)
+            )
+            
+            context_menu.add_separator()
+            
+            # 批量删除
+            context_menu.add_command(
+                label=f"🗑️ 批量删除 ({selected_count}项)",
+                command=lambda: self._batch_delete_accounts(selected_items)
+            )
         
         # 显示菜单
         context_menu.post(event.x_root, event.y_root)
@@ -2376,11 +2531,8 @@ class AutomationGUI:
             return
         
         try:
-            # 清理登录缓存
-            from .login_cache_manager import LoginCacheManager
-            cache_manager = LoginCacheManager()
-            
-            # 删除登录缓存目录
+            # [2026-03-06] 修复：删除未使用的LoginCacheManager导入
+            # 清理登录缓存只需要直接删除目录，不需要LoginCacheManager
             import shutil
             from pathlib import Path
             
@@ -2459,8 +2611,9 @@ class AutomationGUI:
                 self._log(f"⚠️ 账号文件中未找到: {phone}")
             
             # 2. 从数据库删除
-            from .database import Database
-            db = Database()
+            # [2026-03-06] 修复导入错误：使用正确的LocalDatabase类
+            from .local_db import LocalDatabase
+            db = LocalDatabase()
             deleted_db_count = db.delete_account_records(phone)
             self._log(f"✓ 已从数据库删除 {deleted_db_count} 条记录: {phone}")
             
@@ -2527,14 +2680,443 @@ class AutomationGUI:
         except Exception as e:
             self._log(f"✗ 删除账号失败: {e}")
             messagebox.showerror("错误", f"删除账号失败: {e}", parent=self.root)
-        else:
-            self.results_tree.item(item, text=self.checkbox_unchecked_text)
+    
+    def _batch_check_items(self, items, check_state: bool):
+        """[2026-03-14] 批量勾选或取消勾选账号
         
-        # [2026-02-22] 修改：每5次勾选操作保存一次
-        self.selection_change_count += 1
-        if self.selection_change_count >= 5:
+        Args:
+            items: 要操作的项目列表
+            check_state: True=勾选, False=取消勾选
+        """
+        try:
+            # 保存当前选择状态到历史
+            self._save_selection_state()
+            
+            # 批量修改勾选状态
+            for item in items:
+                if check_state:
+                    # 勾选
+                    self.results_tree.item(item, text=self.checkbox_checked_text)
+                    self.checked_items[item] = True
+                else:
+                    # 取消勾选
+                    self.results_tree.item(item, text=self.checkbox_unchecked_text)
+                    self.checked_items[item] = False
+            
+            # 保存到文件
             self._save_selections_to_file()
-            self.selection_change_count = 0
+            
+            # 更新待处理数量
+            self._update_pending_count()
+            
+            action = "勾选" if check_state else "取消勾选"
+            self._log(f"✓ 已批量{action} {len(items)} 个账号")
+            
+        except Exception as e:
+            self._log(f"✗ 批量操作失败: {e}")
+            messagebox.showerror("错误", f"批量操作失败: {e}", parent=self.root)
+    
+    def _batch_clear_cache(self, items):
+        """[2026-03-14] 批量清理登录缓存
+        
+        Args:
+            items: 要操作的项目列表
+        """
+        # 确认操作
+        result = messagebox.askyesno(
+            "确认批量清理",
+            f"确定要清理 {len(items)} 个账号的登录缓存吗？\n\n"
+            "此操作将清理这些账号的所有登录缓存文件。",
+            parent=self.root
+        )
+        
+        if not result:
+            return
+        
+        try:
+            success_count = 0
+            failed_count = 0
+            
+            for item in items:
+                values = self.results_tree.item(item, "values")
+                if not values or len(values) < 1:
+                    continue
+                
+                phone = values[0]  # 手机号
+                
+                try:
+                    # 清理登录缓存
+                    import shutil
+                    from pathlib import Path
+                    
+                    cache_dir = Path("login_cache")
+                    deleted_count = 0
+                    
+                    if cache_dir.exists():
+                        for cache_folder in cache_dir.iterdir():
+                            if cache_folder.is_dir() and cache_folder.name.startswith(phone):
+                                try:
+                                    shutil.rmtree(cache_folder)
+                                    deleted_count += 1
+                                except:
+                                    pass
+                    
+                    # 清理账号信息缓存
+                    try:
+                        from .account_cache import get_account_cache
+                        account_cache = get_account_cache()
+                        account_cache.clear(phone)
+                    except:
+                        pass
+                    
+                    success_count += 1
+                    self._log(f"✓ 已清理缓存: {phone} ({deleted_count}个目录)")
+                    
+                except Exception as e:
+                    failed_count += 1
+                    self._log(f"✗ 清理缓存失败 ({phone}): {e}")
+            
+            messagebox.showinfo(
+                "批量清理完成",
+                f"批量清理缓存完成\n\n"
+                f"成功: {success_count}\n"
+                f"失败: {failed_count}",
+                parent=self.root
+            )
+            
+        except Exception as e:
+            self._log(f"✗ 批量清理缓存失败: {e}")
+            messagebox.showerror("错误", f"批量清理缓存失败: {e}", parent=self.root)
+    
+    def _batch_delete_accounts(self, items):
+        """[2026-03-14] 批量删除账号
+        
+        Args:
+            items: 要删除的项目列表
+        """
+        # 确认操作
+        result = messagebox.askyesno(
+            "确认批量删除",
+            f"确定要删除 {len(items)} 个账号吗？\n\n"
+            "此操作将：\n"
+            "1. 从账号文件中删除\n"
+            "2. 从数据库中删除所有记录\n"
+            "3. 清理所有缓存\n"
+            "4. 取消管理员分配\n\n"
+            "此操作不可恢复！",
+            parent=self.root
+        )
+        
+        if not result:
+            return
+        
+        try:
+            # 收集所有手机号
+            phones = []
+            for item in items:
+                values = self.results_tree.item(item, "values")
+                if values and len(values) >= 1:
+                    phones.append(values[0])
+            
+            if not phones:
+                messagebox.showwarning("警告", "未找到有效的账号", parent=self.root)
+                return
+            
+            # 1. 从账号文件批量删除
+            accounts_file = self.config.accounts_file
+            if not accounts_file:
+                messagebox.showerror("错误", "未配置账号文件路径", parent=self.root)
+                return
+            
+            from .encrypted_accounts_file import EncryptedAccountsFile
+            encrypted_file = EncryptedAccountsFile(accounts_file)
+            
+            deleted_file_count = 0
+            if encrypted_file.delete_accounts(phones):
+                deleted_file_count = len(phones)
+                self._log(f"✓ 已从账号文件删除 {deleted_file_count} 个账号")
+            
+            # 2. 从数据库批量删除
+            from .local_db import LocalDatabase
+            db = LocalDatabase()
+            
+            total_db_records = 0
+            for phone in phones:
+                deleted_count = db.delete_account_records(phone)
+                total_db_records += deleted_count
+            
+            self._log(f"✓ 已从数据库删除 {total_db_records} 条记录")
+            
+            # 3. 批量清理登录缓存
+            import shutil
+            from pathlib import Path
+            
+            cache_dir = Path("login_cache")
+            total_cache_dirs = 0
+            
+            if cache_dir.exists():
+                for phone in phones:
+                    for cache_folder in cache_dir.iterdir():
+                        if cache_folder.is_dir() and cache_folder.name.startswith(phone):
+                            try:
+                                shutil.rmtree(cache_folder)
+                                total_cache_dirs += 1
+                            except:
+                                pass
+            
+            self._log(f"✓ 已删除 {total_cache_dirs} 个登录缓存目录")
+            
+            # 4. 批量清理账号信息缓存
+            try:
+                from .account_cache import get_account_cache
+                account_cache = get_account_cache()
+                for phone in phones:
+                    account_cache.clear(phone)
+            except:
+                pass
+            
+            # 5. 批量取消管理员分配
+            try:
+                from .user_manager import UserManager
+                user_manager = UserManager()
+                total_assignments = 0
+                for phone in phones:
+                    removed = user_manager.remove_account_assignment(phone)
+                    total_assignments += removed
+                
+                if total_assignments > 0:
+                    self._log(f"✓ 已取消 {total_assignments} 个管理员分配")
+            except:
+                pass
+            
+            # 6. 从表格中移除这些行
+            for item in items:
+                self.results_tree.delete(item)
+                if item in self.checked_items:
+                    del self.checked_items[item]
+            
+            # 更新统计
+            self._update_stats_from_table()
+            
+            messagebox.showinfo(
+                "批量删除完成",
+                f"已成功删除 {len(phones)} 个账号\n\n"
+                f"- 账号文件: {deleted_file_count} 个\n"
+                f"- 数据库记录: {total_db_records} 条\n"
+                f"- 登录缓存: {total_cache_dirs} 个目录\n"
+                f"- 账号信息缓存: 已清理\n"
+                f"- 管理员分配: 已取消",
+                parent=self.root
+            )
+            
+        except Exception as e:
+            self._log(f"✗ 批量删除失败: {e}")
+            messagebox.showerror("错误", f"批量删除失败: {e}", parent=self.root)
+    
+    # [2026-03-17] 新增：账号锁定功能
+    def _is_account_locked(self, phone: str) -> bool:
+        """检查账号是否被锁定"""
+        return phone in self.locked_accounts
+    
+    def _lock_account(self, phone: str):
+        """锁定账号"""
+        if phone in self.locked_accounts:
+            return
+        
+        # 确认操作
+        result = messagebox.askyesno(
+            "确认锁定",
+            f"确定要锁定账号 {phone} 吗？\n\n"
+            "锁定后：\n"
+            "1. 该账号不会参与脚本任务\n"
+            "2. 如果该账号正在运行，会自动释放实例\n"
+            "3. 可以随时解锁恢复正常使用",
+            parent=self.root
+        )
+        
+        if not result:
+            return
+        
+        # 添加到锁定集合
+        self.locked_accounts.add(phone)
+        
+        # 更新表格显示（可以考虑添加锁定标识）
+        self._update_account_display(phone, locked=True)
+        
+        # 如果该账号正在运行，释放其实例
+        self._release_locked_account_instance(phone)
+        
+        self._log(f"🔒 已锁定账号: {phone}")
+    
+    def _unlock_account(self, phone: str):
+        """解锁账号"""
+        if phone not in self.locked_accounts:
+            return
+        
+        # 从锁定集合中移除
+        self.locked_accounts.discard(phone)
+        
+        # [2026-03-17] 修复原因：解锁时恢复被锁定的实例
+        # 查找该账号之前锁定的实例
+        locked_instance = None
+        for instance_id in list(self.locked_instances):
+            # 这里需要一个反向查找，但由于映射已清除，我们采用简化方案
+            # 解锁所有锁定的实例（如果只锁定了一个账号的话）
+            if len(self.locked_accounts) == 0:  # 如果没有其他锁定账号了
+                self.locked_instances.discard(instance_id)
+                # 将实例重新加入可用池
+                with self.instance_lock:
+                    if instance_id not in self.instance_pool:
+                        self.instance_pool.append(instance_id)
+                        self.instance_pool.sort()
+                self._log(f"🔓 已解锁实例 {instance_id}")
+                break
+        
+        # 更新表格显示
+        self._update_account_display(phone, locked=False)
+        
+        self._log(f"🔓 已解锁账号: {phone}")
+    
+    def _lock_instance(self, instance_id: int):
+        """[2026-03-24] 新增：锁定实例（通过右键菜单）
+        
+        Args:
+            instance_id: 实例编号
+        """
+        if instance_id in self.user_locked_instances:
+            return
+        
+        self.user_locked_instances.add(instance_id)
+        self.locked_instances.add(instance_id)
+        self._log(f"🔒 已锁定实例 {instance_id}")
+    
+    def _unlock_instance(self, instance_id: int):
+        """[2026-03-24] 新增：解锁实例（通过右键菜单）
+        
+        Args:
+            instance_id: 实例编号
+        """
+        if instance_id not in self.user_locked_instances:
+            return
+        
+        self.user_locked_instances.discard(instance_id)
+        self.locked_instances.discard(instance_id)
+        self._log(f"🔓 已解锁实例 {instance_id}")
+    
+    def _update_account_display(self, phone: str, locked: bool):
+        """更新账号在表格中的显示状态"""
+        # 遍历表格找到对应的账号行
+        for item in self.results_tree.get_children():
+            values = self.results_tree.item(item, "values")
+            if values and values[0] == phone:
+                # 可以在这里添加锁定标识，比如修改状态列或添加图标
+                # 暂时只记录日志，后续可以扩展显示效果
+                break
+    
+    def _release_locked_account_instance(self, phone: str):
+        """释放被锁定账号占用的实例（完全停止该实例）"""
+        # [2026-03-17] 修复原因：锁定账号后，其占用的实例应该完全停止工作
+        
+        # 1. 检查账号到实例的映射
+        instance_id = self.account_instance_mapping.get(phone)
+        if instance_id is not None:
+            # 2. 将该实例标记为锁定（完全停止工作）
+            self.locked_instances.add(instance_id)
+            
+            # 3. 从实例池中移除该实例
+            with self.instance_lock:
+                if instance_id in self.instance_pool:
+                    self.instance_pool.remove(instance_id)
+            
+            self._log(f"🔒 已锁定并移除实例 {instance_id}（账号 {phone} 占用）")
+            self._log(f"⚠️ 实例 {instance_id} 将在当前账号处理完成后停止工作")
+        else:
+            # [2026-03-17] 修复原因：如果没有找到映射，锁定所有正在运行的实例
+            # 这是一个更激进的方案，确保锁定账号后所有实例都停止工作
+            self._log(f"⚠️ 账号 {phone} 尚未分配到实例或已处理完成")
+            
+            # 获取当前所有可用的实例并锁定它们
+            with self.instance_lock:
+                available_instances = list(self.instance_pool)
+                for inst_id in available_instances:
+                    self.locked_instances.add(inst_id)
+                    self.instance_pool.remove(inst_id)
+                    self._log(f"🔒 已锁定实例 {inst_id}")
+                
+                if available_instances:
+                    self._log(f"🔒 已锁定所有可用实例: {available_instances}")
+                else:
+                    self._log("⚠️ 当前没有可用实例需要锁定")
+    
+    def _is_account_available_for_processing(self, phone: str) -> bool:
+        """检查账号是否可用于处理（未被锁定）"""
+        return phone not in self.locked_accounts
+    
+    def _on_drag_start(self, event):
+        """[2026-03-14] 拖拽开始事件"""
+        # 记录拖拽起始项
+        item = self.results_tree.identify_row(event.y)
+        if item:
+            self._drag_start_item = item
+            # 如果点击的项不在当前选择中，清除选择并选中该项
+            if item not in self.results_tree.selection():
+                self.results_tree.selection_set(item)
+    
+    def _on_drag_motion(self, event):
+        """[2026-03-14] 拖拽移动事件 - 实现拖拽多选"""
+        if not self._drag_start_item:
+            return
+        
+        # [2026-03-18] 修改原因：添加拖拽时自动滚动功能
+        # 获取表格的可见区域高度
+        tree_height = self.results_tree.winfo_height()
+        
+        # 定义滚动触发区域（距离边缘的像素）
+        scroll_margin = 30
+        
+        # 检查是否需要向上滚动
+        if event.y < scroll_margin:
+            # 向上滚动
+            self.results_tree.yview_scroll(-1, "units")
+        # 检查是否需要向下滚动
+        elif event.y > tree_height - scroll_margin:
+            # 向下滚动
+            self.results_tree.yview_scroll(1, "units")
+        
+        # 获取当前鼠标位置的项
+        current_item = self.results_tree.identify_row(event.y)
+        if not current_item:
+            return
+        
+        # 获取所有项
+        all_items = self.results_tree.get_children()
+        if not all_items:
+            return
+        
+        try:
+            # 获取起始项和当前项的索引
+            start_index = all_items.index(self._drag_start_item)
+            current_index = all_items.index(current_item)
+            
+            # 确定选择范围
+            if start_index <= current_index:
+                # 向下拖拽
+                selected_items = all_items[start_index:current_index + 1]
+            else:
+                # 向上拖拽
+                selected_items = all_items[current_index:start_index + 1]
+            
+            # 更新选择
+            self.results_tree.selection_set(selected_items)
+            
+        except ValueError:
+            # 如果项不在列表中，忽略
+            pass
+    
+    def _on_drag_end(self, event):
+        """[2026-03-14] 拖拽结束事件"""
+        # 清除拖拽起始项
+        self._drag_start_item = None
     
     def _select_all_results(self):
         """全选或取消全选（只操作当前显示的账户）"""
@@ -2561,6 +3143,9 @@ class AutomationGUI:
         # 记录日志
         action = "全选" if new_state else "取消全选"
         self._log(f"✓ 已{action} {len(all_items)} 个显示的账户")
+        
+        # [2026-03-21] 新增：更新勾选统计
+        self._update_stats_from_table()
         
         # [2026-02-22] 修改：全选/取消全选操作立即保存
         self._save_selections_to_file()
@@ -2592,21 +3177,15 @@ class AutomationGUI:
         # 记录日志
         self._log(f"✓ 已反选 {len(all_items)} 个显示的账户（勾选 {checked_count} 个，取消 {unchecked_count} 个）")
         
+        # [2026-03-21] 新增：更新勾选统计
+        self._update_stats_from_table()
+        
         # [2026-02-22] 修改：反选操作立即保存
         self._save_selections_to_file()
         self.selection_change_count = 0
     
     def _save_selection_state(self):
         """保存当前选择状态到历史(最多5个)"""
-        # 复制当前状态
-        current_state = self.checked_items.copy()
-        
-        # 添加到历史
-        self.selection_history.append(current_state)
-        
-        # 只保留最近5个
-        if len(self.selection_history) > 5:
-            self.selection_history.pop(0)
     
     def _save_selections_to_file(self):
         """保存勾选状态到文件"""
@@ -2621,27 +3200,6 @@ class AutomationGUI:
         
         # 保存到文件
         self.selection_manager.save_selections(selections)
-    
-    def _undo_selection(self):
-        """撤回到上一个选择状态"""
-        if not self.selection_history:
-            self._log("没有可撤回的历史记录")
-            return
-        
-        # 恢复上一个状态
-        previous_state = self.selection_history.pop()
-        self.checked_items = previous_state
-        
-        # 更新所有项目的显示
-        all_items = self.results_tree.get_children()
-        for item in all_items:
-            is_checked = self.checked_items.get(item, False)
-            if is_checked:
-                self.results_tree.item(item, text=self.checkbox_checked_text)
-            else:
-                self.results_tree.item(item, text=self.checkbox_unchecked_text)
-        
-        self._log(f"已撤回到上一个状态(剩余{len(self.selection_history)}个历史记录)")
     
     
     def _filter_failed(self):
@@ -2694,8 +3252,9 @@ class AutomationGUI:
         has_balance_count = 0
         for item in self.all_tree_items:
             values = self.results_tree.item(item, 'values')
-            if values and len(values) > 9:  # 确保有足够的列
-                balance_after = values[9]  # 余额列是第10列（索引9）
+            if values and len(values) > 7:  # 确保有足够的列
+                # [2026-03-21] 修复列索引错误：余额列是第8列（索引7），不是第10列（索引9）
+                balance_after = values[7]  # 余额列是第8列（索引7）
                 try:
                     balance = float(balance_after) if balance_after and balance_after != 'N/A' else 0.0
                     if balance > 0:
@@ -2729,8 +3288,9 @@ class AutomationGUI:
         no_balance_count = 0
         for item in self.all_tree_items:
             values = self.results_tree.item(item, 'values')
-            if values and len(values) > 9:  # 确保有足够的列
-                balance_after = values[9]  # 余额列是第10列（索引9）
+            if values and len(values) > 7:  # 确保有足够的列
+                # [2026-03-21] 修复列索引错误：余额列是第8列（索引7），不是第10列（索引9）
+                balance_after = values[7]  # 余额列是第8列（索引7）
                 try:
                     balance = float(balance_after) if balance_after and balance_after != 'N/A' else 0.0
                     if balance == 0:
@@ -2744,6 +3304,133 @@ class AutomationGUI:
         else:
             self._log("✓ 没有找到无余额的账户")
             messagebox.showinfo("提示", "没有找到无余额的账户")
+    
+    def _filter_unprocessed(self):
+        """筛选未处理的账户（状态为空或待处理）
+        
+        [2026-03-21] 新增：筛选未处理账号功能
+        """
+        # 保存所有项目ID（如果还没保存）
+        if not self.all_tree_items:
+            self.all_tree_items = list(self.results_tree.get_children())
+        
+        if not self.all_tree_items:
+            self._log("⚠️ 表格中没有数据")
+            messagebox.showinfo("提示", "表格中没有数据")
+            return
+        
+        # 先detach所有项目
+        for item in self.all_tree_items:
+            self.results_tree.detach(item)
+        
+        # 只reattach未处理的账户（状态为空、N/A或包含"待处理"）
+        unprocessed_count = 0
+        for item in self.all_tree_items:
+            values = self.results_tree.item(item, 'values')
+            if values and len(values) > 11:  # 确保有足够的列
+                status = values[11]  # 状态列是第12列（索引11）
+                # 未处理的条件：状态为空、N/A、或不包含"成功"和"失败"
+                if not status or status == 'N/A' or ('成功' not in str(status) and '失败' not in str(status)):
+                    self.results_tree.reattach(item, '', 'end')
+                    unprocessed_count += 1
+        
+        if unprocessed_count > 0:
+            self._log(f"✓ 已筛选出 {unprocessed_count} 个未处理的账户（可勾选操作）")
+        else:
+            self._log("✓ 没有找到未处理的账户")
+            messagebox.showinfo("提示", "没有找到未处理的账户")
+    
+    def _filter_by_owner(self):
+        """根据管理员筛选账户
+        
+        [2026-03-21] 新增：按管理员筛选功能
+        """
+        selected_owner = self.owner_filter_var.get()
+        
+        # 如果选择"全部"，显示所有账户
+        if selected_owner == "全部":
+            self._show_all()
+            return
+        
+        # 保存所有项目ID（如果还没保存）
+        if not self.all_tree_items:
+            self.all_tree_items = list(self.results_tree.get_children())
+        
+        if not self.all_tree_items:
+            self._log("⚠️ 表格中没有数据")
+            messagebox.showinfo("提示", "表格中没有数据")
+            return
+        
+        # 先detach所有项目
+        for item in self.all_tree_items:
+            self.results_tree.detach(item)
+        
+        # 只reattach指定管理员的账户
+        owner_count = 0
+        for item in self.all_tree_items:
+            values = self.results_tree.item(item, 'values')
+            if values and len(values) > 13:  # 确保有足够的列
+                owner = values[13]  # 管理员列是第14列（索引13）
+                if owner == selected_owner:
+                    self.results_tree.reattach(item, '', 'end')
+                    owner_count += 1
+        
+        if owner_count > 0:
+            self._log(f"✓ 已筛选出管理员 '{selected_owner}' 的 {owner_count} 个账户（可勾选操作）")
+        else:
+            self._log(f"✓ 没有找到管理员 '{selected_owner}' 的账户")
+            messagebox.showinfo("提示", f"没有找到管理员 '{selected_owner}' 的账户")
+    
+    def _update_owner_filter_options(self):
+        """更新管理员下拉框的选项列表
+        
+        [2026-03-21] 新增：动态更新管理员选项
+        """
+        # 收集所有不同的管理员
+        owners = set()
+        
+        # 遍历所有表格项
+        if not self.all_tree_items:
+            self.all_tree_items = list(self.results_tree.get_children())
+        
+        for item in self.all_tree_items:
+            try:
+                values = self.results_tree.item(item, 'values')
+                if values and len(values) > 13:  # 确保有足够的列
+                    owner = values[13]  # 管理员列是第14列（索引13）
+                    if owner and owner != "-" and owner != "N/A":
+                        owners.add(owner)
+            except:
+                pass
+        
+        # 更新下拉框选项（保持"全部"在第一位）
+        if owners:
+            owner_list = ["全部"] + sorted(list(owners))
+            self.owner_filter_combo['values'] = owner_list
+        else:
+            self.owner_filter_combo['values'] = ("全部",)
+    
+    def _load_owners_from_database(self):
+        """从数据库加载所有管理员
+        
+        [2026-03-21] 新增：程序启动时从数据库读取管理员列表
+        """
+        try:
+            db = LocalDatabase()
+            # 获取所有不同的管理员
+            owners = db.get_all_owners()
+            
+            if owners:
+                owner_list = ["全部"] + sorted(list(owners))
+                self.owner_filter_combo['values'] = owner_list
+                self._log(f"✓ 已加载 {len(owners)} 个管理员")
+            else:
+                self.owner_filter_combo['values'] = ("全部",)
+        except Exception as e:
+            self._log(f"⚠️ 加载管理员列表失败: {e}")
+            self.owner_filter_combo['values'] = ("全部",)
+    
+    
     
     def _show_all(self):
         """显示全部账户（清除筛选）"""
@@ -2768,7 +3455,9 @@ class AutomationGUI:
             self._log("✓ 已显示全部账户")
     
     def _search_main_table(self):
-        """搜索主界面表格（根据手机号或ID）"""
+        """搜索主界面表格（根据手机号、昵称或ID）
+        [2026-03-28] 新增：支持连续搜索模式，勾选"连续搜索"后在当前结果上继续搜索
+        """
         search_text = self.main_search_var.get().strip()
         
         if not search_text:
@@ -2776,8 +3465,20 @@ class AutomationGUI:
             self._show_all()
             return
         
-        # 先显示全部（清除之前的筛选）
-        if self.all_tree_items:
+        # [2026-03-15] 修改原因：数字字段最少4位数起才进行搜索
+        if search_text.isdigit() and len(search_text) < 4:
+            self._log(f"🔍 数字搜索至少需要4位数")
+            return
+        
+        # [2026-03-28] 连续搜索：勾选时从当前可见行搜索，否则从全量搜索
+        if self.continuous_search_var.get():
+            source_items = list(self.results_tree.get_children())
+            if not source_items:
+                self._log("🔍 当前结果为空，无法继续搜索")
+                return
+        else:
+            source_items = self.all_tree_items
+            # 非连续搜索时先detach所有
             for item in self.all_tree_items:
                 try:
                     self.results_tree.detach(item)
@@ -2786,32 +3487,38 @@ class AutomationGUI:
         
         # 搜索匹配的项目
         matched_items = []
-        for item in self.all_tree_items:
+        for item in source_items:
             try:
                 values = self.results_tree.item(item, 'values')
                 if values and len(values) > 2:
-                    phone = str(values[0])  # 手机号在第一列
-                    user_id = str(values[2])  # 用户ID在第三列
-                    
-                    # 模糊匹配：手机号或ID包含搜索文本
-                    if search_text in phone or search_text in user_id:
+                    phone = str(values[0])
+                    nickname = str(values[1])
+                    user_id = str(values[2])
+                    if search_text in phone or search_text in nickname or search_text in user_id:
                         matched_items.append(item)
             except:
                 pass
         
-        # 显示匹配的项目
-        for item in matched_items:
-            try:
-                self.results_tree.reattach(item, '', 'end')
-            except:
-                pass
+        # [2026-03-28] 连续搜索时：detach当前可见行中不匹配的
+        if self.continuous_search_var.get():
+            for item in source_items:
+                if item not in matched_items:
+                    try:
+                        self.results_tree.detach(item)
+                    except:
+                        pass
+        else:
+            # 普通搜索：reattach匹配项
+            for item in matched_items:
+                try:
+                    self.results_tree.reattach(item, '', 'end')
+                except:
+                    pass
         
-        # 高亮显示匹配的行（使用蓝色）
+        # 高亮显示匹配的行
         for item in matched_items:
             try:
-                # 获取当前标签
                 current_tags = list(self.results_tree.item(item, 'tags'))
-                # 添加checked标签（蓝色）
                 if 'checked' not in current_tags:
                     current_tags.append('checked')
                     self.results_tree.item(item, tags=current_tags)
@@ -2819,7 +3526,8 @@ class AutomationGUI:
                 pass
         
         if matched_items:
-            self._log(f"🔍 找到 {len(matched_items)} 个匹配的账户")
+            mode_hint = "（连续）" if self.continuous_search_var.get() else ""
+            self._log(f"🔍{mode_hint} 找到 {len(matched_items)} 个匹配的账户")
         else:
             self._log(f"🔍 未找到匹配 '{search_text}' 的账户")
             messagebox.showinfo("提示", f"未找到匹配 '{search_text}' 的账户")
@@ -2857,6 +3565,17 @@ class AutomationGUI:
         # 清空所有日志存储
         self.all_logs = []
     
+    def _clear_all_logs(self):
+        """[2026-03-15] 清空所有标签页的日志（全部、实例0-5、错误）"""
+        # 清空所有实例的日志
+        for instance_id in list(self.instance_log_texts.keys()):
+            self._clear_instance_log(instance_id)
+        
+        # 清空错误日志列表
+        self.all_error_logs = []
+        
+        self._log("✓ 已清空所有日志")
+    
     def _clear_instance_log(self, instance_id: int):
         """清空指定实例的日志
         
@@ -2876,14 +3595,17 @@ class AutomationGUI:
             # 重置该实例的错误状态和标签页颜色
             self.instance_has_error[instance_id] = False
             
+            # [2026-03-15] 修复：使用 instance_tab_ids 获取正确的标签页索引
             # 更新标签页标题（显示绿色圆点）
-            if instance_id == -1:
-                self.log_notebook.tab(0, text="全部")
-            elif instance_id == -2:
-                self.log_notebook.tab(7, text="错误")
-            else:
-                # 实例0-5：显示绿色圆点（表示无错误）
-                self._update_instance_tab_color(instance_id, 'green')
+            if instance_id in self.instance_tab_ids:
+                tab_index = self.instance_tab_ids[instance_id]
+                if instance_id == -1:
+                    self.log_notebook.tab(tab_index, text="全部")
+                elif instance_id == -2:
+                    self.log_notebook.tab(tab_index, text="错误")
+                else:
+                    # 实例0-5：显示绿色圆点（表示无错误）
+                    self._update_instance_tab_color(instance_id, 'green')
             
             # 重置自动滚动状态
             self.instance_auto_scroll[instance_id] = True
@@ -2988,6 +3710,61 @@ class AutomationGUI:
         self.error_log_text.see(tk.END)
         self.error_log_text.config(state=tk.DISABLED)
     
+    def _show_and_scroll_to_account(self, phone: str):
+        """[2026-03-21] 显示账号并自动滚动到该账号
+        
+        Args:
+            phone: 手机号
+        """
+        # [2026-03-21] 修复：只显示搜索结果中的账号
+        # 使用 visible_before_hide（开始运行前可见的账号）
+        visible_items = getattr(self, 'visible_before_hide', self.all_tree_items)
+        
+        # 查找该账号对应的 item_id
+        for item_id in visible_items:
+            try:
+                values = self.results_tree.item(item_id, 'values')
+                if values and len(values) > 0 and values[0] == phone:
+                    # 显示该账号
+                    self.results_tree.reattach(item_id, '', 'end')
+                    
+                    # 如果启用了自动滚动，滚动到该账号
+                    if self.auto_scroll_enabled:
+                        self.results_tree.see(item_id)
+                    break
+            except:
+                pass
+    
+    def _on_results_tree_scroll(self, event):
+        """[2026-03-21] 处理结果表格的滚动事件，暂停自动滚动
+        
+        Args:
+            event: 滚动事件
+        """
+        # 用户手动滚动时，暂停自动滚动
+        self.auto_scroll_enabled = False
+        
+        # 延迟检查是否滚动到底部
+        self.root.after(100, self._check_results_tree_scroll_position)
+    
+    def _check_results_tree_scroll_position(self):
+        """[2026-03-21] 检查结果表格是否滚动到底部，如果是则恢复自动滚动"""
+        try:
+            # 获取可见的最后一个项目
+            visible_items = self.results_tree.get_children()
+            if not visible_items:
+                return
+            
+            last_item = visible_items[-1]
+            
+            # 获取表格的可见区域
+            bbox = self.results_tree.bbox(last_item)
+            if bbox:
+                # 如果最后一个项目可见，说明滚动到底部了
+                self.auto_scroll_enabled = True
+        except:
+            pass
+    
     def _update_account_status_in_table(self, phone: str, status: str):
         """更新表格中指定账号的状态
         
@@ -3049,12 +3826,15 @@ class AutomationGUI:
         1. 总计：表格中所有账号
         2. 成功/失败：根据状态列统计
         3. 余额/签到奖励：只统计成功账号的数据（避免混合历史数据）
+        4. [2026-03-15] 勾选统计：实时显示已勾选和未勾选的账号数
         """
         total = 0
         success = 0
         failed = 0
         total_balance = 0.0
         total_checkin_reward = 0.0
+        checked_count = 0  # [2026-03-15] 已勾选数量
+        unchecked_count = 0  # [2026-03-15] 未勾选数量
         
         # 遍历表格中的所有行
         for item_id in self.results_tree.get_children():
@@ -3063,6 +3843,12 @@ class AutomationGUI:
                 continue
             
             total += 1
+            
+            # [2026-03-15] 统计勾选状态
+            if self.checked_items.get(item_id, False):
+                checked_count += 1
+            else:
+                unchecked_count += 1
             
             # [2026-03-01] 删除优惠券列：个人页已经没有优惠券了
             # 表格列顺序：
@@ -3109,6 +3895,9 @@ class AutomationGUI:
         self.failed_var.set(f"失败: {failed}")
         self.total_balance_var.set(f"总余额: {total_balance:.2f} 元")
         self.total_checkin_reward_var.set(f"总签到奖励: {total_checkin_reward:.2f} 元")
+        
+        # [2026-03-15] 更新勾选统计显示
+        self.selection_stats_var.set(f"已勾选: {checked_count} | 未勾选: {unchecked_count}")
     
     def _get_success_failed_from_table(self) -> tuple:
         """从表格中快速获取成功和失败数量（用于进度条显示）
@@ -3204,8 +3993,12 @@ class AutomationGUI:
         # 签到奖励
         checkin_reward = f"{account_result.checkin_reward:.2f}" if account_result.checkin_reward else "0"
         
+        # [2026-03-06] 修复原因：签到次数为0时应该显示"0"而不是"N/A"
         # 签到总次数
-        checkin_total_times = str(account_result.checkin_total_times) if account_result.checkin_total_times is not None else "N/A"
+        if account_result.checkin_total_times is not None:
+            checkin_total_times = str(account_result.checkin_total_times)
+        else:
+            checkin_total_times = "0"  # 默认为0而不是N/A
         
         # 余额（最终余额）
         balance_after = f"{account_result.balance_after:.2f}" if account_result.balance_after is not None else "N/A"
@@ -3246,12 +4039,16 @@ class AutomationGUI:
             tags.append("neutral")
         
         # 查找表格中是否已有该账号的行
+        # [2026-03-21] 修复：使用 all_tree_items 而不是 get_children()，因为账号可能被隐藏
         item_id = None
-        for existing_item in self.results_tree.get_children():
-            existing_values = self.results_tree.item(existing_item, 'values')
-            if existing_values and len(existing_values) > 0 and existing_values[0] == phone:
-                item_id = existing_item
-                break
+        for existing_item in self.all_tree_items:
+            try:
+                existing_values = self.results_tree.item(existing_item, 'values')
+                if existing_values and len(existing_values) > 0 and existing_values[0] == phone:
+                    item_id = existing_item
+                    break
+            except:
+                pass
         
         # 如果成功完成，添加checked标签并自动勾选
         if account_result.success:
@@ -3280,6 +4077,9 @@ class AutomationGUI:
         
         # 更新统计（从表格重新计算）
         self._update_stats_from_table()
+        
+        # [2026-03-21] 新增：更新管理员下拉框选项
+        self._update_owner_filter_options()
         
         # 自动滚动到最新结果
         self.results_tree.see(item_id)
@@ -3427,26 +4227,43 @@ class AutomationGUI:
             for phone, record in phone_dict.items():
                 # 处理昵称编码
                 nickname = record['nickname']
+                # [2026-03-05] 修复原因：避免将None转换为字符串'None'
                 if nickname:
                     # 如果是bytes，解码为str
                     if isinstance(nickname, bytes):
                         nickname = nickname.decode('utf-8', errors='replace')
-                    else:
-                        # 确保是字符串
+                    elif not isinstance(nickname, str):
+                        # 只有当不是字符串时才转换（避免None变成'None'）
                         nickname = str(nickname)
+                else:
+                    # None、空字符串等保持原样
+                    nickname = nickname
+                
+                # [2026-03-05] 修复原因：避免将None转换为字符串'None'
+                # 处理user_id
+                user_id = record['user_id']
+                if user_id is None or (isinstance(user_id, str) and user_id.lower() == 'none'):
+                    user_id = None
+                
+                # 处理其他字段，避免将None转换为'None'
+                def safe_str(value):
+                    """安全转换为字符串，None保持为None"""
+                    if value is None or (isinstance(value, str) and value.lower() == 'none'):
+                        return None
+                    return str(value)
                 
                 history_data.append({
                     '手机号': record['phone'],
                     '昵称': nickname,
-                    '用户ID': record['user_id'],
-                    '余额前(元)': str(record['balance_before']),
-                    '积分': str(record['points']),
-                    '抵扣券(张)': str(record['vouchers']),
-                    '优惠券(张)': str(record['coupons']),
-                    '签到奖励(元)': str(record['checkin_reward']),
-                    '签到总次数': str(record['checkin_total_times']),
-                    '余额(元)': str(record['balance_after']),
-                    '耗时(秒)': str(record['duration']),
+                    '用户ID': user_id,
+                    '余额前(元)': safe_str(record['balance_before']),
+                    '积分': safe_str(record['points']),
+                    '抵扣券(张)': safe_str(record['vouchers']),
+                    '优惠券(张)': safe_str(record['coupons']),
+                    '签到奖励(元)': safe_str(record['checkin_reward']),
+                    '签到总次数': safe_str(record['checkin_total_times']),
+                    '余额(元)': safe_str(record['balance_after']),
+                    '耗时(秒)': safe_str(record['duration']),
                     '状态': record['status'],
                     '登录方式': record['login_method']
                 })
@@ -3560,6 +4377,9 @@ class AutomationGUI:
 
     def _start_automation(self):
         """开始自动化"""
+        # [2026-03-15] 新增：开始运行前自动清理所有标签页日志
+        self._clear_all_logs()
+        
         # 检查模型是否已加载
         if not self.models_loaded:
             from .model_manager import ModelManager
@@ -3610,6 +4430,29 @@ class AutomationGUI:
                 # 显示绿色圆点（表示无错误）
                 self._update_instance_tab_color(instance_id, 'green')
         
+        # [2026-03-20] 新增：开始运行时隐藏所有账号
+        # [2026-03-21] 修复：在隐藏之前记录当前可见的账号（搜索结果）
+        # [2026-03-24] 修复：只登录模式下不隐藏表格账号
+        workflow_mode = getattr(self.config, 'workflow_mode', 'complete')
+        should_hide_accounts = (workflow_mode != 'login_only')
+        
+        if not hasattr(self, 'all_tree_items'):
+            self.all_tree_items = list(self.results_tree.get_children())
+        
+        # 记录当前可见的账号（搜索后的结果）
+        self.visible_before_hide = list(self.results_tree.get_children())
+        
+        # 只在非"只登录"模式下隐藏账号
+        if should_hide_accounts:
+            for item in self.all_tree_items:
+                try:
+                    self.results_tree.detach(item)
+                except:
+                    pass
+        
+        # [2026-03-21] 新增：初始化自动滚动标志
+        self.auto_scroll_enabled = True
+        
         self.is_running = True
         self.is_paused = False
         self.start_btn.config(state=tk.DISABLED)
@@ -3646,6 +4489,13 @@ class AutomationGUI:
         self.is_paused = False
         self.stop_event.set()  # 设置停止标志
         self.pause_event.clear()  # 清除暂停标志
+        
+        # [2026-03-24] 修复原因：清空锁定集合，允许下次运行
+        # [2026-03-24] 修改：只清空临时锁定，保留用户手动锁定的实例
+        self.locked_accounts.clear()
+        # 只清空非用户手动锁定的实例
+        self.locked_instances = self.user_locked_instances.copy()
+        self.account_instance_mapping.clear()
         
         # 更新按钮状态
         self.start_btn.config(state=tk.NORMAL)
@@ -3740,23 +4590,43 @@ class AutomationGUI:
         if self.stop_event.is_set():
             return
         
+        # [2026-03-18] 修改原因：修复重新选择账号执行时直接完成的问题
+        # [2026-03-20] 修复原因：搜索后只处理搜索结果中的账号，不处理被隐藏的账号
+        # [2026-03-21] 修复原因：使用开始运行前记录的可见账号列表
         # 统计未勾选账号数（需要处理的账号数）和勾选账号数（视为已成功）
-        # 只统计当前显示的（未被detach的）账号
+        # 只基于搜索后可见的账号，不处理被搜索隐藏的账号
         unchecked_phones = set()
         checked_count = 0  # 勾选的账号数量（视为已成功）
+        
+        # 创建表格中账号的映射 {phone: (item_id, is_checked)}
+        # 使用 visible_before_hide（开始运行前可见的账号，即搜索结果）
+        table_accounts = {}
         with self.stats_lock:
-            # 获取当前显示的项目（未被detach的）
-            visible_items = self.results_tree.get_children()
+            # 使用开始运行前记录的可见账号列表
+            visible_items = getattr(self, 'visible_before_hide', self.all_tree_items)
             for item_id in visible_items:
-                values = self.results_tree.item(item_id, 'values')
-                if values and len(values) > 0:
-                    phone = values[0]
-                    if self.checked_items.get(item_id, False):
-                        # 勾选的账号，视为已成功
-                        checked_count += 1
-                    else:
-                        # 未勾选的账号，需要处理
-                        unchecked_phones.add(phone)
+                try:
+                    values = self.results_tree.item(item_id, 'values')
+                    if values and len(values) > 0:
+                        phone = values[0]
+                        is_checked = self.checked_items.get(item_id, False)
+                        table_accounts[phone] = (item_id, is_checked)
+                except:
+                    pass
+        
+        # 只处理表格中可见的账号（搜索后被隐藏的账号不处理）
+        for account in accounts:
+            phone = account.phone
+            if phone in table_accounts:
+                # 账号在表格中（可见），检查勾选状态
+                item_id, is_checked = table_accounts[phone]
+                if is_checked:
+                    # 勾选的账号，视为已成功
+                    checked_count += 1
+                else:
+                    # 未勾选的账号，需要处理
+                    unchecked_phones.add(phone)
+            # 账号不在表格中（被搜索隐藏），跳过不处理
         
         unchecked_count = len(unchecked_phones)
         
@@ -3783,9 +4653,13 @@ class AutomationGUI:
         running_instances = await controller.get_running_instances()
         
         if running_instances:
-            # 使用检测到的实例ID初始化实例池
-            self.instance_pool = running_instances[:max_workers]
+            # [2026-03-24] 修改：使用检测到的实例ID初始化实例池，排除已锁定的实例
+            available_instances = [i for i in running_instances[:max_workers] if i not in self.user_locked_instances]
+            self.instance_pool = available_instances
             self.root.after(0, lambda: self._log(f"使用 {len(self.instance_pool)} 个已运行的实例"))
+            if len(available_instances) < len(running_instances[:max_workers]):
+                locked_count = len(running_instances[:max_workers]) - len(available_instances)
+                self.root.after(0, lambda c=locked_count: self._log(f"🔒 已排除 {c} 个锁定的实例"))
         else:
             if not auto_launch:
                 # 未启用自动启动，且没有运行中的实例
@@ -3793,10 +4667,16 @@ class AutomationGUI:
                 self.root.after(0, lambda: self._log("请手动启动模拟器，或在设置中启用'自动启动模拟器'"))
                 return
             
-            # 初始化实例池
-            self.instance_pool = list(range(max_workers))
+            # [2026-03-24] 修改：初始化实例池，排除已锁定的实例
+            all_instances = list(range(max_workers))
+            available_instances = [i for i in all_instances if i not in self.user_locked_instances]
+            self.instance_pool = available_instances
             
-            # 批量启动所有需要的模拟器实例
+            if len(available_instances) < len(all_instances):
+                locked_count = len(all_instances) - len(available_instances)
+                self.root.after(0, lambda c=locked_count: self._log(f"🔒 已排除 {c} 个锁定的实例"))
+            
+            # 批量启动所有需要的模拟器实例（只启动未锁定的）
             for instance_id in range(max_workers):
                 if self.stop_event.is_set():
                     return
@@ -3877,8 +4757,9 @@ class AutomationGUI:
         # 失败账号列表（用于重试）
         failed_accounts = []
         
-        # 将未勾选的账号加入队列（只运行未勾选的账号）
+        # 将未勾选且未锁定的账号加入队列（只运行未勾选且未锁定的账号）
         queued_count = 0
+        locked_skipped_count = 0
         for i, account in enumerate(accounts):
             # 检查是否需要停止
             if self.stop_event.is_set():
@@ -3889,10 +4770,18 @@ class AutomationGUI:
             if account.phone not in unchecked_phones:
                 continue
             
+            # [2026-03-17] 修复原因：检查账号是否被锁定，锁定的账号不参与处理
+            if not self._is_account_available_for_processing(account.phone):
+                locked_skipped_count += 1
+                continue
+            
             # 加入共享队列
             account_queue.put((i, account))
             queued_count += 1
         
+        # 输出统计信息
+        if locked_skipped_count > 0:
+            self.root.after(0, lambda c=locked_skipped_count: self._log(f"🔒 跳过 {c} 个锁定账号"))
         self.root.after(0, lambda c=queued_count: self._log(f"✓ 已将 {c} 个账号加入处理队列"))
         
         # 为每个实例创建一个工作线程
@@ -3950,6 +4839,11 @@ class AutomationGUI:
             
             # 持续从队列获取账号处理
             while True:
+                # [2026-03-17] 修复原因：检查实例是否被锁定，锁定的实例应该停止工作
+                if instance_id in self.locked_instances:
+                    instance_log_callback("🔒 实例已被锁定，停止处理")
+                    break
+                
                 # [2026-02-22] 修改：只在获取账号前检查停止标志,处理中的账号会完成
                 # 从队列获取账号（非阻塞，超时1秒）
                 try:
@@ -3961,11 +4855,21 @@ class AutomationGUI:
                         break
                     else:
                         # 队列暂时为空，继续等待
-                        # 在等待期间检查停止标志
+                        # 在等待期间检查停止标志和锁定状态
                         if self.stop_event.is_set():
                             instance_log_callback("收到停止信号，退出")
                             break
+                        # [2026-03-17] 修复原因：在等待期间也要检查锁定状态
+                        if instance_id in self.locked_instances:
+                            instance_log_callback("🔒 实例已被锁定，停止处理")
+                            break
                         continue
+                
+                # [2026-03-17] 修复原因：检查账号是否被锁定，锁定的账号跳过处理
+                if not self._is_account_available_for_processing(account.phone):
+                    instance_log_callback(f"🔒 账号 {account.phone} 已被锁定，跳过处理")
+                    account_queue.task_done()  # 标记任务完成
+                    continue
                 
                 # 检查是否暂停
                 while self.pause_event.is_set():
@@ -3974,14 +4878,21 @@ class AutomationGUI:
                         # 暂停期间收到停止信号,不处理当前账号
                         instance_log_callback("暂停期间收到停止信号，退出")
                         break
+                    # [2026-03-17] 修复原因：暂停期间也要检查锁定状态
+                    if instance_id in self.locked_instances:
+                        instance_log_callback("🔒 暂停期间实例被锁定，退出")
+                        break
                 
-                # 如果在暂停期间收到停止信号,跳出外层循环
-                if self.stop_event.is_set():
+                # 如果在暂停期间收到停止信号或被锁定,跳出外层循环
+                if self.stop_event.is_set() or instance_id in self.locked_instances:
                     break
                 
                 # 添加分隔线，清晰分隔不同账号
                 instance_log_callback("=" * 60)
                 instance_log_callback(f"开始处理账号 {account_index+1}/{total}: {account.phone}")
+                
+                # [2026-03-17] 修复原因：记录账号到实例的映射，用于锁定功能
+                self.account_instance_mapping[account.phone] = instance_id
                 
                 try:
                     # 在新的事件循环中运行异步处理
@@ -4054,7 +4965,8 @@ class AutomationGUI:
                             except Exception as log_err:
                                 instance_log_callback(f"记录失败日志时出错: {log_err}")
                             
-                            failed_accounts.append((account, error_msg))
+                            # [2026-03-13] 修复：记录失败账号时保存实例ID，重试时使用同一实例
+                            failed_accounts.append((account, error_msg, instance_id))
                             instance_log_callback(f"✗ 账号 {account.phone} 处理失败: {error_msg}")
                             
                             # 在锁内获取当前值的副本
@@ -4121,7 +5033,8 @@ class AutomationGUI:
                         current_processed = processed
                     
                     if "用户中断" not in error_msg:
-                        failed_accounts.append((account, error_msg))
+                        # [2026-03-13] 修复：记录失败账号时保存实例ID，重试时使用同一实例
+                        failed_accounts.append((account, error_msg, instance_id))
                     
                     # 更新统计（在锁外执行UI操作）
                     self.root.after(0, lambda s=current_success, f=current_failed,
@@ -4142,6 +5055,10 @@ class AutomationGUI:
                 # 标记任务完成
                 account_queue.task_done()
                 
+                # [2026-03-17] 修复原因：账号处理完成后清除映射
+                if account.phone in self.account_instance_mapping:
+                    del self.account_instance_mapping[account.phone]
+                
                 # [2026-02-22] 修改：账号处理完成后检查停止标志
                 if self.stop_event.is_set():
                     instance_log_callback("✓ 当前账号已完成，收到停止信号，退出")
@@ -4151,7 +5068,9 @@ class AutomationGUI:
             instance_log_callback(f"实例 {instance_id} 已完成所有任务")
         
         # 启动所有实例的处理线程
-        for inst_id in self.instance_pool:
+        # [2026-03-17] 修复原因：过滤掉锁定的实例
+        available_instances = [inst_id for inst_id in self.instance_pool if inst_id not in self.locked_instances]
+        for inst_id in available_instances:
             thread = threading.Thread(
                 target=process_instance_accounts,
                 args=(inst_id,),
@@ -4187,16 +5106,17 @@ class AutomationGUI:
             self.executor = ThreadPoolExecutor(max_workers=instance_count)
             self.pending_futures = []
             
-            # 提交失败账号重试
-            for account, error_msg in failed_accounts:
+            # [2026-03-13] 修复：提交失败账号重试，使用原来的实例ID
+            for account, error_msg, instance_id in failed_accounts:
                 if self.stop_event.is_set():
                     break
                 
-                self.root.after(0, lambda a=account, e=error_msg: self._log(f"重试账号 {a.phone}（上次失败原因: {e}）"))
+                self.root.after(0, lambda a=account, e=error_msg, i=instance_id: 
+                               self._log(f"重试账号 {a.phone}（上次失败原因: {e}，使用实例 {i}）"))
                 future = self.executor.submit(
-                    self._process_account_sync,
+                    self._process_account_sync_with_instance,
                     controller, account, target_app, target_activity,
-                    account_manager,
+                    account_manager, instance_id,
                     0, len(failed_accounts)
                 )
                 self.pending_futures.append(future)
@@ -4329,15 +5249,58 @@ class AutomationGUI:
             )
             return ('success', account, result)
         except Exception as e:
+            # [2026-03-05] 添加完整的堆栈跟踪，方便调试
+            import traceback
+            full_traceback = traceback.format_exc()
             log_callback(f"账号 {account.phone} 处理异常: {e}")
+            log_callback(f"完整错误堆栈:\n{full_traceback}")
             return ('error', account, str(e))
         finally:
             # 释放实例回池中
             self._release_instance(instance_id)
             log_callback(f"释放模拟器实例 {instance_id}")
     
+    def _process_account_sync_with_instance(self, controller, account, target_app, target_activity,
+                                           account_manager, instance_id, account_index, total_accounts):
+        """[2026-03-13] 同步包装方法：使用指定实例处理账号（用于重试）
+        
+        这个方法用于重试失败的账号，直接使用指定的实例ID，不从实例池获取
+        
+        Args:
+            controller: 模拟器控制器
+            account: 账号对象
+            target_app: 目标应用包名
+            target_activity: 目标Activity
+            account_manager: 账号管理器
+            instance_id: 指定的模拟器实例ID
+            account_index: 账号索引
+            total_accounts: 总账号数
+        """
+        # 创建日志回调（线程安全）
+        def log_callback(msg):
+            self.root.after(0, lambda m=msg: self._log(m))
+        
+        log_callback(f"账号 {account.phone} 重试使用模拟器实例 {instance_id}")
+        
+        try:
+            # 在新的事件循环中运行异步处理
+            result = asyncio.run(
+                self._process_account_with_instance(
+                    controller, instance_id, account, target_app, target_activity,
+                    account_manager, log_callback
+                )
+            )
+            return ('success', account, result)
+        except Exception as e:
+            # [2026-03-05] 添加完整的堆栈跟踪，方便调试
+            import traceback
+            full_traceback = traceback.format_exc()
+            log_callback(f"账号 {account.phone} 处理异常: {e}")
+            log_callback(f"完整错误堆栈:\n{full_traceback}")
+            return ('error', account, str(e))
+    
     async def _process_account_with_instance(self, controller, instance_id, account, target_app, target_activity,
-                                            account_manager, log_callback):
+                                            account_manager, log_callback, file_logger=None):
         """使用指定的模拟器实例处理账号
         
         Args:
@@ -4348,9 +5311,26 @@ class AutomationGUI:
             target_activity: 目标Activity
             account_manager: 账号管理器
             log_callback: 日志回调函数（已包含实例前缀）
+            file_logger: 文件日志记录器（可选）
         """
         import time
         start_time = time.time()
+        
+        # [2026-03-10] 修复原因：确保 file_logger 有默认值，避免未定义错误
+        if file_logger is None:
+            import logging
+            file_logger = logging.getLogger(__name__)
+        
+        # [2026-03-17] 修复原因：在处理开始时检查实例是否被锁定
+        if instance_id in self.locked_instances:
+            log_callback("🔒 实例已被锁定，停止处理")
+            from .models.models import AccountResult
+            return AccountResult(
+                phone=account.phone,
+                success=False,
+                error_message="实例已被锁定",
+                duration=0
+            )
         
         # 获取该实例的 ADB 端口
         adb_port = await controller.get_adb_port(instance_id)
@@ -4408,8 +5388,13 @@ class AutomationGUI:
             has_valid_cache = False
             
             if auto_login.enable_cache and auto_login.cache_manager:
+                # [2026-03-17] 调试：检查缓存相关变量
+                log_callback(f"[DEBUG] enable_cache: {auto_login.enable_cache}")
+                log_callback(f"[DEBUG] cache_manager: {auto_login.cache_manager is not None}")
+                
                 # 获取预期的user_id
                 expected_user_id = auto_login.cache_manager._get_expected_user_id(account.phone)
+                log_callback(f"[DEBUG] expected_user_id: {expected_user_id}")
                 
                 # 检查是否有该账号的缓存
                 if auto_login.cache_manager.has_cache(account.phone, expected_user_id):
@@ -4420,10 +5405,15 @@ class AutomationGUI:
                         log_callback("缓存恢复成功")
                         has_valid_cache = True
                     else:
+                        log_callback("缓存恢复失败")
                         await auto_login.cache_manager.clear_app_login_data(device_id, target_app)
                 else:
+                    log_callback(f"[DEBUG] 未找到缓存")
                     await auto_login.cache_manager.clear_app_login_data(device_id, target_app)
             else:
+                log_callback(f"[DEBUG] 缓存功能未启用或缓存管理器不存在")
+                log_callback(f"[DEBUG] enable_cache: {getattr(auto_login, 'enable_cache', 'N/A')}")
+                log_callback(f"[DEBUG] cache_manager: {getattr(auto_login, 'cache_manager', 'N/A') is not None}")
                 if auto_login.cache_manager:
                     await auto_login.cache_manager.clear_app_login_data(device_id, target_app)
             
@@ -4432,6 +5422,11 @@ class AutomationGUI:
             if not success:
                 raise Exception("应用启动失败")
             await asyncio.sleep(1.5)  # 优化：减少等待时间从3秒到1.5秒，让启动流程自动检测
+            
+            # [2026-03-17] 修复原因：在启动应用后检查实例是否被锁定
+            if instance_id in self.locked_instances:
+                log_callback("🔒 实例已被锁定，停止处理")
+                raise Exception("实例已被锁定")
             
             # 处理启动流程（跳过广告、弹窗等）
             # 获取文件日志记录器
@@ -4446,63 +5441,195 @@ class AutomationGUI:
                 max_retries=3,
                 file_logger=file_logger,
                 phone=account.phone,
-                password=account.password
+                password=account.password,
+                cache_restored=has_valid_cache  # [2026-03-14] 传递缓存恢复状态
             )
+            
+            # [2026-03-14] 修复原因：如果启动失败且之前恢复了缓存，说明缓存失效
+            # 需要清理缓存并重新启动应用，然后正常登录
+            if not startup_ok and has_valid_cache:
+                log_callback("⚠️ 缓存失效，清理后重新启动...")
+                
+                # 停止应用
+                await adb.stop_app(device_id, target_app)
+                await asyncio.sleep(0.5)
+                
+                # [2026-03-14] 修复原因：缓存失效时，需要同时清理手机和本地缓存
+                if auto_login.cache_manager:
+                    # 1. 清理手机应用内的登录数据
+                    await auto_login.cache_manager.clear_app_login_data(device_id, target_app)
+                    
+                    # 2. 删除本地PC上的缓存文件（避免下次再恢复失效的缓存）
+                    expected_user_id = auto_login.cache_manager._get_expected_user_id(account.phone)
+                    if auto_login.cache_manager.delete_cache(account.phone, expected_user_id):
+                        log_callback("✓ 已删除本地缓存文件")
+                    else:
+                        log_callback("⚠️ 删除本地缓存文件失败")
+                
+                # 标记缓存失效
+                has_valid_cache = False
+                
+                # 重新启动应用
+                success = await adb.start_app(device_id, target_app, target_activity)
+                if not success:
+                    raise Exception("应用重新启动失败")
+                await asyncio.sleep(1.5)
+                
+                # 重新处理启动流程（这次不传递cache_restored，会正常登录）
+                startup_ok = await ximeng.handle_startup_flow_integrated(
+                    device_id, 
+                    log_callback=log_callback,
+                    stop_check=self._check_stop_or_pause,
+                    package_name=target_app,
+                    activity_name=target_activity,
+                    max_retries=3,
+                    file_logger=file_logger,
+                    phone=account.phone,
+                    password=account.password,
+                    cache_restored=False  # 缓存已清理，不是缓存恢复模式
+                )
             
             if not startup_ok:
                 if self.stop_event.is_set():
                     raise Exception("用户中断操作")
                 raise Exception("启动流程失败")
             
+            # [2026-03-17] 修复原因：在启动流程完成后检查实例是否被锁定
+            if instance_id in self.locked_instances:
+                log_callback("🔒 实例已被锁定，停止处理")
+                raise Exception("实例已被锁定")
+            
             # 如果有缓存，验证用户ID（快速签到模式除外）
             # 快速签到模式下，跳过ID验证，直接进入登录流程
             enable_profile = getattr(self.config, 'workflow_enable_profile', True)
             
+            # [2026-03-05] 添加调试日志
+            log_callback(f"[DEBUG-GUI] has_valid_cache: {has_valid_cache}")
+            log_callback(f"[DEBUG-GUI] enable_profile: {enable_profile}")
+            log_callback(f"[DEBUG-GUI] 是否需要验证用户ID: {has_valid_cache and enable_profile}")
+            
+            # [2026-03-10] 修复原因：避免重复获取资料
+            # 标记是否在缓存验证时已获取资料
+            profile_fetched_in_cache_validation = False
+            cached_profile_info = None  # 存储缓存验证时获取的资料
+            
             if has_valid_cache and enable_profile:
                 # 完整流程模式：需要验证用户ID
-                from .navigator import Navigator
-                from .model_manager import ModelManager
-                from .page_detector import PageState
-                
-                # 从ModelManager获取共享的检测器实例
-                model_manager = ModelManager.get_instance()
-                detector = model_manager.get_page_detector_integrated()
-                
-                navigator = Navigator(adb, detector)
-                
-                # 导航到个人页面
-                nav_success = await navigator.navigate_to_profile(device_id)
-                if nav_success:
-                    # 检测页面状态
-                    profile_templates = ['已登陆个人页.png', '未登陆个人页.png']
-                    page_result = await detector.detect_page_with_priority(
-                        device_id, profile_templates, use_cache=False
-                    )
+                try:
+                    log_callback("[DEBUG-验证] 开始用户ID验证流程...")
+                    from .navigator import Navigator
+                    from .model_manager import ModelManager
+                    from .page_detector import PageState
                     
-                    if page_result and page_result.state == PageState.PROFILE_LOGGED:
-                        # 获取当前用户ID验证
-                        profile_info = await ximeng.profile_reader.get_full_profile_parallel(device_id)
+                    # 从ModelManager获取共享的检测器实例
+                    model_manager = ModelManager.get_instance()
+                    detector = model_manager.get_page_detector_integrated()  # YOLO检测器（用于元素检测）
+                    profile_detector = model_manager.get_profile_detector()  # 专用页面检测器
+                    
+                    # 如果专用检测器未加载，降级使用通用分类器
+                    if not profile_detector:
+                        profile_detector = model_manager.get_general_classifier()
+                        log_callback("[DEBUG-验证] ⚠️ 资料专用检测器未加载，使用通用分类器")
+                    
+                    if not profile_detector:
+                        log_callback("[DEBUG-验证] ❌ 页面检测器均未加载，跳过验证")
+                        has_valid_cache = False
+                    else:
+                        navigator = Navigator(adb, detector)
                         
-                        if profile_info and profile_info.get('user_id'):
-                            current_user_id = profile_info['user_id']
-                            expected_user_id = auto_login.cache_manager._get_expected_user_id(account.phone)
+                        # [2026-03-10] 修复原因：先用专用模型检测当前页面状态
+                        log_callback("[DEBUG-验证] 检测当前页面状态...")
+                        current_page_result = await profile_detector.detect_page(device_id, use_cache=False)
+                        log_callback(f"[DEBUG-验证] 当前页面: {current_page_result.state.value if current_page_result else 'unknown'}")
+                        
+                        # 如果已经在个人页，直接进行用户ID验证
+                        if current_page_result and current_page_result.state == PageState.PROFILE_LOGGED:
+                            log_callback("[DEBUG-验证] ✓ 已在个人页，直接验证用户ID")
+                            nav_success = True
+                        else:
+                            # 导航到个人页面
+                            log_callback("[DEBUG-验证] 导航到个人页面...")
+                            nav_success = await navigator.navigate_to_profile(device_id)
+                            log_callback(f"[DEBUG-验证] 导航操作完成")
                             
-                            if expected_user_id and current_user_id != expected_user_id:
-                                log_callback(f"用户ID不匹配，重新登录")
+                            # 导航后再次检测页面状态
+                            await asyncio.sleep(1.0)  # 等待页面加载
+                            page_result = await profile_detector.detect_page(device_id, use_cache=False)
+                            if page_result and page_result.state == PageState.PROFILE_LOGGED:
+                                nav_success = True
+                                log_callback(f"[DEBUG-验证] ✓ 导航成功，当前页面: {page_result.state.value}")
+                            else:
+                                nav_success = False
+                                log_callback(f"[DEBUG-验证] ❌ 导航失败，当前页面: {page_result.state.value if page_result else 'unknown'}")
+                        
+                        log_callback(f"[DEBUG-验证] 导航结果: {nav_success}")
+                        
+                        if nav_success:
+                            # [2026-03-10] 修复原因：导航成功后直接获取用户ID，无需二次验证页面状态
+                            # 因为导航流程中已经确认了页面状态
+                            log_callback("[DEBUG-验证] 获取用户ID...")
+                            try:
+                                profile_info = await ximeng.profile_reader.get_full_profile_parallel(device_id)
+                                log_callback(f"[DEBUG-验证] 获取到的profile_info: {profile_info}")
+                                # [2026-03-10] 修复原因：标记已在缓存验证时获取资料，并保存数据
+                                profile_fetched_in_cache_validation = True
+                                cached_profile_info = profile_info
+                            except Exception as profile_error:
+                                log_callback(f"[DEBUG-验证] 获取用户ID时出错: {profile_error}")
+                                import traceback
+                                log_callback(f"[DEBUG-验证] 异常堆栈:\n{traceback.format_exc()}")
+                                raise
+                            
+                            if profile_info and profile_info.get('user_id'):
+                                current_user_id = profile_info['user_id']
+                                expected_user_id = auto_login.cache_manager._get_expected_user_id(account.phone)
+                                log_callback(f"[DEBUG-验证] 当前用户ID: {current_user_id}")
+                                log_callback(f"[DEBUG-验证] 预期用户ID: {expected_user_id}")
                                 
-                                # 停止应用并清理
+                                if expected_user_id and current_user_id != expected_user_id:
+                                    log_callback(f"用户ID不匹配，重新登录")
+                                    
+                                    # 停止应用并清理
+                                    await adb.stop_app(device_id, target_app)
+                                    await asyncio.sleep(0.5)  # 优化：减少等待时间
+                                    await auto_login.cache_manager.clear_app_login_data(device_id, target_app)
+                                    
+                                    # 重新启动
+                                    await adb.start_app(device_id, target_app, target_activity)
+                                    await asyncio.sleep(1.5)  # 优化：减少等待时间，让启动流程自动检测
+                                    
+                                    # 清理页面检测缓存
+                                    ximeng.detector.clear_cache()
+                                    
+                                    # 重新处理启动流程
+                                    file_logger = logging.getLogger(__name__)
+                                    startup_ok = await ximeng.handle_startup_flow_integrated(
+                                        device_id, log_callback=log_callback,
+                                        stop_check=self._check_stop_or_pause,
+                                        package_name=target_app, activity_name=target_activity,
+                                        max_retries=3,
+                                        file_logger=file_logger,
+                                        phone=account.phone,
+                                        password=account.password,
+                                        cache_restored=False  # [2026-03-14] 缓存已清理，不是缓存恢复模式
+                                    )
+                                    if not startup_ok:
+                                        raise Exception("重新启动失败")
+                                    
+                                    has_valid_cache = False
+                                else:
+                                    log_callback("OK 用户ID验证通过，缓存有效！")
+                                    # 清理页面检测缓存，因为当前已在个人页
+                                    ximeng.detector.clear_cache()
+                            else:
+                                log_callback("[DEBUG-验证] 无法获取用户ID，清理后重新登录")
+                                # 无法获取用户ID，清理后重新登录
                                 await adb.stop_app(device_id, target_app)
                                 await asyncio.sleep(0.5)  # 优化：减少等待时间
                                 await auto_login.cache_manager.clear_app_login_data(device_id, target_app)
-                                
-                                # 重新启动
                                 await adb.start_app(device_id, target_app, target_activity)
-                                await asyncio.sleep(1.5)  # 优化：减少等待时间，让启动流程自动检测
-                                
-                                # 清理页面检测缓存
+                                await asyncio.sleep(1.5)  # 优化：减少等待时间
                                 ximeng.detector.clear_cache()
-                                
-                                # 重新处理启动流程
                                 file_logger = logging.getLogger(__name__)
                                 startup_ok = await ximeng.handle_startup_flow_integrated(
                                     device_id, log_callback=log_callback,
@@ -4511,41 +5638,21 @@ class AutomationGUI:
                                     max_retries=3,
                                     file_logger=file_logger,
                                     phone=account.phone,
-                                    password=account.password
+                                    password=account.password,
+                                    cache_restored=False  # [2026-03-14] 缓存已清理，不是缓存恢复模式
                                 )
                                 if not startup_ok:
                                     raise Exception("重新启动失败")
-                                
                                 has_valid_cache = False
-                            else:
-                                log_callback("OK 用户ID验证通过，缓存有效！")
-                                # 清理页面检测缓存，因为当前已在个人页
-                                ximeng.detector.clear_cache()
                         else:
-                            # 无法获取用户ID，清理后重新登录
-                            await adb.stop_app(device_id, target_app)
-                            await asyncio.sleep(0.5)  # 优化：减少等待时间
-                            await auto_login.cache_manager.clear_app_login_data(device_id, target_app)
-                            await adb.start_app(device_id, target_app, target_activity)
-                            await asyncio.sleep(1.5)  # 优化：减少等待时间
-                            ximeng.detector.clear_cache()
-                            file_logger = logging.getLogger(__name__)
-                            startup_ok = await ximeng.handle_startup_flow_integrated(
-                                device_id, log_callback=log_callback,
-                                stop_check=self._check_stop_or_pause,
-                                package_name=target_app, activity_name=target_activity,
-                                max_retries=3,
-                                file_logger=file_logger,
-                                phone=account.phone,
-                                password=account.password
-                            )
-                            if not startup_ok:
-                                raise Exception("重新启动失败")
+                            log_callback("[DEBUG-验证] 页面状态不是PROFILE_LOGGED，设置has_valid_cache=False")
                             has_valid_cache = False
-                    else:
-                        has_valid_cache = False
-                        ximeng.detector.clear_cache()
-                else:
+                            ximeng.detector.clear_cache()
+                except Exception as verify_error:
+                    log_callback(f"[DEBUG-验证] 用户ID验证流程出错: {verify_error}")
+                    import traceback
+                    log_callback(f"[DEBUG-验证] 异常堆栈:\n{traceback.format_exc()}")
+                    # 验证失败，设置has_valid_cache=False，继续正常登录流程
                     has_valid_cache = False
                     ximeng.detector.clear_cache()
             elif has_valid_cache and not enable_profile:
@@ -4562,6 +5669,17 @@ class AutomationGUI:
                 'enable_checkin': getattr(self.config, 'workflow_enable_checkin', True),
                 'enable_transfer': getattr(self.config, 'workflow_enable_transfer', True),
             }
+            
+            # [2026-03-10] 修复原因：如果在缓存验证时已获取资料，传递给workflow
+            if profile_fetched_in_cache_validation and cached_profile_info:
+                log_callback("[优化] 缓存验证时已获取资料，传递给workflow")
+                # 将缓存验证时获取的资料数据传递给workflow
+                # 通过在ximeng对象上设置临时属性来传递数据
+                ximeng._cached_profile_info = cached_profile_info
+                log_callback(f"[DEBUG] 传递缓存资料给workflow: {cached_profile_info}")
+            else:
+                # 清除可能存在的旧数据
+                ximeng._cached_profile_info = None
             
             # [2026-02-22] 删除调试日志
             
@@ -4594,6 +5712,9 @@ class AutomationGUI:
                 self.root.after(0, lambda: self._update_pending_count())
                 log_callback(f"✓ 账号 {account.phone} 处理完成 (耗时: {round(duration, 3)}秒)")
                 log_callback("")  # 空行分隔
+                
+                # [2026-03-21] 新增：账号处理成功后显示并自动滚动
+                self.root.after(0, lambda p=account.phone: self._show_and_scroll_to_account(p))
                 
                 # 清除该账号的警告日志（重试成功后）
                 self.root.after(0, lambda p=account.phone: self._clear_account_warnings(p))
@@ -4645,7 +5766,8 @@ class AutomationGUI:
             # P1修复: 确保ADB连接被关闭，避免资源泄漏
             try:
                 await adb.disconnect(device_id)
-                # 只记录到文件日志，不显示在GUI
+                # [2026-03-10] 修复原因：确保logging模块在局部作用域可用
+                import logging
                 file_logger = logging.getLogger(__name__)
                 file_logger.info("ADB连接已关闭")
             except Exception as e:
@@ -4889,8 +6011,47 @@ class AutomationGUI:
             self._log("⚠️ 任务正在运行中，跳过本次定时运行")
             return
         
-        # 触发开始运行
+        # [2026-03-18] 修改原因：定时运行时自动切换到快速签到模式并取消所有勾选
+        self._log("🔄 定时运行：自动切换到快速签到模式")
+        
+        # 1. 切换到快速签到模式
+        original_workflow_mode = getattr(self.config, 'workflow_mode', 'complete')
+        original_enable_profile = getattr(self.config, 'workflow_enable_profile', True)
+        
+        # 设置为快速签到模式
+        self.config.workflow_mode = 'quick_checkin'
+        self.config.workflow_enable_profile = False  # 快速签到模式：跳过签到前的资料获取
+        
+        self._log("✓ 已切换到快速签到模式")
+        
+        # 2. 取消所有账号的勾选状态
+        self._log("🔄 定时运行：取消所有账号勾选，执行全部账号")
+        
+        # 获取所有显示的账号项目
+        all_items = self.results_tree.get_children()
+        unchecked_count = 0
+        
+        for item in all_items:
+            # 取消勾选
+            self.checked_items[item] = False
+            self.results_tree.item(item, text=self.checkbox_unchecked_text)
+            unchecked_count += 1
+        
+        if unchecked_count > 0:
+            self._log(f"✓ 已取消勾选 {unchecked_count} 个账号，将执行全部账号")
+            # 保存勾选状态到文件
+            self._save_selections_to_file()
+            # 更新待处理数量显示
+            self._update_pending_count()
+        else:
+            self._log("ℹ️ 当前没有账号需要取消勾选")
+        
+        # 3. 触发开始运行
+        self._log("🚀 开始执行定时任务...")
         self._start_automation()
+        
+        # 注意：不在这里恢复原配置，让用户手动切换回去
+        # 这样用户可以看到定时运行使用的是快速签到模式
     
     def _toggle_auto_transfer(self):
         """切换自动转账开关（保留用于兼容）"""
@@ -4941,9 +6102,19 @@ class AutomationGUI:
             self._user_management_window.dialog.focus_force()
             return
         
+        # [2026-03-20] 修复原因：添加回调函数，当用户管理界面修改账号后自动刷新主界面
         # 创建新窗口
         from .user_management_gui import UserManagementDialog
-        self._user_management_window = UserManagementDialog(self.root, self._log)
+        self._user_management_window = UserManagementDialog(
+            self.root, 
+            self._log,
+            on_accounts_changed=self._refresh_accounts_display  # 账号变更时刷新主界面
+        )
+    
+    def _refresh_accounts_display(self):
+        """刷新主界面的账号显示（用户管理界面修改账号后调用）"""
+        # [2026-03-20] 修复原因：用户管理界面添加/删除账号后自动刷新主界面
+        self._auto_load_accounts()
     
     def _auto_check_new_models(self):
         """自动检查并注册新模型和新页面类型（启动时调用）"""
@@ -5079,7 +6250,10 @@ class AutomationGUI:
             traceback.print_exc()
     
     def _open_window_arranger(self):
-        """打开窗口排列对话框"""
+        """打开窗口排列对话框
+        
+        [2026-03-24] 修改：传入GUI实例以支持锁定功能
+        """
         # 检查窗口是否已打开
         if hasattr(self, '_window_arranger_dialog') and self._window_arranger_dialog and hasattr(self._window_arranger_dialog, 'dialog') and self._window_arranger_dialog.dialog.winfo_exists():
             # 窗口已存在，激活它
@@ -5087,8 +6261,23 @@ class AutomationGUI:
             self._window_arranger_dialog.dialog.focus_force()
             return
         
+        # 创建新窗口（传入GUI实例）
+        self._window_arranger_dialog = WindowArrangerDialog(self.root, self._log, gui_instance=self)
+    
+    def _open_account_validator(self):
+        """打开自动验号对话框
+        
+        [2026-03-10] 新增：自动验号功能
+        """
+        # 检查窗口是否已打开
+        if hasattr(self, '_account_validator_dialog') and self._account_validator_dialog and hasattr(self._account_validator_dialog, 'dialog') and self._account_validator_dialog.dialog.winfo_exists():
+            # 窗口已存在，激活它
+            self._account_validator_dialog.dialog.lift()
+            self._account_validator_dialog.dialog.focus_force()
+            return
+        
         # 创建新窗口
-        self._window_arranger_dialog = WindowArrangerDialog(self.root, self._log)
+        self._account_validator_dialog = AccountValidatorDialog(self.root, self, self._log)
     
     def _on_automation_complete(self):
         """自动化完成回调"""
@@ -5097,6 +6286,13 @@ class AutomationGUI:
         self.start_btn.config(state=tk.NORMAL)
         self.pause_btn.config(state=tk.DISABLED, text="⏸ 暂停")
         self.stop_btn.config(state=tk.DISABLED)
+        
+        # [2026-03-24] 修复原因：清空锁定集合，允许下次运行
+        # [2026-03-24] 修改：只清空临时锁定，保留用户手动锁定的实例
+        self.locked_accounts.clear()
+        # 只清空非用户手动锁定的实例
+        self.locked_instances = self.user_locked_instances.copy()
+        self.account_instance_mapping.clear()
         
         # 先更新统计（从表格重新统计，确保数据准确）
         self._update_stats_from_table()
@@ -5215,7 +6411,6 @@ class AutomationGUI:
                 
                 # 清空变量
                 self.checked_items.clear()
-                self.selection_history.clear()
                 self.all_logs.clear()
                 self.instance_pool.clear()
                 
@@ -5439,6 +6634,19 @@ class TransferConfigWindow:
         ttk.Entry(threshold_frame, textvariable=self.min_transfer_amount_var, width=10).pack(side=tk.LEFT, padx=(5, 5))
         ttk.Label(threshold_frame, text="元 (余额达到此金额才开始转账)").pack(side=tk.LEFT)
         ttk.Button(threshold_frame, text="保存", command=self._save_threshold).pack(side=tk.LEFT, padx=(10, 0))
+        
+        # [2026-03-24] 新增：签到次数条件
+        checkin_days_frame = ttk.Frame(config_frame)
+        checkin_days_frame.pack(fill=tk.X, pady=(0, 5))
+        
+        self.min_checkin_days_enabled_var = tk.BooleanVar(value=getattr(self.transfer_config, 'min_checkin_days_enabled', False))
+        ttk.Checkbutton(checkin_days_frame, text="签到次数:", variable=self.min_checkin_days_enabled_var,
+                       command=self._on_checkin_days_enabled_changed).pack(side=tk.LEFT)
+        
+        self.min_checkin_days_var = tk.IntVar(value=getattr(self.transfer_config, 'min_checkin_days', 7))
+        ttk.Entry(checkin_days_frame, textvariable=self.min_checkin_days_var, width=10).pack(side=tk.LEFT, padx=(5, 5))
+        ttk.Label(checkin_days_frame, text="次 (签到次数大于此值才转账)").pack(side=tk.LEFT)
+        ttk.Button(checkin_days_frame, text="保存", command=self._save_checkin_days).pack(side=tk.LEFT, padx=(10, 0))
         
         # 最小保留余额
         balance_frame = ttk.Frame(config_frame)
@@ -5956,6 +7164,29 @@ class TransferConfigWindow:
             self.transfer_config.save()
             self.log(f"起步金额已设置为: {min_transfer_amount:.2f} 元")
             messagebox.showinfo("成功", f"起步金额已设置为: {min_transfer_amount:.2f} 元")
+        except Exception as e:
+            messagebox.showerror("错误", f"保存失败: {e}")
+    
+    def _on_checkin_days_enabled_changed(self):
+        """[2026-03-24] 新增：签到次数条件开关改变时的回调"""
+        try:
+            enabled = self.min_checkin_days_enabled_var.get()
+            self.transfer_config.min_checkin_days_enabled = enabled
+            self.transfer_config.save()
+            status = "已启用" if enabled else "已禁用"
+            self.log(f"签到次数条件{status}")
+        except Exception as e:
+            self.log(f"保存签到次数条件开关失败: {e}")
+    
+    def _save_checkin_days(self):
+        """[2026-03-24] 新增：保存签到次数"""
+        try:
+            min_checkin_days = self.min_checkin_days_var.get()
+            # 保存到配置中
+            self.transfer_config.min_checkin_days = min_checkin_days
+            self.transfer_config.save()
+            self.log(f"签到次数已设置为: {min_checkin_days} 次")
+            messagebox.showinfo("成功", f"签到次数已设置为: {min_checkin_days} 次")
         except Exception as e:
             messagebox.showerror("错误", f"保存失败: {e}")
     
@@ -7513,20 +8744,22 @@ class HistoryResultsWindow:
 class WindowArrangerDialog:
     """窗口排列对话框"""
     
-    def __init__(self, parent, log_callback=None):
+    def __init__(self, parent, log_callback=None, gui_instance=None):
         """初始化对话框
         
         Args:
             parent: 父窗口
             log_callback: 日志回调函数
+            gui_instance: AutomationGUI实例（用于访问锁定状态）
         """
         self.parent = parent
         self.log_callback = log_callback
+        self.gui_instance = gui_instance  # [2026-03-24] 新增：保存GUI实例引用
         
         # 创建对话框窗口
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("窗口自动排列")
-        self.dialog.geometry("500x600")
+        self.dialog.geometry("500x700")  # [2026-03-24] 修改：增加高度以容纳实例锁定区域
         self.dialog.resizable(False, False)
         
         # 居中显示
@@ -7576,7 +8809,10 @@ class WindowArrangerDialog:
         self.dialog.geometry(f'{width}x{height}+{x}+{y}')
     
     def _create_widgets(self):
-        """创建界面组件"""
+        """创建界面组件
+        
+        [2026-03-24] 新增：添加实例锁定区域
+        """
         main_frame = ttk.Frame(self.dialog, padding="10")
         main_frame.pack(fill=tk.BOTH, expand=True)
         
@@ -7602,6 +8838,57 @@ class WindowArrangerDialog:
         
         # 刷新按钮
         ttk.Button(info_frame, text="🔄 刷新", command=self._refresh_windows, width=10).pack(pady=(5, 0))
+        
+        # === [2026-03-24] 新增：实例锁定区域 ===
+        if self.gui_instance:
+            lock_frame = ttk.LabelFrame(main_frame, text="实例锁定（锁定的实例不会被脚本使用）", padding="5")
+            lock_frame.pack(fill=tk.X, pady=(0, 10))
+            
+            # [2026-03-24] 新增：获取窗口信息，显示实际窗口标题
+            windows = self.arranger.find_emulator_windows()
+            window_titles = {}
+            for hwnd in windows:
+                info = self.arranger.get_window_info(hwnd)
+                if info and 'title' in info:
+                    # 从标题中提取实例编号（例如："MuMu模拟器12-0" -> 实例0）
+                    title = info['title']
+                    if '-' in title:
+                        try:
+                            instance_id = int(title.split('-')[-1])
+                            window_titles[instance_id] = title
+                        except:
+                            pass
+            
+            # 创建实例锁定按钮容器（纵向排列，每行显示完整信息）
+            buttons_container = ttk.Frame(lock_frame)
+            buttons_container.pack(fill=tk.BOTH, expand=True, pady=5)
+            
+            # 保存锁定按钮引用
+            self.lock_buttons = {}
+            
+            # [2026-03-24] 修复：为实例0-4创建锁定按钮（共5个实例）
+            for instance_id in range(5):
+                row_frame = ttk.Frame(buttons_container)
+                row_frame.pack(fill=tk.X, pady=2)
+                
+                # 检查当前锁定状态
+                is_locked = instance_id in self.gui_instance.user_locked_instances
+                btn_text = "🔒 解锁" if is_locked else "🔓 锁定"
+                
+                # 锁定按钮（左侧）
+                lock_btn = ttk.Button(
+                    row_frame, 
+                    text=btn_text, 
+                    width=8,
+                    command=lambda i=instance_id: self._toggle_instance_lock(i)
+                )
+                lock_btn.pack(side=tk.LEFT, padx=(0, 10))
+                
+                # 窗口标题（右侧）
+                window_title = window_titles.get(instance_id, f"实例{instance_id} (未检测到窗口)")
+                ttk.Label(row_frame, text=window_title, font=("Microsoft YaHei UI", 9)).pack(side=tk.LEFT)
+                
+                self.lock_buttons[instance_id] = lock_btn
         
         # === 快速排列区域 ===
         preset_frame = ttk.LabelFrame(main_frame, text="快速排列", padding="5")
@@ -7735,6 +9022,32 @@ class WindowArrangerDialog:
             if self.log_callback:
                 self.log_callback(f"❌ {error_msg}")
             messagebox.showerror("错误", error_msg, parent=self.dialog)
+    
+    def _toggle_instance_lock(self, instance_id):
+        """切换实例锁定状态
+        
+        [2026-03-24] 新增：在窗口排列对话框中切换实例锁定
+        
+        Args:
+            instance_id: 实例编号
+        """
+        if not self.gui_instance:
+            return
+        
+        if instance_id in self.gui_instance.user_locked_instances:
+            # 解锁
+            self.gui_instance.user_locked_instances.discard(instance_id)
+            self.gui_instance.locked_instances.discard(instance_id)
+            self.lock_buttons[instance_id].config(text="🔓 锁定")
+            if self.log_callback:
+                self.log_callback(f"实例 {instance_id} 已解锁")
+        else:
+            # 锁定
+            self.gui_instance.user_locked_instances.add(instance_id)
+            self.gui_instance.locked_instances.add(instance_id)
+            self.lock_buttons[instance_id].config(text="🔒 解锁")
+            if self.log_callback:
+                self.log_callback(f"实例 {instance_id} 已锁定")
 
 
 class WorkflowControlWindow:
@@ -8003,6 +9316,1178 @@ class WorkflowControlWindow:
     def focus_force(self):
         """强制获取焦点"""
         self.window.focus_force()
+
+
+class AccountValidatorDialog:
+    """自动验号对话框
+    
+    [2026-03-10] 新增：自动验号功能，包括实例管理、账号导入、转账功能
+    """
+    
+    def __init__(self, parent, parent_gui, log_callback=None):
+        """初始化自动验号对话框
+        
+        Args:
+            parent: 父窗口
+            parent_gui: 主GUI实例
+            log_callback: 日志回调函数（已废弃，现在使用内部日志框）
+        """
+        self.parent = parent
+        self.parent_gui = parent_gui
+        # [2026-03-10] 修改：不再使用外部log_callback，使用内部日志框
+        # self.log_callback = log_callback
+        
+        # 创建对话框窗口
+        self.dialog = tk.Toplevel(parent)
+        self.dialog.title("自动验号")
+        self.dialog.geometry("1100x850")  # [2026-03-10] 修改：增加高度从700到850
+        
+        # 锁定实例列表
+        self.locked_instances = set()
+        
+        # 勾选状态字典
+        self.checked_accounts = {}
+        
+        # [2026-03-10] 新增：记录当前加载的账号类型（'pending' 或 'unused'）
+        self.current_account_type = None
+        
+        # [2026-03-10] 新增：错误详情字典 {phone: error_message}
+        self.error_details = {}
+        
+        # 创建勾选框图标
+        self._create_checkbox_images()
+        
+        # 创建界面
+        self._create_widgets()
+        
+        # [2026-03-10] 新增：创建内部日志回调函数
+        self.log_callback = self._log_to_text
+        
+        # 加载实例列表
+        self._load_instances()
+        
+        # [2026-03-10] 新增：初始化时加载管理员统计信息
+        self._load_owner_statistics()
+    
+    def _create_checkbox_images(self):
+        """创建勾选框图标"""
+        # 创建未勾选图标
+        self.unchecked_image = tk.PhotoImage(width=16, height=16)
+        self.unchecked_image.put(("white",), to=(0, 0, 16, 16))
+        for i in range(16):
+            self.unchecked_image.put("gray", to=(i, 0))
+            self.unchecked_image.put("gray", to=(i, 15))
+            self.unchecked_image.put("gray", to=(0, i))
+            self.unchecked_image.put("gray", to=(15, i))
+        
+        # 创建已勾选图标
+        self.checked_image = tk.PhotoImage(width=16, height=16)
+        self.checked_image.put(("white",), to=(0, 0, 16, 16))
+        for i in range(16):
+            self.checked_image.put("gray", to=(i, 0))
+            self.checked_image.put("gray", to=(i, 15))
+            self.checked_image.put("gray", to=(0, i))
+            self.checked_image.put("gray", to=(15, i))
+        # 绘制勾选标记
+        for i in range(5, 11):
+            self.checked_image.put("blue", to=(i, i))
+            self.checked_image.put("blue", to=(i, 15-i))
+    
+    def _log_to_text(self, message: str):
+        """将日志输出到日志文本框
+        
+        [2026-03-10] 新增：内部日志回调函数
+        
+        Args:
+            message: 日志消息
+        """
+        def append_log():
+            self.log_text.configure(state=tk.NORMAL)
+            self.log_text.insert(tk.END, message + "\n")
+            self.log_text.see(tk.END)  # 自动滚动到底部
+            self.log_text.configure(state=tk.DISABLED)
+        
+        # 确保在主线程中执行
+        if self.dialog.winfo_exists():
+            self.dialog.after(0, append_log)
+    
+    def _create_widgets(self):
+        """创建界面组件
+        
+        [2026-03-10] 新增：创建实例管理、账号表格、导入按钮、转账按钮
+        """
+        # 使用PanedWindow创建左右分栏
+        paned = ttk.PanedWindow(self.dialog, orient=tk.HORIZONTAL)
+        paned.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # 左侧：模拟器实例列表
+        left_frame = ttk.LabelFrame(paned, text="模拟器实例", padding=10)
+        paned.add(left_frame, weight=1)
+        
+        # [2026-03-10] 修改：添加滚动条，让实例列表可以滚动
+        # [2026-03-10] 修改：设置Canvas固定宽度为280像素（刚好容纳2个卡片）
+        # 创建Canvas和Scrollbar
+        canvas = tk.Canvas(left_frame, highlightthickness=0, width=280)
+        scrollbar = ttk.Scrollbar(left_frame, orient=tk.VERTICAL, command=canvas.yview)
+        
+        # 实例列表容器（放在Canvas中）
+        self.instances_frame = ttk.Frame(canvas)
+        
+        # 配置Canvas
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side=tk.LEFT, fill=tk.Y, expand=False)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # 将instances_frame放入Canvas
+        canvas_frame = canvas.create_window((0, 0), window=self.instances_frame, anchor=tk.NW)
+        
+        # 绑定配置事件，更新滚动区域
+        def on_frame_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        
+        self.instances_frame.bind("<Configure>", on_frame_configure)
+        
+        # 绑定Canvas大小变化事件，调整frame宽度
+        def on_canvas_configure(event):
+            canvas.itemconfig(canvas_frame, width=280)
+        
+        canvas.bind("<Configure>", on_canvas_configure)
+        
+        # 右侧：待处理账号表格
+        right_frame = ttk.LabelFrame(paned, text="待处理账号", padding=10)
+        paned.add(right_frame, weight=5)
+        
+        # 顶部按钮区域
+        button_frame = ttk.Frame(right_frame)
+        button_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Button(button_frame, text="📥 导入待处理", command=self._import_pending, width=12).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(button_frame, text="📥 导入未使用", command=self._import_unused, width=12).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(button_frame, text="🔄 刷新", command=self._refresh_all, width=8).pack(side=tk.LEFT, padx=(0, 5))
+        
+        # [2026-03-10] 新增：统计信息标签
+        self.account_stats_var = tk.StringVar(value="总计: 0 | 勾选: 0 | 未勾选: 0")
+        ttk.Label(button_frame, textvariable=self.account_stats_var, foreground="blue").pack(side=tk.LEFT, padx=(10, 0))
+        
+        # 管理员筛选下拉框（单独一行）
+        owner_frame = ttk.Frame(right_frame)
+        owner_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        ttk.Label(owner_frame, text="管理员筛选:", width=12).pack(side=tk.LEFT)
+        self.owner_var = tk.StringVar(value="全部")
+        self.owner_combo = ttk.Combobox(owner_frame, textvariable=self.owner_var, state='readonly', width=50)
+        self.owner_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.owner_combo['values'] = ['全部']
+        
+        # 账号表格（带勾选框）
+        # [2026-03-10] 新增：添加状态和推荐人列
+        # [2026-03-10] 修改：减少表格高度从20到15，为日志框留出空间
+        columns = ("phone", "nickname", "user_id", "status", "referrer", "owner")
+        self.accounts_tree = ttk.Treeview(right_frame, columns=columns, show="tree headings", height=15)
+        
+        # 配置勾选框列
+        self.accounts_tree.heading("#0", text="", anchor=tk.CENTER)
+        self.accounts_tree.column("#0", width=40, anchor=tk.CENTER, stretch=False, minwidth=40)
+        
+        # 配置数据列（标题和数据都居中）
+        self.accounts_tree.heading("phone", text="手机号", anchor=tk.CENTER)
+        self.accounts_tree.heading("nickname", text="昵称", anchor=tk.CENTER)
+        self.accounts_tree.heading("user_id", text="用户ID", anchor=tk.CENTER)
+        self.accounts_tree.heading("status", text="状态", anchor=tk.CENTER)
+        self.accounts_tree.heading("referrer", text="推荐人", anchor=tk.CENTER)
+        self.accounts_tree.heading("owner", text="管理员", anchor=tk.CENTER)
+        
+        self.accounts_tree.column("phone", width=110, anchor=tk.CENTER)
+        self.accounts_tree.column("nickname", width=90, anchor=tk.CENTER)
+        self.accounts_tree.column("user_id", width=90, anchor=tk.CENTER)
+        self.accounts_tree.column("status", width=80, anchor=tk.CENTER)
+        self.accounts_tree.column("referrer", width=90, anchor=tk.CENTER)
+        self.accounts_tree.column("owner", width=90, anchor=tk.CENTER)
+        
+        # [2026-03-10] 新增：配置状态列的颜色标签
+        self.accounts_tree.tag_configure("success", foreground="green")
+        self.accounts_tree.tag_configure("failed", foreground="red")
+        self.accounts_tree.tag_configure("pending", foreground="gray")
+        
+        # 添加滚动条
+        scrollbar = ttk.Scrollbar(right_frame, orient=tk.VERTICAL, command=self.accounts_tree.yview)
+        self.accounts_tree.configure(yscrollcommand=scrollbar.set)
+        
+        self.accounts_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # 绑定点击事件
+        self.accounts_tree.bind("<Button-1>", self._on_account_click)
+        
+        # [2026-03-10] 新增：绑定鼠标悬停事件，显示错误详情
+        self.accounts_tree.bind("<Motion>", self._on_tree_hover)
+        
+        # [2026-03-10] 新增：创建提示标签（用于显示错误详情）
+        self.tooltip = None
+        self.accounts_tree.bind("<Button-1>", self._on_account_click)
+        
+        # [2026-03-10] 新增：日志显示区域
+        log_frame = ttk.LabelFrame(self.dialog, text="运行日志", padding=5)
+        log_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        
+        # 创建日志文本框（带滚动条）
+        # [2026-03-10] 修改：减少日志框高度从8到6，避免窗口过高
+        self.log_text = scrolledtext.ScrolledText(log_frame, height=6, state=tk.DISABLED, wrap=tk.WORD)
+        self.log_text.pack(fill=tk.BOTH, expand=True)
+        
+        # 添加右键复制功能
+        self.parent_gui._create_text_context_menu(self.log_text)
+        
+        # [2026-03-10] 修复：底部按钮区域 - 开始转账（左）、开始运行（右），中间有间距
+        bottom_frame = ttk.Frame(self.dialog)
+        bottom_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+        
+        # 左侧：开始转账按钮
+        ttk.Button(bottom_frame, text="💰 开始转账", command=self._start_transfer, width=12).pack(side=tk.LEFT, padx=(0, 5))
+        
+        # 状态栏（中间）
+        self.status_var = tk.StringVar(value="就绪")
+        ttk.Label(bottom_frame, textvariable=self.status_var, foreground="blue").pack(side=tk.LEFT, padx=(20, 0))
+        
+        # 右侧：关闭按钮
+        ttk.Button(bottom_frame, text="关闭", command=self.dialog.destroy, width=8).pack(side=tk.RIGHT)
+        
+        # 右侧：开始运行按钮（在关闭按钮左边）
+        ttk.Button(bottom_frame, text="▶ 开始运行", command=self._start_login_only, width=12).pack(side=tk.RIGHT, padx=(0, 10))
+    
+    def _load_instances(self):
+        """加载模拟器实例列表
+        
+        [2026-03-10] 新增：检测运行中的模拟器实例并显示
+        [2026-03-10] 修改：重置卡片计数器
+        """
+        import asyncio
+        
+        async def load_async():
+            from .emulator_controller import EmulatorController
+            emulator_path = self.parent_gui.emulator_path_var.get()
+            controller = EmulatorController(emulator_path)
+            
+            if not controller.is_available():
+                return []
+            
+            return await controller.get_running_instances()
+        
+        try:
+            instances = asyncio.run(load_async())
+            
+            # [2026-03-10] 重置卡片计数器
+            self._card_count = 0
+            
+            # 清空现有实例
+            for widget in self.instances_frame.winfo_children():
+                widget.destroy()
+            
+            if not instances:
+                ttk.Label(self.instances_frame, text="未检测到运行中的实例", foreground="gray").pack(pady=20)
+                return
+            
+            # 为每个实例创建卡片
+            for instance_id in instances:
+                self._create_instance_card(instance_id)
+        
+        except Exception as e:
+            if self.log_callback:
+                self.log_callback(f"加载实例失败: {e}")
+    
+    def _create_instance_card(self, instance_id):
+        """创建实例卡片
+        
+        Args:
+            instance_id: 实例编号
+        
+        [2026-03-10] 新增：添加转账金额输入框
+        [2026-03-10] 修改：横向一排2个，金额单位放在同一行，增加高度
+        [2026-03-10] 修改：按添加顺序自动填充，不按实例ID计算位置
+        """
+        # [2026-03-10] 修改：按添加顺序自动填充，横向一排2个
+        # 记录已添加的卡片数量
+        if not hasattr(self, '_card_count'):
+            self._card_count = 0
+        
+        row = self._card_count // 2
+        col = self._card_count % 2
+        self._card_count += 1
+        
+        # 正方形卡片（增加高度）
+        card = ttk.Frame(self.instances_frame, relief=tk.RAISED, borderwidth=2)
+        card.grid(row=row, column=col, padx=5, pady=5, sticky=tk.NSEW)
+        
+        # 内容容器（垂直布局，增加高度）
+        content_frame = ttk.Frame(card, width=110, height=130)
+        content_frame.pack(padx=8, pady=8)
+        content_frame.pack_propagate(False)  # 固定大小
+        
+        # 实例标题
+        ttk.Label(content_frame, text=f"实例 {instance_id}", 
+                 font=("Microsoft YaHei UI", 10, "bold")).pack(pady=(0, 10))
+        
+        # [2026-03-10] 转账金额输入框（金额和单位在同一行）
+        ttk.Label(content_frame, text="转账金额:", font=("Microsoft YaHei UI", 9)).pack()
+        
+        amount_input_frame = ttk.Frame(content_frame)
+        amount_input_frame.pack(pady=(5, 12))
+        
+        # 创建金额输入框变量
+        if not hasattr(self, 'transfer_amount_vars'):
+            self.transfer_amount_vars = {}
+        
+        amount_var = tk.StringVar(value="")
+        self.transfer_amount_vars[instance_id] = amount_var
+        
+        amount_entry = ttk.Entry(amount_input_frame, textvariable=amount_var, width=6, justify='center')
+        amount_entry.pack(side=tk.LEFT)
+        
+        ttk.Label(amount_input_frame, text=" 元", font=("Microsoft YaHei UI", 9)).pack(side=tk.LEFT)
+        
+        # 锁定按钮（底部居中）
+        lock_btn = ttk.Button(content_frame, text="🔓 锁定", width=8, 
+                              command=lambda i=instance_id: self._toggle_lock(i))
+        lock_btn.pack(side=tk.BOTTOM, pady=(8, 0))
+        
+        # 保存按钮引用
+        if not hasattr(self, 'lock_buttons'):
+            self.lock_buttons = {}
+        self.lock_buttons[instance_id] = lock_btn
+    
+    def _toggle_lock(self, instance_id):
+        """切换实例锁定状态
+        
+        Args:
+            instance_id: 实例编号
+        """
+        if instance_id in self.locked_instances:
+            self.locked_instances.remove(instance_id)
+            # [2026-03-24] 修改：同时从用户手动锁定集合中移除
+            self.user_locked_instances.discard(instance_id)
+            self.lock_buttons[instance_id].config(text="🔓 锁定")
+            if self.log_callback:
+                self.log_callback(f"实例 {instance_id} 已解锁")
+        else:
+            self.locked_instances.add(instance_id)
+            # [2026-03-24] 修改：同时添加到用户手动锁定集合
+            self.user_locked_instances.add(instance_id)
+            self.lock_buttons[instance_id].config(text="🔒 解锁")
+            if self.log_callback:
+                self.log_callback(f"实例 {instance_id} 已锁定")
+    
+    def get_locked_instances(self):
+        """获取锁定的实例列表
+        
+        Returns:
+            list: 锁定的实例编号列表
+        """
+        return list(self.locked_instances)
+    
+    def _on_account_click(self, event):
+        """处理账号表格点击事件
+        
+        [2026-03-10] 新增：点击勾选框切换勾选状态
+        [2026-03-10] 新增：切换后更新统计信息
+        [2026-03-10] 修复：取消勾选时显示未勾选图标，而不是空白
+        """
+        region = self.accounts_tree.identify_region(event.x, event.y)
+        if region == "tree":
+            item = self.accounts_tree.identify_row(event.y)
+            if item:
+                # 切换勾选状态
+                if item in self.checked_accounts:
+                    del self.checked_accounts[item]
+                    # [2026-03-10] 修复：取消勾选时显示未勾选图标，而不是空白
+                    self.accounts_tree.item(item, image=self.unchecked_image)
+                else:
+                    self.checked_accounts[item] = True
+                    self.accounts_tree.item(item, image=self.checked_image)
+                
+                # 更新统计信息
+                self._update_account_stats()
+    
+    def _on_tree_hover(self, event):
+        """处理鼠标悬停事件，显示错误详情
+        
+        [2026-03-10] 新增：鼠标悬停在失败状态上时显示错误详情
+        """
+        # 销毁之前的提示
+        if self.tooltip:
+            self.tooltip.destroy()
+            self.tooltip = None
+        
+        # 获取鼠标位置的行和列
+        item = self.accounts_tree.identify_row(event.y)
+        column = self.accounts_tree.identify_column(event.x)
+        
+        # 只在状态列显示提示
+        if item and column == "#4":  # #4是status列
+            values = self.accounts_tree.item(item, 'values')
+            if values and len(values) >= 4:
+                phone = values[0]
+                status = values[3]
+                
+                # 只在失败状态时显示错误详情
+                if status == "失败" and phone in self.error_details:
+                    error_msg = self.error_details[phone]
+                    
+                    # 创建提示窗口
+                    self.tooltip = tk.Toplevel(self.dialog)
+                    self.tooltip.wm_overrideredirect(True)
+                    self.tooltip.wm_geometry(f"+{event.x_root+10}+{event.y_root+10}")
+                    
+                    label = tk.Label(self.tooltip, text=f"错误详情:\n{error_msg}", 
+                                   background="lightyellow", relief=tk.SOLID, borderwidth=1,
+                                   font=("Microsoft YaHei UI", 9), padx=5, pady=5)
+                    label.pack()
+    
+    def _update_account_stats(self):
+        """更新账号统计信息
+        
+        [2026-03-10] 新增：计算并更新总计、勾选、未勾选的账号数量
+        """
+        # 获取所有账号
+        all_items = self.accounts_tree.get_children()
+        total_count = len(all_items)
+        
+        # 计算勾选和未勾选数量
+        checked_count = len(self.checked_accounts)
+        unchecked_count = total_count - checked_count
+        
+        # 更新统计标签
+        self.account_stats_var.set(f"总计: {total_count} | 勾选: {checked_count} | 未勾选: {unchecked_count}")
+    
+    def _refresh_all(self):
+        """刷新所有内容
+        
+        [2026-03-10] 新增：同时刷新模拟器实例和账号列表
+        [2026-03-10] 修复：根据当前账号类型重新加载账号
+        """
+        # 刷新模拟器实例
+        self._load_instances()
+        
+        # 根据当前账号类型重新加载账号
+        if self.current_account_type == 'unused':
+            self._import_unused()
+        elif self.current_account_type == 'pending':
+            self._load_pending_accounts()
+        else:
+            # 如果没有加载过账号，默认加载待处理账号
+            self._load_pending_accounts()
+        
+        if self.log_callback:
+            self.log_callback("已刷新模拟器实例和账号列表")
+    
+    def _load_pending_accounts(self):
+        """加载待处理账号
+        
+        [2026-03-10] 新增：从数据库加载状态为空或"待处理"的账号
+        [2026-03-10] 新增：加载后更新统计信息
+        [2026-03-10] 新增：显示status字段，referrer暂时显示为"-"
+        """
+        try:
+            from .local_db import LocalDatabase
+            db = LocalDatabase()
+            
+            # 查询状态为空或"待处理"的账号
+            results = db.query_accounts_by_status(['', '待处理'])
+            
+            # 清空表格
+            for item in self.accounts_tree.get_children():
+                self.accounts_tree.delete(item)
+            
+            self.checked_accounts.clear()
+            
+            # 添加账号到表格
+            for row in results:
+                phone, nickname, user_id, status, owner = row[0], row[1], row[2], row[3], row[4]
+                item_id = self.accounts_tree.insert('', 'end', 
+                                                    image=self.unchecked_image,
+                                                    values=(phone, nickname or "-", user_id or "-", status or "-", "-", owner or "-"))
+            
+            # 更新统计
+            self.status_var.set(f"共 {len(results)} 个待处理账号")
+            
+            # 更新管理员下拉框
+            self._update_owner_combo()
+            
+            # 更新账号统计
+            self._update_account_stats()
+        
+        except Exception as e:
+            if self.log_callback:
+                self.log_callback(f"加载待处理账号失败: {e}")
+    
+    def _import_pending(self):
+        """导入待处理账号
+        
+        [2026-03-10] 新增：导入状态为"待处理"的账号
+        [2026-03-10] 新增：记录当前账号类型
+        """
+        self.current_account_type = 'pending'
+        self._load_pending_accounts()
+        # _load_pending_accounts 已经调用了 _update_account_stats()
+    
+    def _import_unused(self):
+        """导入未使用账号
+        
+        [2026-03-10] 新增：导入余额前=0且签到次数=0且余额=0的账号
+        [2026-03-10] 修复：添加调试日志，查看查询结果
+        [2026-03-10] 新增：导入后更新统计信息
+        [2026-03-10] 新增：记录当前账号类型
+        [2026-03-10] 新增：显示status字段，referrer暂时显示为"-"
+        """
+        self.current_account_type = 'unused'
+        try:
+            from .local_db import LocalDatabase
+            db = LocalDatabase()
+            
+            # 查询未使用账号（三个字段都是0）
+            results = db.query_unused_accounts()
+            
+            # [2026-03-10] 调试：输出查询结果
+            if self.log_callback:
+                self.log_callback(f"查询到 {len(results)} 个未使用账号")
+                for i, row in enumerate(results[:5]):  # 只显示前5个
+                    self.log_callback(f"  [{i+1}] 手机: {row[0]}, 昵称: {row[1]}, ID: {row[2]}, 状态: {row[3]}, 管理员: {row[4]}")
+            
+            # 清空表格
+            for item in self.accounts_tree.get_children():
+                self.accounts_tree.delete(item)
+            
+            self.checked_accounts.clear()
+            
+            # 添加账号到表格
+            for row in results:
+                phone, nickname, user_id, status, owner = row[0], row[1], row[2], row[3], row[4]
+                item_id = self.accounts_tree.insert('', 'end',
+                                                    image=self.unchecked_image,
+                                                    values=(phone, nickname or "-", user_id or "-", status or "-", "-", owner or "-"))
+                # [2026-03-10] 调试：确认添加成功
+                if self.log_callback and len(results) <= 5:
+                    self.log_callback(f"  添加到表格: {phone}, {nickname}, {user_id}, {status}, {owner}")
+            
+            # 更新统计
+            self.status_var.set(f"共 {len(results)} 个未使用账号")
+            
+            # 更新管理员下拉框
+            self._update_owner_combo()
+            
+            # 更新账号统计
+            self._update_account_stats()
+        
+        except Exception as e:
+            if self.log_callback:
+                self.log_callback(f"❌ 导入未使用账号失败: {e}")
+            import traceback
+            if self.log_callback:
+                self.log_callback(f"详细错误: {traceback.format_exc()}")
+    
+    def _update_owner_combo(self):
+        """更新管理员下拉框
+        
+        [2026-03-10] 新增：统计每个管理员的账号数量
+        [2026-03-10] 修复：正确统计管理员，包括空值和"-"
+        """
+        # 统计管理员账号数
+        owner_stats = {}
+        total_count = 0
+        
+        for item_id in self.accounts_tree.get_children():
+            values = self.accounts_tree.item(item_id, 'values')
+            if values and len(values) >= 4:
+                total_count += 1
+                owner = values[3]
+                # 统计所有管理员，包括空值
+                if owner and owner != "-" and owner.strip():
+                    owner_stats[owner] = owner_stats.get(owner, 0) + 1
+        
+        # 更新下拉框
+        options = [f'全部 ({total_count})']
+        for owner, count in sorted(owner_stats.items()):
+            options.append(f"{owner} ({count})")
+        
+        self.owner_combo['values'] = options
+        self.owner_combo.current(0)  # 默认选择"全部"
+    
+    def _load_owner_statistics(self):
+        """加载管理员统计信息
+        
+        [2026-03-10] 新增：初始化时加载所有管理员的待处理和未使用账号统计
+        """
+        try:
+            from .local_db import LocalDatabase
+            db = LocalDatabase()
+            
+            # 查询所有管理员的统计信息
+            owner_stats = {}
+            
+            # 1. 统计待处理账号
+            pending_results = db.query_accounts_by_status(['', '待处理'])
+            for row in pending_results:
+                owner = row[3] if len(row) > 3 and row[3] else None
+                if owner:
+                    if owner not in owner_stats:
+                        owner_stats[owner] = {'pending': 0, 'unused': 0}
+                    owner_stats[owner]['pending'] += 1
+            
+            # 2. 统计未使用账号
+            unused_results = db.query_unused_accounts()
+            for row in unused_results:
+                owner = row[3] if len(row) > 3 and row[3] else None
+                if owner:
+                    if owner not in owner_stats:
+                        owner_stats[owner] = {'pending': 0, 'unused': 0}
+                    owner_stats[owner]['unused'] += 1
+            
+            # 3. 更新下拉框
+            total_pending = len(pending_results)
+            total_unused = len(unused_results)
+            
+            options = [f'全部 (待处理: {total_pending}, 未使用: {total_unused})']
+            for owner, stats in sorted(owner_stats.items()):
+                options.append(f"{owner} (待处理: {stats['pending']}, 未使用: {stats['unused']})")
+            
+            self.owner_combo['values'] = options
+            self.owner_combo.current(0)  # 默认选择"全部"
+            
+            # 更新状态栏
+            self.status_var.set(f"共 {len(owner_stats)} 个管理员")
+        
+        except Exception as e:
+            if self.log_callback:
+                self.log_callback(f"❌ 加载管理员统计失败: {e}")
+            import traceback
+            if self.log_callback:
+                self.log_callback(f"详细错误: {traceback.format_exc()}")
+    
+    def _start_login_only(self):
+        """开始运行（只登录模式）
+        
+        [2026-03-10] 新增：使用未勾选的账号执行只登录流程
+        [2026-03-10] 修复：运行未勾选的账号，不是勾选的账号
+        [2026-03-10] 新增：运行完成后自动打钩
+        [2026-03-10] 修复：完全独立运行，不依赖主GUI，避免冲突
+        """
+        # 获取所有账号和未勾选的账号
+        all_accounts = []
+        item_id_map = {}  # 手机号 -> item_id 的映射
+        for item_id in self.accounts_tree.get_children():
+            values = self.accounts_tree.item(item_id, 'values')
+            if values and len(values) >= 1:
+                phone = values[0]
+                all_accounts.append((item_id, phone))
+                item_id_map[phone] = item_id
+        
+        # 筛选出未勾选的账号
+        unchecked_accounts = []
+        for item_id, phone in all_accounts:
+            if item_id not in self.checked_accounts:
+                unchecked_accounts.append(phone)
+        
+        if not unchecked_accounts:
+            messagebox.showwarning("提示", "没有未勾选的账号可以运行", parent=self.dialog)
+            return
+        
+        # 显示确认对话框
+        confirm_message = f"将使用只登录模式运行以下未勾选的账号：\n\n"
+        confirm_message += f"账号数量: {len(unchecked_accounts)} 个\n"
+        confirm_message += f"前5个账号: {', '.join(unchecked_accounts[:5])}\n"
+        if len(unchecked_accounts) > 5:
+            confirm_message += f"... 还有 {len(unchecked_accounts) - 5} 个\n"
+        confirm_message += f"\n是否继续？"
+        
+        result = messagebox.askyesno("确认运行", confirm_message, parent=self.dialog)
+        if not result:
+            return
+        
+        # 调用独立的运行功能（只登录模式）
+        if self.log_callback:
+            self.log_callback(f"开始运行：{len(unchecked_accounts)} 个未勾选账号（只登录模式）")
+        
+        # 在后台线程中执行
+        import threading
+        def run_in_background():
+            try:
+                # 独立运行账号验证
+                import asyncio
+                asyncio.run(self._run_accounts_async(unchecked_accounts, item_id_map))
+                
+            except Exception as e:
+                if self.log_callback:
+                    self.log_callback(f"❌ 运行失败: {e}")
+                import traceback
+                if self.log_callback:
+                    self.log_callback(f"详细错误: {traceback.format_exc()}")
+        
+        thread = threading.Thread(target=run_in_background, daemon=True)
+        thread.start()
+    
+    async def _run_accounts_async(self, phone_list, item_id_map):
+        """异步运行账号验证（调用主流程的只登录模式）
+        
+        [2026-03-10] 修改：直接调用主GUI的完整流程，使用只登录模式
+        [2026-03-10] 修改：使用多个实例并发运行
+        
+        Args:
+            phone_list: 手机号列表
+            item_id_map: 手机号到item_id的映射
+        """
+        from .emulator_controller import EmulatorController
+        from .account_manager import AccountManager
+        from .models.models import Account, AccountStatus
+        
+        # 获取配置
+        config = self.parent_gui.config
+        emulator_path = self.parent_gui.emulator_path_var.get()
+        target_app = "com.ry.xmsc"
+        target_activity = config.target_app_activity
+        
+        # 创建模拟器控制器
+        controller = EmulatorController(emulator_path)
+        if not controller.is_available():
+            if self.log_callback:
+                self.log_callback("❌ 模拟器控制台程序未找到")
+            return
+        
+        # 获取运行中的实例
+        running_instances = await controller.get_running_instances()
+        if not running_instances:
+            if self.log_callback:
+                self.log_callback("❌ 没有运行中的模拟器实例")
+            return
+        
+        # 加载账号管理器
+        account_manager = AccountManager(config.accounts_file)
+        account_manager.load_accounts()
+        
+        # 从加密账号文件加载所有账号（只加载一次）
+        from .encrypted_accounts_file import EncryptedAccountsFile
+        encrypted_file = EncryptedAccountsFile(config.accounts_file)
+        accounts_list = encrypted_file.read_accounts()
+        accounts_dict = {phone: password for phone, password in accounts_list}
+        
+        # 统计
+        total = len(phone_list)
+        success = 0
+        failed = 0
+        stats_lock = asyncio.Lock()
+        
+        if self.log_callback:
+            self.log_callback(f"使用 {len(running_instances)} 个实例并发运行（只登录模式）")
+        
+        # 临时保存原配置
+        original_workflow_config = {
+            'enable_login': getattr(config, 'workflow_enable_login', True),
+            'enable_profile': getattr(config, 'workflow_enable_profile', True),
+            'enable_checkin': getattr(config, 'workflow_enable_checkin', True),
+            'enable_transfer': getattr(config, 'workflow_enable_transfer', True),
+        }
+        
+        # 设置为只登录模式
+        config.workflow_enable_login = True
+        config.workflow_enable_profile = True
+        config.workflow_enable_checkin = False
+        config.workflow_enable_transfer = False
+        
+        try:
+            async def process_account_on_instance(instance_id, phone, index):
+                """在指定实例上处理账号"""
+                nonlocal success, failed
+                
+                try:
+                    # 获取账号密码
+                    password = accounts_dict.get(phone)
+                    if not password:
+                        if self.log_callback:
+                            self.log_callback(f"\n[{index}/{total}] 实例 {instance_id} - ✗ 账号 {phone} 不存在")
+                        async with stats_lock:
+                            failed += 1
+                        return
+                    
+                    # 创建账号对象
+                    account = Account(
+                        phone=phone,
+                        password=password,
+                        status=AccountStatus.PENDING
+                    )
+                    
+                    # 创建日志回调（带实例前缀）
+                    def instance_log(msg):
+                        if self.log_callback:
+                            self.log_callback(f"[实例{instance_id}] {msg}")
+                    
+                    if self.log_callback:
+                        self.log_callback(f"\n[{index}/{total}] 实例 {instance_id} 处理账号: {phone}")
+                    
+                    # [2026-03-10] 修复原因：添加 file_logger 参数，避免 'file_logger' 未定义错误
+                    import logging
+                    file_logger = logging.getLogger(__name__)
+                    
+                    # 调用主GUI的完整流程
+                    result = await self.parent_gui._process_account_with_instance(
+                        controller=controller,
+                        instance_id=instance_id,
+                        account=account,
+                        target_app=target_app,
+                        target_activity=target_activity,
+                        account_manager=account_manager,
+                        log_callback=instance_log,
+                        file_logger=file_logger
+                    )
+                    
+                    if result.success:
+                        if self.log_callback:
+                            self.log_callback(f"  ✓ 登录成功 - 昵称: {result.nickname or '未获取'}, 用户ID: {result.user_id or '未获取'}")
+                        async with stats_lock:
+                            success += 1
+                        
+                        # 自动打钩并更新状态（带颜色）
+                        if phone in item_id_map:
+                            item_id = item_id_map[phone]
+                            def check_item():
+                                self.checked_accounts[item_id] = True
+                                # 获取当前行的值
+                                current_values = list(self.accounts_tree.item(item_id, 'values'))
+                                # 更新状态列（索引3）
+                                current_values[3] = "成功"
+                                # 更新表格，添加success标签（绿色）
+                                self.accounts_tree.item(item_id, image=self.checked_image, values=tuple(current_values), tags=("success",))
+                            self.dialog.after(0, check_item)
+                    else:
+                        if self.log_callback:
+                            self.log_callback(f"  ✗ 处理失败: {result.error_message}")
+                        async with stats_lock:
+                            failed += 1
+                        
+                        # 存储错误详情
+                        self.error_details[phone] = result.error_message
+                        
+                        # 更新状态为失败（带颜色）
+                        if phone in item_id_map:
+                            item_id = item_id_map[phone]
+                            def update_failed():
+                                # 获取当前行的值
+                                current_values = list(self.accounts_tree.item(item_id, 'values'))
+                                # 更新状态列（索引3）
+                                current_values[3] = "失败"
+                                # 更新表格，添加failed标签（红色）
+                                self.accounts_tree.item(item_id, values=tuple(current_values), tags=("failed",))
+                            self.dialog.after(0, update_failed)
+                
+                except Exception as account_error:
+                    if self.log_callback:
+                        self.log_callback(f"  ✗ 处理失败: {account_error}")
+                    async with stats_lock:
+                        failed += 1
+            
+            # 使用多个实例并发处理账号
+            tasks = []
+            for i, phone in enumerate(phone_list, 1):
+                # 轮流分配实例
+                instance_id = running_instances[(i - 1) % len(running_instances)]
+                task = process_account_on_instance(instance_id, phone, i)
+                tasks.append(task)
+            
+            # 等待所有任务完成
+            await asyncio.gather(*tasks)
+        
+        finally:
+            # 恢复原配置
+            config.workflow_enable_login = original_workflow_config['enable_login']
+            config.workflow_enable_profile = original_workflow_config['enable_profile']
+            config.workflow_enable_checkin = original_workflow_config['enable_checkin']
+            config.workflow_enable_transfer = original_workflow_config['enable_transfer']
+        
+        # 输出统计
+        if self.log_callback:
+            self.log_callback(f"\n{'='*60}")
+            self.log_callback(f"运行完成")
+            self.log_callback(f"{'='*60}")
+            self.log_callback(f"总计: {total} 个")
+            self.log_callback(f"成功: {success} 个")
+            self.log_callback(f"失败: {failed} 个")
+            self.log_callback(f"{'='*60}")
+
+    
+    def _start_transfer(self):
+        """开始转账操作
+        
+        [2026-03-10] 新增：使用锁定的模拟器给勾选的账号转账
+        """
+        # 检查是否有锁定的实例
+        locked_instances = self.get_locked_instances()
+        if not locked_instances:
+            messagebox.showwarning("提示", "请先锁定至少一个模拟器实例用于转账", parent=self.dialog)
+            return
+        
+        # 检查是否有勾选的账号
+        if not self.checked_accounts:
+            messagebox.showwarning("提示", "请先勾选需要转账的账号", parent=self.dialog)
+            return
+        
+        # 获取勾选的账号信息
+        transfer_recipients = []
+        for item_id in self.checked_accounts.keys():
+            values = self.accounts_tree.item(item_id, 'values')
+            if values and len(values) >= 3:
+                phone = values[0]
+                nickname = values[1]
+                user_id = values[2]
+                
+                # 只添加有用户ID的账号
+                if user_id and user_id != "-":
+                    transfer_recipients.append({
+                        'phone': phone,
+                        'nickname': nickname,
+                        'user_id': user_id
+                    })
+        
+        if not transfer_recipients:
+            messagebox.showwarning("提示", "勾选的账号中没有有效的用户ID，无法作为转账收款人", parent=self.dialog)
+            return
+        
+        # 显示确认对话框
+        confirm_message = f"将使用以下配置进行转账：\n\n"
+        confirm_message += f"锁定的模拟器: {len(locked_instances)} 个\n"
+        confirm_message += f"  实例编号: {', '.join(map(str, locked_instances))}\n\n"
+        confirm_message += f"转账收款人: {len(transfer_recipients)} 个账号\n"
+        confirm_message += f"  前3个: {', '.join([r['nickname'] or r['user_id'] for r in transfer_recipients[:3]])}\n"
+        if len(transfer_recipients) > 3:
+            confirm_message += f"  ... 还有 {len(transfer_recipients) - 3} 个\n"
+        confirm_message += f"\n是否继续？"
+        
+        result = messagebox.askyesno("确认转账", confirm_message, parent=self.dialog)
+        if not result:
+            return
+        
+        # 调用主界面的转账功能
+        if self.log_callback:
+            self.log_callback(f"开始转账：使用 {len(locked_instances)} 个锁定实例，转账给 {len(transfer_recipients)} 个收款人")
+        
+        # 在后台线程中执行转账
+        import threading
+        transfer_thread = threading.Thread(
+            target=self._run_transfer_in_background,
+            args=(locked_instances, transfer_recipients),
+            daemon=True
+        )
+        transfer_thread.start()
+    
+    def _run_transfer_in_background(self, locked_instances, transfer_recipients):
+        """在后台线程中运行转账
+        
+        Args:
+            locked_instances: 锁定的实例编号列表
+            transfer_recipients: 转账收款人列表
+        """
+        import asyncio
+        try:
+            asyncio.run(self._execute_transfer_async(locked_instances, transfer_recipients))
+        except Exception as e:
+            if self.log_callback:
+                self.log_callback(f"❌ 转账执行失败: {e}")
+            import traceback
+            if self.log_callback:
+                self.log_callback(f"详细错误: {traceback.format_exc()}")
+    
+    async def _execute_transfer_async(self, locked_instances, transfer_recipients):
+        """异步执行转账操作
+        
+        Args:
+            locked_instances: 锁定的实例编号列表
+            transfer_recipients: 转账收款人列表
+        """
+        if self.log_callback:
+            self.log_callback("=" * 60)
+            self.log_callback("开始转账流程")
+            self.log_callback("=" * 60)
+        
+        # 获取模拟器控制器
+        from .emulator_controller import EmulatorController
+        emulator_path = self.parent_gui.emulator_path_var.get()
+        controller = EmulatorController(emulator_path)
+        
+        if not controller.is_available():
+            if self.log_callback:
+                self.log_callback("❌ 模拟器控制台程序未找到")
+            return
+        
+        # 获取配置
+        config = self.parent_gui.config
+        target_app = "com.ry.xmsc"
+        target_activity = config.target_app_activity
+        
+        # 统计变量
+        total_transfers = 0
+        success_transfers = 0
+        failed_transfers = 0
+        
+        # 为每个锁定的实例执行转账
+        for instance_id in locked_instances:
+            if self.log_callback:
+                self.log_callback(f"\n{'='*60}")
+                self.log_callback(f"使用实例 {instance_id} 进行转账")
+                self.log_callback(f"{'='*60}")
+            
+            try:
+                # 获取该实例的 ADB 端口
+                adb_port = await controller.get_adb_port(instance_id)
+                adb_path = controller.get_adb_path()
+                device_id = f"127.0.0.1:{adb_port}"
+                
+                if self.log_callback:
+                    self.log_callback(f"连接设备: {device_id}")
+                
+                # 创建 ADB 连接
+                from .adb_bridge import ADBBridge
+                adb = ADBBridge(adb_path)
+                await adb.connect(device_id)
+                
+                try:
+                    # 创建转账所需的组件
+                    from .screen_capture import ScreenCapture
+                    from .ui_automation import UIAutomation
+                    from .balance_transfer import BalanceTransfer
+                    from .model_manager import ModelManager
+                    
+                    screen_capture = ScreenCapture(adb, config.screenshot_dir)
+                    ui_automation = UIAutomation(adb, screen_capture)
+                    
+                    # 从ModelManager获取共享的检测器实例
+                    model_manager = ModelManager.get_instance()
+                    integrated_detector = model_manager.get_page_detector_integrated()
+                    
+                    # 创建转账对象
+                    balance_transfer = BalanceTransfer(
+                        adb=adb,
+                        detector=integrated_detector,
+                        page_classifier=integrated_detector
+                    )
+                    
+                    # 停止应用
+                    if self.log_callback:
+                        self.log_callback("停止应用...")
+                    await adb.stop_app(device_id, target_app)
+                    await asyncio.sleep(0.5)
+                    
+                    # 启动应用
+                    if self.log_callback:
+                        self.log_callback("启动应用...")
+                    success = await adb.start_app(device_id, target_app, target_activity)
+                    if not success:
+                        if self.log_callback:
+                            self.log_callback("❌ 应用启动失败")
+                        continue
+                    await asyncio.sleep(2)
+                    
+                    # 处理启动流程（跳过广告、弹窗等）
+                    if self.log_callback:
+                        self.log_callback("处理启动流程...")
+                    
+                    from .auto_login import AutoLogin
+                    from .ximeng_automation import XimengAutomation
+                    
+                    auto_login = AutoLogin(ui_automation, screen_capture, adb, 
+                                          emulator_type="mumu",
+                                          integrated_detector=integrated_detector)
+                    
+                    ximeng = XimengAutomation(ui_automation, screen_capture, auto_login, adb, 
+                                            log_callback=self.log_callback)
+                    
+                    import logging
+                    file_logger = logging.getLogger(__name__)
+                    
+                    startup_ok = await ximeng.handle_startup_flow_integrated(
+                        device_id, 
+                        log_callback=self.log_callback,
+                        stop_check=None,
+                        package_name=target_app,
+                        activity_name=target_activity,
+                        max_retries=3,
+                        file_logger=file_logger,
+                        phone=None,
+                        password=None
+                    )
+                    
+                    if not startup_ok:
+                        if self.log_callback:
+                            self.log_callback("❌ 启动流程失败")
+                        continue
+                    
+                    # 导航到个人页面
+                    if self.log_callback:
+                        self.log_callback("导航到个人页面...")
+                    
+                    from .navigator import Navigator
+                    navigator = Navigator(adb, integrated_detector)
+                    nav_success = await navigator.navigate_to_profile(device_id)
+                    
+                    if not nav_success:
+                        if self.log_callback:
+                            self.log_callback("❌ 导航到个人页面失败")
+                        continue
+                    
+                    if self.log_callback:
+                        self.log_callback("✓ 已在个人页面，开始转账")
+                    
+                    # 为每个收款人执行转账
+                    for recipient in transfer_recipients:
+                        total_transfers += 1
+                        recipient_id = recipient['user_id']
+                        recipient_name = recipient['nickname'] or recipient_id
+                        
+                        if self.log_callback:
+                            self.log_callback(f"\n转账给: {recipient_name} (ID: {recipient_id})")
+                        
+                        try:
+                            # 执行转账
+                            transfer_result = await balance_transfer.transfer_balance(
+                                device_id=device_id,
+                                recipient_id=recipient_id,
+                                initial_balance=None,
+                                log_callback=self.log_callback,
+                                transfer_chain=[],
+                                step_number=total_transfers
+                            )
+                            
+                            if transfer_result['success']:
+                                success_transfers += 1
+                                amount = transfer_result.get('amount', 0)
+                                if self.log_callback:
+                                    self.log_callback(f"✓ 转账成功: {amount:.2f}元")
+                            else:
+                                failed_transfers += 1
+                                error_msg = transfer_result.get('message', '未知错误')
+                                if self.log_callback:
+                                    self.log_callback(f"✗ 转账失败: {error_msg}")
+                        
+                        except Exception as transfer_error:
+                            failed_transfers += 1
+                            if self.log_callback:
+                                self.log_callback(f"✗ 转账异常: {transfer_error}")
+                
+                finally:
+                    # 关闭 ADB 连接
+                    await adb.disconnect(device_id)
+            
+            except Exception as instance_error:
+                if self.log_callback:
+                    self.log_callback(f"❌ 实例 {instance_id} 处理失败: {instance_error}")
+                import traceback
+                if self.log_callback:
+                    self.log_callback(f"详细错误: {traceback.format_exc()}")
+        
+        # 输出统计信息
+        if self.log_callback:
+            self.log_callback(f"\n{'='*60}")
+            self.log_callback("转账完成")
+            self.log_callback(f"{'='*60}")
+            self.log_callback(f"总计: {total_transfers} 笔")
+            self.log_callback(f"成功: {success_transfers} 笔")
+            self.log_callback(f"失败: {failed_transfers} 笔")
+            self.log_callback(f"{'='*60}")
 
 
 def main(adb_bridge=None):

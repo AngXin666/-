@@ -123,7 +123,8 @@ class Logger:
     def _add_console_handler(self) -> None:
         """添加控制台处理器"""
         console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setLevel(self.log_level)
+        # [2026-03-29] 修改：控制台只输出ERROR及以上，避免大量INFO日志刷屏
+        console_handler.setLevel(logging.ERROR)
         console_handler.setFormatter(self.formatter)
         self.logger.addHandler(console_handler)
     

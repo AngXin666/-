@@ -538,7 +538,7 @@
     "签到页": {
       "name": "签到页检测模型",
       "page_type": "签到页",
-      "model_path": "runs/detect/yolo_runs/签到页_detector2/weights/best.pt",
+      "model_path": "models/runs/detect/yolo_runs/签到页_detector2/weights/best.pt",
       "classes": [
         "签到按钮",
         "签到次数"

@@ -1,91 +1,65 @@
-"""查找历史记录中有但账号文件中没有的账号"""
-import sqlite3
-from src.encrypted_accounts_file import EncryptedAccountsFile
+"""查找缺失的2个账号"""
+from src.local_db import LocalDatabase
+from datetime import datetime
 
-# 1. 从账号文件读取所有账号
-print("正在读取账号文件...")
-ef = EncryptedAccountsFile('data/accounts.txt')
-accounts = ef.read_accounts()
-account_phones = set(phone for phone, pwd in accounts)
-print(f"账号文件中的账号数量: {len(account_phones)}")
+db = LocalDatabase()
+conn = db._get_connection()
+cursor = conn.cursor()
 
-# 2. 从历史记录数据库读取所有手机号
-print("\n正在读取历史记录数据库...")
+# 获取今天的日期
+today = datetime.now().strftime('%Y-%m-%d')
+print(f"检查日期: {today}")
 
-# 尝试多个可能的数据库文件
-db_files = ['history_records.db', 'runtime_data/license.db']
-conn = None
-history_phones = []
+# 获取今天所有新增的账号（按创建时间排序）
+cursor.execute('''
+    SELECT phone, created_at, status, nickname
+    FROM history_records 
+    WHERE DATE(created_at) = ?
+    ORDER BY created_at ASC
+''', (today,))
+today_records = cursor.fetchall()
 
-for db_file in db_files:
-    try:
-        print(f"尝试读取: {db_file}")
-        conn = sqlite3.connect(db_file)
-        cursor = conn.cursor()
-        
-        # 列出所有表
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        tables = cursor.fetchall()
-        print(f"  找到表: {[t[0] for t in tables]}")
-        
-        # 检查 history_records 表
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='history_records'")
-        if cursor.fetchone():
-            cursor.execute("SELECT DISTINCT phone FROM history_records WHERE phone IS NOT NULL ORDER BY phone")
-            history_phones = [row[0] for row in cursor.fetchall()]
-            print(f"  ✓ 找到 history_records 表，包含 {len(history_phones)} 个唯一手机号")
-            break
-        
-        conn.close()
-    except Exception as e:
-        print(f"  ✗ 读取失败: {e}")
-        if conn:
-            conn.close()
+print(f"\n今天新增的账号数量: {len(today_records)}")
+print(f"应该有: 38 个")
+print(f"实际有: {len(today_records)} 个")
+print(f"缺失: {38 - len(today_records)} 个")
 
-if not history_phones:
-    print("\n未找到任何历史记录数据")
-    print("账号文件中已有 225 个账号")
-    exit()
+print("\n今天新增的所有账号:")
+for i, (phone, created_at, status, nickname) in enumerate(today_records, 1):
+    print(f"{i:2d}. {phone} - {created_at} - {status} - {nickname or '未知'}")
 
-# 获取所有唯一手机号
-print(f"历史记录中的唯一手机号数量: {len(history_phones)}")
+# 检查是否有导入失败的记录（状态为失败）
+cursor.execute('''
+    SELECT phone, created_at, status, nickname
+    FROM history_records 
+    WHERE DATE(created_at) = ? AND status LIKE '%失败%'
+    ORDER BY created_at ASC
+''', (today,))
+failed_records = cursor.fetchall()
 
-# 3. 找出差异
-missing_phones = [phone for phone in history_phones if phone not in account_phones]
+if failed_records:
+    print(f"\n今天导入失败的账号:")
+    for phone, created_at, status, nickname in failed_records:
+        print(f"  {phone} - {status}")
 
-print(f"\n在历史记录中但账号文件中没有的手机号数量: {len(missing_phones)}")
-print("\n缺失的手机号列表:")
-print("=" * 60)
-for i, phone in enumerate(missing_phones, 1):
-    # 获取该账号的最新记录信息
-    cursor.execute("""
-        SELECT nickname, user_id, balance_after, run_date 
-        FROM history_records 
-        WHERE phone = ? 
-        ORDER BY created_at DESC 
-        LIMIT 1
-    """, (phone,))
-    record = cursor.fetchone()
-    
-    if record:
-        nickname, user_id, balance, run_date = record
-        print(f"{i:3d}. {phone} | 昵称: {nickname or '未知'} | ID: {user_id or '未知'} | 余额: {balance or 0:.2f} | 最后运行: {run_date}")
-    else:
-        print(f"{i:3d}. {phone}")
+# 检查数据库中所有不同的手机号
+cursor.execute('SELECT COUNT(DISTINCT phone) FROM history_records')
+total_unique = cursor.fetchone()[0]
+print(f"\n数据库中不同手机号总数: {total_unique}")
 
-print("=" * 60)
+# 检查是否有重复导入的情况（今天同一个手机号多次导入）
+cursor.execute('''
+    SELECT phone, COUNT(*) as cnt
+    FROM history_records 
+    WHERE DATE(created_at) = ?
+    GROUP BY phone
+    HAVING cnt > 1
+''', (today,))
+duplicates = cursor.fetchall()
 
-# 4. 保存到文件
-output_file = "missing_accounts.txt"
-with open(output_file, 'w', encoding='utf-8') as f:
-    f.write("# 在历史记录中但账号文件中没有的手机号\n")
-    f.write(f"# 总数: {len(missing_phones)}\n")
-    f.write("# 格式: 手机号----密码\n")
-    f.write("# 请手动填写密码后导入\n\n")
-    for phone in missing_phones:
-        f.write(f"{phone}----\n")
-
-print(f"\n已保存到文件: {output_file}")
-print("请手动填写密码后导入到账号文件")
+if duplicates:
+    print(f"\n今天重复导入的账号:")
+    for phone, cnt in duplicates:
+        print(f"  {phone} - 导入了 {cnt} 次")
 
 conn.close()

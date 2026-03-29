@@ -57,7 +57,7 @@ def setup_logger(
     name: str,
     level: Optional[str] = None,
     log_to_file: bool = True,
-    log_to_console: bool = True,
+    log_to_console: bool = False,  # [2026-03-11] 优化日志：默认不输出到CMD控制台
     file_prefix: str = "app"
 ) -> logging.Logger:
     """设置并返回一个配置好的logger

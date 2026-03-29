@@ -56,8 +56,8 @@ class PageDetectorDL:
         '模拟器桌面': PageState.LAUNCHER,
         '温馨提示': PageState.WARMTIP,  # 温馨提示弹窗
         '登录页': PageState.LOGIN,
-        '用户名或密码错误': PageState.LOGIN,  # [2026-03-02] 登录专用模型：登录错误提示
-        '手机号码不存在': PageState.LOGIN,  # [2026-03-02] 登录专用模型：手机号不存在提示
+        '用户名或密码错误': PageState.LOGIN_ERROR,  # [2026-03-15] 修复原因：登录错误应该映射到LOGIN_ERROR而不是LOGIN
+        '手机号码不存在': PageState.LOGIN_ERROR,  # [2026-03-15] 修复原因：手机号不存在应该映射到LOGIN_ERROR而不是LOGIN
         '积分页': PageState.POINTS_PAGE,
         '签到弹窗': PageState.CHECKIN_POPUP,  # 签到弹窗
         '签到页': PageState.CHECKIN,
@@ -70,10 +70,16 @@ class PageDetectorDL:
         '首页': PageState.HOME,
         '首页公告': PageState.HOME_NOTICE,  # 首页公告弹窗
         '首页异常代码弹窗': PageState.HOME_ERROR_POPUP,  # 首页异常代码弹窗
+        # [2026-03-10] 新增：验号专用模型的类别映射
+        '地址页': PageState.ADDRESS_PAGE,  # 地址管理页面
+        '数据中心': PageState.DATA_CENTER,  # 数据中心页面
+        '首页广告': PageState.HOME_AD,  # 首页广告页面
+        '设置': PageState.SETTINGS,  # 设置页面
+        '登陆页': PageState.LOGIN,  # 登录页面（验号专用模型使用的类别名）
     }
     
     def __init__(self, adb: ADBBridge, model_path='page_classifier_pytorch_best.pth', 
-                 classes_path='page_classes.json', log_callback=None,
+                 classes_path='config/page_classes.json', log_callback=None,
                  fallback_classifier: Optional['PageDetectorDL'] = None):
         """初始化页面检测器
         
@@ -133,13 +139,52 @@ class PageDetectorDL:
             self._device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
             
             # [2026-03-02] 简化：只使用 MobileNetV3 架构
+            # [2026-03-09] 修复原因：自动检测模型文件的第一层通道数
             # 定义模型架构
             class PageClassifier(nn.Module):
-                def __init__(self, num_classes):
+                def __init__(self, num_classes, first_channel=16):
                     super(PageClassifier, self).__init__()
                     
-                    # MobileNetV3架构
+                    # 使用标准 MobileNetV3-Large
                     self.mobilenet = models.mobilenet_v3_large(weights=None)
+                    
+                    # [2026-03-10] 修复原因：正确处理不同通道数的模型架构
+                    if first_channel != 16:
+                        # [2026-03-29] 静默：正常模型加载不输出到控制台
+                        
+                        # 修改第一层卷积的输出通道数
+                        self.mobilenet.features[0][0] = nn.Conv2d(
+                            3, first_channel, kernel_size=3, stride=2, padding=1, bias=False
+                        )
+                        # 修改对应的BatchNorm层
+                        self.mobilenet.features[0][1] = nn.BatchNorm2d(first_channel)
+                        
+                        # [2026-03-10] 修复原因：彻底重建第二层以匹配通道数
+                        # 第二层是InvertedResidual块，需要完全重建以匹配新的通道数
+                        from torchvision.models.mobilenetv3 import InvertedResidual, InvertedResidualConfig
+                        
+                        # 创建配置对象：输入first_channel，输出16（保持原设计）
+                        # 使用与原模型相同的参数：kernel=3, stride=1, expand_ratio=1, use_se=False
+                        config = InvertedResidualConfig(
+                            input_channels=first_channel,  # 输入通道数
+                            kernel=3,                      # kernel_size
+                            expanded_channels=first_channel,  # expand_ratio=1，所以expanded=input
+                            out_channels=16,               # 输出通道数（保持原设计）
+                            use_se=False,                  # 不使用SE模块
+                            activation="RE",               # ReLU激活
+                            stride=1,                      # stride=1
+                            dilation=1,                    # 标准卷积
+                            width_mult=1.0                 # 宽度倍数
+                        )
+                        
+                        # 重建第二层
+                        self.mobilenet.features[1] = InvertedResidual(
+                            config,
+                            norm_layer=nn.BatchNorm2d
+                        )
+                        
+                        # [2026-03-29] 静默：正常模型加载不输出到控制台
+                    
                     in_features = self.mobilenet.classifier[0].in_features
                     self.mobilenet.classifier = nn.Sequential(
                         nn.Linear(in_features, 1280),
@@ -155,14 +200,35 @@ class PageDetectorDL:
             num_classes = len(self._classes)
             # [2026-03-03] 删除日志：避免每次创建实例都输出加载日志
             
-            model = PageClassifier(num_classes)
-            
-            # 加载权重
+            # [2026-03-10] 修复原因：先加载权重文件，检测模型架构
             checkpoint = torch.load(model_path, map_location=self._device)
             if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
-                model.load_state_dict(checkpoint['model_state_dict'])
+                state_dict = checkpoint['model_state_dict']
             else:
-                model.load_state_dict(checkpoint)
+                state_dict = checkpoint
+            
+            # [2026-03-10] 修复原因：检测模型的实际通道配置
+            # 检查第一层卷积的输出通道数（这决定了后续层的输入通道数）
+            first_layer_key = 'mobilenet.features.0.0.weight'
+            if first_layer_key in state_dict:
+                # shape[0] 是输出通道数，这是我们需要的值
+                first_channel = state_dict[first_layer_key].shape[0]
+            else:
+                first_channel = 16  # 默认值
+            
+            # 创建模型（使用检测到的通道数）
+            model = PageClassifier(num_classes, first_channel=first_channel)
+            
+            # 加载权重（使用strict=False兼容不同版本的模型结构）
+            try:
+                model.load_state_dict(state_dict, strict=False)
+                # [2026-03-10] 修复原因：添加模型加载成功的调试信息
+                # [2026-03-29] 静默：正常模型加载不输出到控制台
+            except Exception as load_error:
+                print(f"[模型] ❌ 权重加载失败: {load_error}")
+                self._model = None
+                return
+  
             
             model = model.to(self._device)
             model.eval()
@@ -473,9 +539,9 @@ class PageDetectorDL:
                 # 清除指定设备的缓存
                 had_cache = device_id in self._detection_cache._cache
                 self._detection_cache._cache.pop(device_id, None)
-                print(f"[PageDetectorDL] 清除设备 {device_id} 的缓存 (之前{'有' if had_cache else '无'}缓存)")
+                # [2026-03-12] 优化日志：移除CMD控制台的缓存清理信息
             else:
                 # 清除所有缓存
                 cache_count = len(self._detection_cache._cache)
                 self._detection_cache._cache.clear()
-                print(f"[PageDetectorDL] 清除所有缓存 (共 {cache_count} 个)")
+                # [2026-03-12] 优化日志：移除CMD控制台的缓存清理信息

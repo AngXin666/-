@@ -167,6 +167,10 @@ class PageState(metaclass=PageStateMeta):
             'SETTINGS': ('settings', '设置页'),
             'COUPON': ('coupon', '优惠劵页'),
             'PROFILE_AD': ('profile_ad', '个人页广告'),
+            # [2026-03-10] 新增：验号专用模型的页面状态
+            'ADDRESS_PAGE': ('address_page', '地址管理页'),
+            'DATA_CENTER': ('data_center', '数据中心页'),
+            'HOME_AD': ('home_ad', '首页广告页'),
         }
         
         cls._states.clear()

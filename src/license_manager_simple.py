@@ -344,8 +344,7 @@ class SimpleLicenseManager:
                     bind_url = f"{self.supabase_url}/rest/v1/device_bindings"
                     bind_response = requests.post(bind_url, headers=headers, json=bind_data, timeout=10)
                     
-                    print(f"[调试] 绑定响应状态码: {bind_response.status_code}")
-                    print(f"[调试] 绑定响应内容: {bind_response.text}")
+                    # [2026-03-11] 优化日志：移除控制台调试输出
                     
                     if bind_response.status_code not in [200, 201]:
                         print(f"[错误] 绑定设备失败: {bind_response.status_code}")

@@ -54,43 +54,42 @@ class DailyCheckin:
         
         Args:
             adb: ADB桥接对象
-            detector: 页面检测器（智能检测器或混合检测器，应该是从ModelManager获取的共享实例）
+            detector: 页面检测器（YOLO识别器，应该是从ModelManager获取的共享实例）
             navigator: 导航器
         """
         self.adb = adb
         
-        # [2026-03-01] 修复：签到流程使用专用模型
-        # 创建签到流程专用检测器（MobileNetV3）
-        from .page_detector_dl import PageDetectorDL
-        from pathlib import Path
-        import os
+        # [2026-03-03] 修改：从 ModelManager 获取专用检测器（避免重复创建）
+        # 保存YOLO检测器和导航器（用于元素检测、按钮点击等）
+        self.detector = detector
+        self.navigator = navigator
         
-        # 使用绝对路径（基于项目根目录）
-        project_root = Path(__file__).parent.parent  # src/ 的上一级目录
-        checkin_model_path = project_root / '标注工具_完整独立版' / 'models' / 'page_classifier_checkin_best.pth'
-        checkin_classes_path = project_root / '标注工具_完整独立版' / 'models' / 'page_classes_checkin.json'
-        
-        # 导入日志记录器
+        # 导入日志记录器和ModelManager
         from .logger import get_logger
-        logger = get_logger()
+        from .model_manager import ModelManager
         
-        if checkin_model_path.exists() and checkin_classes_path.exists():
-            # 使用签到专用模型
-            self.detector = PageDetectorDL(adb, model_path=str(checkin_model_path), classes_path=str(checkin_classes_path))
-            # 创建使用签到专用检测器的Navigator
-            self.navigator = Navigator(adb, self.detector)
-            logger.info("✅ 签到流程专用检测器已加载（MobileNetV3，GPU加速）")
-        else:
-            # 降级使用通用检测器
-            self.detector = detector
-            self.navigator = navigator
-            logger.warning(f"⚠️ 签到流程专用模型不存在，降级使用通用检测器")
-            logger.warning(f"   模型路径: {checkin_model_path}")
-            logger.warning(f"   类别路径: {checkin_classes_path}")
-            logger.warning(f"   模型存在: {checkin_model_path.exists()}")
-            logger.warning(f"   类别存在: {checkin_classes_path.exists()}")
+        logger = get_logger()
+        model_manager = ModelManager.get_instance()
+        
+        # 获取签到专用检测器（MobileNetV3，仅用于页面分类）
+        self.page_classifier = model_manager.get_checkin_detector()
+        if not self.page_classifier:
+            # 降级使用YOLO检测器
+            self.page_classifier = detector
+            logger.warning(f"⚠️ 签到专用模型未加载，降级使用YOLO检测器")
         
         self.reader = CheckinPageReader(adb)
+        
+        # 获取资料专用检测器（MobileNetV3，仅用于页面分类）
+        self.profile_classifier = model_manager.get_profile_detector()
+        if not self.profile_classifier:
+            # 降级使用YOLO检测器
+            self.profile_classifier = detector
+            logger.warning(f"⚠️ 资料专用模型未加载，降级使用YOLO检测器")
+        
+        # [2026-03-01] 修复原因：导航器使用YOLO检测器（包含YOLO功能）
+        # profile_navigator 使用YOLO检测器（用于导航和按钮点击）
+        self.profile_navigator = navigator
         
         # [2026-02-21] 删除学习器：移除 SmartButtonClicker 初始化
         
@@ -175,10 +174,11 @@ class DailyCheckin:
         Returns:
             页面检测结果
         """
+        # [2026-03-02] 修复原因：使用签到专用模型进行页面分类，而不是YOLO检测器
         # 如果不使用缓存，直接检测并失效旧缓存
         if not use_cache:
             self._page_cache.invalidate(device_id, cache_key)
-            result = await self.detector.detect_page(device_id, use_cache=False, detect_elements=detect_elements)
+            result = await self.page_classifier.detect_page(device_id, use_cache=False, detect_elements=detect_elements)
             return result
         
         # 尝试从缓存获取
@@ -187,7 +187,7 @@ class DailyCheckin:
             return cached_result
         
         # 缓存未命中，执行检测
-        result = await self.detector.detect_page(device_id, use_cache=False, detect_elements=detect_elements)
+        result = await self.page_classifier.detect_page(device_id, use_cache=False, detect_elements=detect_elements)
         
         # 更新缓存
         if result is not None:
@@ -234,8 +234,7 @@ class DailyCheckin:
             screenshot_path = date_dir / filename
             image.save(screenshot_path)
             
-            # 打印截图信息，方便查看
-            logger.info(f"  [截图 {current_num}] {stage}" + (f" 第{attempt}次" if attempt else ""))
+            # [2026-03-01] 精简日志：删除截图日志输出
             
             return str(screenshot_path)
             
@@ -281,7 +280,7 @@ class DailyCheckin:
             screenshot_path = date_dir / filename
             image.save(screenshot_path)
             
-            logger.info(f"  [截图 {current_num}] 无法签到")
+            # [2026-03-01] 精简日志：删除截图日志输出
             
             return str(screenshot_path)
             
@@ -320,14 +319,16 @@ class DailyCheckin:
                 - rewards: list, 每次签到的奖励列表
                 - screenshots: list, 所有截图路径
                 - need_relogin: bool, 是否需要重新登录
+                
+        [2026-03-11] 修复原因：精简签到流程的详细日志输出，减少CMD控制台噪音
         """
         # 导入日志记录器
         from .logger import get_logger
         logger = get_logger()
         
-        # 创建简洁日志记录器
+        # [2026-03-11] 优化日志：不输出到GUI，避免CMD显示过多日志
         from .concise_logger import ConciseLogger
-        concise = ConciseLogger("daily_checkin", gui_logger, logger)
+        concise = ConciseLogger("daily_checkin", None, logger)
         
         # 记录步骤开始
         concise.step(step_number, "签到")
@@ -365,12 +366,12 @@ class DailyCheckin:
             balance = None
             
             # 登录后直接开始签到流程，跳过登录状态检查（因为是顺序执行）
-            log(f"  [签到] 开始签到流程（登录后直接执行）...")
+            # log(f"  [签到] 开始签到流程（登录后直接执行）...")  # [2026-03-01] 精简日志：删除多余提示
             
             # 获取个人信息（余额、积分、抵扣券）- 如果已提供则跳过
             if profile_data:
                 # 使用已提供的个人信息
-                log(f"  [签到] 使用已获取的个人信息（跳过重复读取）")
+                # log(f"  [签到] 使用已获取的个人信息（跳过重复读取）")  # [2026-03-01] 精简日志：删除多余提示
                 profile_success = True
                 balance = profile_data.get('balance')
                 points = profile_data.get('points')
@@ -379,7 +380,7 @@ class DailyCheckin:
                 user_id = profile_data.get('user_id')
                 checkin_total_times = profile_data.get('checkin_total_times')  # 签到总次数
                 
-                # [2026-03-01] 精简日志：多行显示个人信息，删除前面的符号，添加昵称和ID
+                # [2026-03-12] 恢复个人信息显示：用户要求显示个人资料
                 log(f"  [签到] ✓ 个人信息:")
                 if nickname:
                     log(f"    昵称: {nickname}")
@@ -387,27 +388,27 @@ class DailyCheckin:
                     log(f"    ID: {user_id}")
                 if balance is not None:
                     log(f"    余额: {balance:.2f} 元")
-                else:
-                    log(f"    余额: None（⚠️ 无法计算签到奖励）")
-                if points is not None:
-                    log(f"    积分: {points} 积分")
-                if vouchers is not None:
-                    log(f"    抵扣券: {vouchers} 张")
-                if checkin_total_times is not None:
-                    log(f"    签到次数: {checkin_total_times} 次")
+                # else:
+                #     log(f"    余额: None（⚠️ 无法计算签到奖励）")
+                # if points is not None:
+                #     log(f"    积分: {points} 积分")
+                # if vouchers is not None:
+                #     log(f"    抵扣券: {vouchers} 张")
+                # if checkin_total_times is not None:
+                #     log(f"    签到次数: {checkin_total_times} 次")
             elif allow_skip_profile:
                 # 快速签到模式：完全不去个人页，使用从数据库获取的余额
-                log(f"  [签到] 快速签到模式：使用数据库余额（不去个人页）...")
+                log(f"  [签到] 快速签到模式：跳过个人页获取资料...")
                 profile_success = True  # 标记为成功，允许继续
                 
-                # 从 profile_data 中获取余额（已从数据库获取）
-                # 如果 profile_data 为 None，说明数据库中没有历史记录，无法计算签到奖励
+                # [2026-03-11] 修复原因：快速签到模式下，没有历史记录就设置余额为0
+                # 从 profile_data 中获取余额（如果有的话）
                 if profile_data and profile_data.get('balance') is not None:
                     balance = profile_data.get('balance')
                     log(f"  [签到] ✓ 使用数据库余额: {balance:.2f} 元")
                 else:
-                    balance = None
-                    log(f"  [签到] ⚠️ 数据库中无余额记录，将无法计算签到奖励")
+                    balance = 0.0
+                    log(f"  [签到] ⚠️ 无历史记录，设置余额为 0.00 元")
                 
                 points = None
                 vouchers = None
@@ -430,6 +431,7 @@ class DailyCheckin:
                         # 2. 获取完整个人资料
                         concise.action("读取个人资料")
                         from .profile_reader import ProfileReader
+                        # [2026-03-11] 修复原因：使用PageDetectorIntegrated（已添加find_button_yolo方法）
                         profile_reader = ProfileReader(self.adb, self.detector)
                         profile_data = await profile_reader.get_full_profile(device_id)
                         
@@ -444,7 +446,7 @@ class DailyCheckin:
                             # 至少要能获取到余额，才认为成功
                             if balance is not None:
                                 profile_success = True
-                                # [2026-03-01] 精简日志：多行显示个人信息，删除前面的符号，添加昵称和ID
+                                # [2026-03-12] 恢复个人信息显示：用户要求显示个人资料
                                 log(f"  [签到] ✓ 个人信息:")
                                 if nickname:
                                     log(f"    昵称: {nickname}")
@@ -456,14 +458,15 @@ class DailyCheckin:
                                     log(f"    积分: {points} 积分")
                                 else:
                                     log(f"    积分: 无法获取")
-                                
-                                if vouchers is not None:
-                                    log(f"    抵扣券: {vouchers} 张")
-                                else:
-                                    log(f"    抵扣券: 无法获取")
-                                
-                                if checkin_total_times is not None:
-                                    log(f"    签到次数: {checkin_total_times} 次")
+                                # 
+                                # if vouchers is not None:
+                                #     log(f"    抵扣券: {vouchers} 张")
+                                # else:
+                                #     log(f"    抵扣券: 无法获取")
+                                # 
+                                # if checkin_total_times is not None:
+                                #     log(f"    签到次数: {checkin_total_times} 次")
+                                pass  # 成功获取余额，不输出详细信息
                             else:
                                 log(f"  [签到] ❌ 无法获取余额信息")
                         else:
@@ -481,190 +484,65 @@ class DailyCheckin:
                 log(f"  [签到] ❌ {result['message']}")
                 return result
             
-            # 优化：删除不必要的1秒等待
+            # [2026-03-03] 修复原因：删除多余的页面检测，避免误判导致误操作
+            # 启动流程已经确认到达首页，签到流程紧接着执行，页面不可能变化
+            # 直接信任启动流程的结果，不做任何页面检测和导航
             
-            # 4. 导航到首页准备签到（先检查是否在登录页）
-            concise.action("导航到首页")
-            # log(f"  [签到] 导航到首页...")  # [2026-03-01] 精简日志：删除中间步骤
+            # [2026-03-11] 优化日志：移除控制台DEBUG输出
+            if log_callback:
+                log_callback(f"签到流程开始")
             
-            # 先检测当前页面状态
-            current_page = await self.detector.detect_page(device_id, use_cache=False, detect_elements=False)
+            # 6. 使用固定坐标点击签到按钮（最可靠）
+            # [2026-03-01] 修复原因：优先使用固定坐标，避免YOLO检测错误导致误点
+            checkin_button_pos = self.CHECKIN_BUTTON
+            # log(f"  [签到] 使用固定签到按钮坐标: {checkin_button_pos}")  # [2026-03-01] 精简日志：删除中间步骤
             
-            # 如果当前在登录页，先执行登录
-            if current_page and current_page.state == PageState.LOGIN:
-                log(f"  [签到] ⚠️ 当前在登录页，缓存已失效，需要先登录")
-                concise.action("缓存失效，执行登录")
-                
-                if login_callback and password:
-                    log(f"  [签到] 执行登录流程...")
-                    try:
-                        # 调用登录回调
-                        login_result = await login_callback(device_id, phone, password)
-                        
-                        if login_result and login_result.success:
-                            log(f"  [签到] ✓ 登录成功，继续签到流程")
-                            concise.success("登录成功")
-                            
-                            # 登录后需要处理积分页跳转
-                            await asyncio.sleep(1.0)
-                            
-                            # 检测当前页面
-                            page_result = await self.detector.detect_page(
-                                device_id, use_cache=False, detect_elements=False
-                            )
-                            
-                            if page_result and page_result.state == PageState.POINTS_PAGE:
-                                log(f"  [签到] 检测到积分页，按2次返回键...")
-                                await self.adb.press_back(device_id)
-                                await asyncio.sleep(0.5)
-                                await self.adb.press_back(device_id)
-                                await asyncio.sleep(0.5)
-                                self.detector.clear_cache()
-                            
-                            # 快速签到模式下，缓存失效后需要重新获取签到前余额
-                            if allow_skip_profile:
-                                log(f"  [签到] 快速签到模式：缓存失效后重新获取签到前余额...")
-                                try:
-                                    # 导航到个人页
-                                    concise.action("获取签到前余额")
-                                    nav_success = await self.navigator.navigate_to_profile(device_id)
-                                    
-                                    if nav_success:
-                                        log(f"  [签到] ✓ 已到达个人页")
-                                        
-                                        # 获取完整个人资料
-                                        from .profile_reader import ProfileReader
-                                        profile_reader = ProfileReader(self.adb, self.detector)
-                                        fresh_profile_data = await profile_reader.get_full_profile(device_id)
-                                        
-                                        if fresh_profile_data and fresh_profile_data.get('balance') is not None:
-                                            balance = fresh_profile_data.get('balance')
-                                            log(f"  [签到] ✓ 重新获取到签到前余额: {balance:.2f} 元")
-                                        else:
-                                            log(f"  [签到] ⚠️ 无法获取签到前余额，使用历史数据")
-                                    else:
-                                        log(f"  [签到] ⚠️ 无法导航到个人页，使用历史数据")
-                                except Exception as e:
-                                    log(f"  [签到] ⚠️ 获取签到前余额出错: {e}，使用历史数据")
-                        else:
-                            log(f"  [签到] ❌ 登录失败: {login_result.error_message if login_result else '未知错误'}")
-                            result['message'] = f"登录失败: {login_result.error_message if login_result else '未知错误'}"
-                            result['error_type'] = ErrorType.LOGIN_PASSWORD_ERROR
-                            result['error_message'] = result['message']
-                            result['need_relogin'] = True
-                            return result
-                    except Exception as e:
-                        log(f"  [签到] ❌ 登录过程出错: {str(e)}")
-                        result['message'] = f"登录过程出错: {str(e)}"
-                        result['error_type'] = ErrorType.LOGIN_PASSWORD_ERROR
-                        result['error_message'] = result['message']
-                        result['need_relogin'] = True
-                        return result
-                else:
-                    # 没有提供登录回调或密码，无法登录
-                    log(f"  [签到] ❌ 缓存已失效但未提供登录信息")
-                    result['message'] = "缓存已失效，需要重新登录"
-                    result['error_type'] = ErrorType.CACHE_INVALID
-                    result['error_message'] = result['message']
-                    result['need_relogin'] = True
-                    return result
-            
-            # 导航到首页
-            success = await self.navigator.navigate_to_home(device_id)
-            
-            if not success:
-                result['message'] = "无法导航到首页"
-                result['error_type'] = ErrorType.CANNOT_REACH_CHECKIN  # 无法到达签到页
-                result['error_message'] = result['message']
-                log(f"  [签到] ❌ 无法导航到首页")
-                return result
-            
-            log(f"  [签到] ✓ 已到达首页")
-            
-            # [2026-03-01] 修复：导航到首页后，等待页面稳定再点击签到按钮
-            # 问题：快速签到模式下，启动后立即点击签到按钮，可能页面还在滚动，导致误点到文章
-            # 解决：等待0.5秒让页面稳定，并验证确实在首页
-            await asyncio.sleep(0.5)
-            
-            # 5. 点击前验证确实在首页
-            # log(f"  [签到] 验证当前页面状态...")  # [2026-03-01] 精简日志：删除中间步骤
-            pre_click_result = await self._detect_page_cached(device_id, use_cache=False, cache_key="pre_click")
-            if pre_click_result:
-                # log(f"  [签到] 当前页面: {pre_click_result.state.value}")  # [2026-03-01] 精简日志：删除中间步骤
-                
-                # 如果不在首页，先返回首页
-                if pre_click_result.state != PageState.HOME:
-                    log(f"  [签到] ⚠️ 不在首页（当前: {pre_click_result.state.value}），重新导航...")
-                    
-                    # 如果在文章页、搜索页、分类页，按返回键或点击首页按钮
-                    if pre_click_result.state in [PageState.ARTICLE, PageState.SEARCH]:
-                        await self.adb.press_back(device_id)
-                    elif pre_click_result.state == PageState.CATEGORY:
-                        await self.adb.tap(device_id, 90, 920)  # 点击首页按钮
-                    else:
-                        # 其他页面，尝试导航到首页
-                        success = await self.navigator.navigate_to_home(device_id)
-                        if not success:
-                            result['message'] = "验证页面时发现不在首页，且无法返回首页"
-                            result['error_type'] = ErrorType.CANNOT_REACH_CHECKIN
-                            result['error_message'] = result['message']
-                            log(f"  [签到] ❌ {result['message']}")
-                            return result
-                    
-                    # 等待返回首页
-                    await asyncio.sleep(0.5)
-                    
-                    # 再次验证
-                    verify_result = await self._detect_page_cached(device_id, use_cache=False, cache_key="verify")
-                    if verify_result and verify_result.state == PageState.HOME:
-                        log(f"  [签到] ✓ 已返回首页")
-                    else:
-                        result['message'] = "返回首页后验证失败"
-                        result['error_type'] = ErrorType.CANNOT_REACH_CHECKIN
-                        result['error_message'] = result['message']
-                        log(f"  [签到] ❌ {result['message']}")
-                        return result
-            
-            # 6. 使用YOLO或OCR识别签到按钮位置
-            # log(f"  [签到] 查找签到按钮...")  # [2026-03-01] 精简日志：删除中间步骤
-            checkin_button_pos = await self._find_checkin_button(device_id)
-            if not checkin_button_pos:
-                checkin_button_pos = self.CHECKIN_BUTTON
-                # log(f"  [签到] 使用默认签到按钮坐标: {checkin_button_pos}")  # [2026-03-01] 精简日志：删除中间步骤
-            else:
-                pass
-                # log(f"  [签到] YOLO检测到按钮: {checkin_button_pos}")  # [2026-03-01] 精简日志：删除中间步骤
-            
-            # 7. 点击签到按钮进入签到页面
+            # 7. 点击签到按钮进入签到页面（带重试机制）
+            # [2026-03-01] 修复原因：添加点击验证和重试机制，解决点击失败问题
             concise.action("点击每日签到")
-            # log(f"  [签到] 点击签到按钮 ({checkin_button_pos[0]}, {checkin_button_pos[1]})...")  # [2026-03-01] 精简日志：删除中间步骤
             
-            # [2026-02-21] 删除学习器：直接点击签到按钮
-            await self.adb.tap(device_id, checkin_button_pos[0], checkin_button_pos[1])
+            # [2026-03-11] 优化日志：移除控制台DEBUG输出
             
-            # 点击后短暂等待，让页面开始变化
-            await asyncio.sleep(0.3)
+            page_result = None
+            max_click_attempts = 3  # 最多尝试3次点击
             
-            # 使用 SmartWaiter 混合检测模式（更快更准）
-            # log(f"  [签到] 等待签到页面加载...")  # [2026-03-01] 精简日志：删除中间步骤
-            from .performance.smart_waiter import SmartWaiter
-            waiter = SmartWaiter()
-            page_result = await waiter.wait_for_page_change(
-                device_id,
-                self.detector,
-                [PageState.CHECKIN, PageState.CHECKIN_POPUP, PageState.WARMTIP, PageState.LOGIN],
-                max_wait=5.0,  # 最多等待5秒
-                poll_interval=0.2,  # 优化：高频轮询（感知哈希很快）
-                log_callback=None,  # [2026-03-01] 禁用SmartWaiter详细日志，减少冗余
-                stability_check=False,  # 检测到即返回
-                adb_bridge=self.adb,  # 传递ADB用于截图
-                detection_mode="hybrid"  # 使用混合检测：感知哈希+深度学习
-            )
-            
-            if not page_result:
-                # [2026-03-01] 修复：SmartWaiter超时后直接检测当前页面，不再等待15秒
-                log(f"  [签到] SmartWaiter 超时，直接检测当前页面...")
-                page_result = await self._detect_page_cached(device_id, use_cache=False, cache_key="page_enter")
+            for click_attempt in range(max_click_attempts):
+                if click_attempt > 0:
+                    log(f"  [签到] 第 {click_attempt + 1} 次尝试点击签到按钮...")
+                
+                # [2026-03-11] 优化日志：移除控制台DEBUG输出
+                
+                # 点击签到按钮
+                await self.adb.tap(device_id, checkin_button_pos[0], checkin_button_pos[1])
+                
+                # [2026-03-11] 优化日志：移除控制台DEBUG输出
+                
+                # [2026-03-01] 修复：点击后先等待0.5秒让页面开始加载，再调用智能等待器
+                # 智能等待器会立即开始检测，如果页面还没开始加载，第一次检测会失败
+                await asyncio.sleep(0.5)
+                
+                # [2026-03-01] 修复：使用智能等待器等待页面变化，而不是固定等待
+                # 智能等待器会持续检测，一旦页面变化就立即返回（内置15秒超时）
+                # [2026-03-29] 修复：加入LOGIN页面，避免跳到登录页时超时导致漏检
+                page_result = await wait_for_page(
+                    device_id,
+                    self.page_classifier,
+                    [PageState.CHECKIN, PageState.CHECKIN_POPUP, PageState.WARMTIP, PageState.LOGIN],
+                    log_callback=None
+                )
+                
+                # 如果智能等待器检测到页面变化，说明点击成功
+                if page_result and page_result.state != PageState.HOME:
+                    if click_attempt > 0:
+                        log(f"  [签到] ✓ 点击成功，页面已变化到: {page_result.state.value}")
+                    break
+                
+                # 如果智能等待器超时（还是首页），说明点击失败
+                if click_attempt < max_click_attempts - 1:
+                    log(f"  [签到] ⚠️ 点击后页面未变化，准备重试...")
+                    await asyncio.sleep(0.3)  # 短暂等待后重试
+                else:
+                    log(f"  [签到] ❌ 点击 {max_click_attempts} 次后页面仍未变化")
             
             # [2026-03-01] 精简日志：只输出页面状态，不输出置信度
             # if page_result:
@@ -673,6 +551,8 @@ class DailyCheckin:
             #     log(f"  [签到] ⚠️ 页面检测失败，无法获取页面状态")  # [2026-03-01] 精简日志：删除中间步骤
             
             # 6.1 进入签到页面后先截图
+            # [2026-03-29] 修复：截图前等待0.5秒，避免截图操作干扰触摸事件导致上划
+            await asyncio.sleep(0.5)
             # log(f"  [签到] 保存进入页面截图...")  # [2026-03-01] 精简日志：删除中间步骤
             page_enter_screenshot = await self._save_screenshot(device_id, phone, "page_enter")
             if page_enter_screenshot:
@@ -696,9 +576,10 @@ class DailyCheckin:
                             # 登录后需要处理积分页跳转（优化：减少等待时间）
                             await asyncio.sleep(1.0)  # 优化：2秒→1秒
                             
+                            # [2026-03-02] 修复原因：使用签到专用模型检测页面
                             # 检测当前页面
-                            page_result = await self.detector.detect_page(
-                                device_id, use_cache=False, detect_elements=False
+                            page_result = await self.page_classifier.detect_page(
+                                device_id, use_cache=False
                             )
                             
                             if page_result and page_result.state == PageState.POINTS_PAGE:
@@ -709,52 +590,25 @@ class DailyCheckin:
                                 await asyncio.sleep(0.5)  # 优化：1秒→0.5秒
                                 self.detector.clear_cache()
                             
+                            # [2026-03-03] 修复原因：从数据库获取签到前余额，不需要导航到个人页
                             # 快速签到模式下，缓存失效后需要重新获取签到前余额
                             if allow_skip_profile:
-                                log(f"  [签到] 快速签到模式：缓存失效后重新获取签到前余额...")
                                 try:
-                                    # 导航到个人页
-                                    concise.action("获取签到前余额")
-                                    nav_success = await self.navigator.navigate_to_profile(device_id)
-                                    
-                                    if nav_success:
-                                        log(f"  [签到] ✓ 已到达个人页")
-                                        
-                                        # 获取完整个人资料
-                                        from .profile_reader import ProfileReader
-                                        profile_reader = ProfileReader(self.adb, self.detector)
-                                        fresh_profile_data = await profile_reader.get_full_profile(device_id)
-                                        
-                                        if fresh_profile_data and fresh_profile_data.get('balance') is not None:
-                                            balance = fresh_profile_data.get('balance')
-                                            log(f"  [签到] ✓ 重新获取到签到前余额: {balance:.2f} 元")
-                                        else:
-                                            log(f"  [签到] ⚠️ 无法获取签到前余额，使用历史数据")
+                                    # 从数据库获取最新余额
+                                    balance_record = self.db.get_latest_balance(account_name)
+                                    if balance_record:
+                                        balance = balance_record['balance']
                                     else:
-                                        log(f"  [签到] ⚠️ 无法导航到个人页，使用历史数据")
+                                        balance = 0.0
                                 except Exception as e:
-                                    log(f"  [签到] ⚠️ 获取签到前余额出错: {e}，使用历史数据")
+                                    balance = 0.0
                             
-                            # 导航到首页
-                            log(f"  [签到] 导航到首页...")
-                            success = await self.navigator.navigate_to_home(device_id)
-                            
-                            if not success:
-                                result['message'] = "登录后无法导航到首页"
-                                result['error_type'] = ErrorType.CANNOT_REACH_CHECKIN
-                                result['error_message'] = result['message']
-                                return result
-                            
-                            # 重新点击签到按钮
-                            log(f"  [签到] 重新点击签到按钮...")
-                            await self.adb.tap(device_id, checkin_button_pos[0], checkin_button_pos[1])
-                            await asyncio.sleep(0.3)
-                            
-                            # 重新等待签到页面（使用全局 wait_for_page，15秒超时）
-                            log(f"  [签到] 等待进入签到页...")
+                            # [2026-03-29] 修复：签到页跳登录页，登录成功后app会自动返回签到页
+                            # 不需要导航首页再重新点击签到，直接等待签到页出现即可
+                            log(f"  [签到] 等待返回签到页...")
                             page_result = await wait_for_page(
                                 device_id,
-                                self.detector,
+                                self.page_classifier,
                                 [PageState.CHECKIN, PageState.CHECKIN_POPUP, PageState.WARMTIP],
                                 log_callback=lambda msg: log(f"  [等待] {msg}")
                             )
@@ -811,10 +665,11 @@ class DailyCheckin:
                 self.detector.clear_cache(device_id)
                 
                 # 等待返回首页（检测到立即返回，15秒只是超时保护）
+                # [2026-03-01] 修复：使用签到专用检测器
                 log(f"  [签到] 等待返回首页...")
                 home_result = await wait_for_page(
                     device_id,
-                    self.detector,
+                    self.page_classifier,
                     [PageState.HOME],
                     log_callback=lambda msg: log(f"  [等待] {msg}")
                 )
@@ -836,10 +691,11 @@ class DailyCheckin:
                 await asyncio.sleep(0.3)  # 优化：1秒→0.3秒
                 
                 # 等待进入签到页（检测到立即返回，15秒只是超时保护）
+                # [2026-03-01] 修复：使用签到专用检测器
                 log(f"  [签到] 等待进入签到页...")
                 page_result = await wait_for_page(
                     device_id,
-                    self.detector,
+                    self.page_classifier,
                     [PageState.CHECKIN, PageState.CHECKIN_POPUP, PageState.WARMTIP],
                     log_callback=lambda msg: log(f"  [等待] {msg}")
                 )
@@ -847,6 +703,9 @@ class DailyCheckin:
             # [2026-03-01] 修复：当检测到CHECKIN_POPUP或其他非签到页状态时，用OCR验证是否是签到页被误识别
             if page_result and page_result.state not in [PageState.CHECKIN, PageState.LOGIN]:
                 log(f"  [签到] 检测到非签到页状态({page_result.state.value})，使用OCR验证是否误识别...")
+                
+                # [2026-03-29] 修复：截图前等待0.5秒，避免截图操作干扰触摸事件导致上划
+                await asyncio.sleep(0.5)
                 
                 # 使用OCR验证
                 try:
@@ -857,20 +716,16 @@ class DailyCheckin:
                         if self._ocr_pool:
                             ocr_result = await self._ocr_pool.recognize(image, timeout=3.0)
                             
-                            if ocr_result and ocr_result.texts:
+                            # [2026-03-05] 修复数组比较错误：检查 texts 是否为 None 并且长度大于 0
+                            if ocr_result and ocr_result.texts is not None and len(ocr_result.texts) > 0:
                                 all_text = ' '.join(ocr_result.texts)
                                 
                                 # 检查是否是签到页特征（有"立即签到"但没有"恭喜"/"签到成功"）
                                 has_checkin_button = '立即签到' in all_text or '每日签到' in all_text or '每天签到' in all_text
                                 has_popup_text = '恭喜' in all_text or '获得' in all_text or '签到成功' in all_text
                                 
-                                log(f"  [签到] OCR识别结果:")
-                                log(f"    - 签到按钮关键词: {'找到' if has_checkin_button else '未找到'}")
-                                log(f"    - 弹窗关键词: {'找到' if has_popup_text else '未找到'}")
-                                
                                 if has_checkin_button and not has_popup_text:
                                     log(f"  [签到] ✓ OCR验证：这是签到页（被误识别为{page_result.state.value}）")
-                                    log(f"    - 手动修正页面状态为签到页")
                                     
                                     # 手动修正页面状态
                                     page_result.state = PageState.CHECKIN
@@ -909,9 +764,8 @@ class DailyCheckin:
                         break
                 
                 if initial_info and (initial_info['total_times'] is not None or initial_info['daily_remaining_times'] is not None):
-                    log(f"  [签到] ✓ OCR 识别成功")
-                    log(f"    - 总次数: {initial_info['total_times']}")
-                    log(f"    - 剩余次数: {initial_info['daily_remaining_times']}")
+                    # [2026-03-11] 精简日志：直接显示次数，不显示"已获取次数"
+                    log(f"  [签到] 总次数: {initial_info['total_times']}, 今日次数: {initial_info['daily_remaining_times']}")
                     
                     result['total_times'] = initial_info['total_times']
                     result['remaining_times'] = initial_info['daily_remaining_times']
@@ -921,6 +775,34 @@ class DailyCheckin:
                         concise.action(f"总次数: {initial_info['total_times']}")
                     if initial_info['daily_remaining_times'] is not None:
                         concise.action(f"当日剩余: {initial_info['daily_remaining_times']}")
+                    
+                    # [2026-03-11] 修改原因：快速签到模式下，今日次数为0时直接返回首页，不执行签到循环
+                    skip_checkin_due_to_zero_times = False
+                    if allow_skip_profile and initial_info['daily_remaining_times'] is not None and initial_info['daily_remaining_times'] == 0:
+                        log(f"  [签到] 快速签到模式：今日次数为0，无需点击，直接返回首页")
+                        concise.action("今日次数为0，跳过签到")
+                        
+                        # 直接返回首页
+                        await self.adb.press_back(device_id)
+                        await asyncio.sleep(0.5)
+                        
+                        # 等待返回首页
+                        try:
+                            await asyncio.wait_for(
+                                wait_for_page(
+                                    device_id,
+                                    self.page_classifier,
+                                    [PageState.HOME],
+                                    log_callback=None
+                                ),
+                                timeout=5.0
+                            )
+                            log(f"  [签到] ✓ 已返回首页")
+                        except asyncio.TimeoutError:
+                            log(f"  [签到] ⚠️ 返回首页超时，继续执行...")
+                        
+                        # 设置跳过标志
+                        skip_checkin_due_to_zero_times = True
                 else:
                     log(f"  [签到] ⚠️ OCR 识别失败（已重试3次），继续执行签到（无法显示次数信息）")
                     if initial_info:
@@ -932,22 +814,27 @@ class DailyCheckin:
                         result['screenshots'].append(fail_screenshot)
                         log(f"    - 已保存失败截图: {fail_screenshot}")
             else:
-                # 无法确认是否进入签到页面
-                log(f"  [签到] ❌ 无法确认是否进入签到页面")
-                log(f"  [签到] 当前页面状态: {page_result.state.value if page_result else 'UNKNOWN'}")
-                if page_result and hasattr(page_result, 'details'):
-                    log(f"  [签到] 页面检测详情: {page_result.details}")
-                
-                # 保存当前页面截图用于调试
-                debug_screenshot = await self._save_screenshot(device_id, phone, "checkin_page_failed")
-                if debug_screenshot:
-                    result['screenshots'].append(debug_screenshot)
-                    log(f"  [签到] 已保存调试截图: {debug_screenshot}")
-                
-                result['message'] = "进入签到页面失败"
-                result['error_type'] = ErrorType.CANNOT_REACH_CHECKIN  # 无法到达签到页
-                result['error_message'] = result['message']
-                return result
+                # [2026-03-29] 修复：先检查是否跳到了登录页，如果是则执行登录流程
+                if page_result and page_result.state == PageState.LOGIN:
+                    # 走到6.2的登录处理逻辑（不重复写，直接fall-through到下面的检测）
+                    pass
+                else:
+                    # 无法确认是否进入签到页面
+                    log(f"  [签到] ❌ 无法确认是否进入签到页面")
+                    log(f"  [签到] 当前页面状态: {page_result.state.value if page_result else 'UNKNOWN'}")
+                    if page_result and hasattr(page_result, 'details'):
+                        log(f"  [签到] 页面检测详情: {page_result.details}")
+                    
+                    # 保存当前页面截图用于调试
+                    debug_screenshot = await self._save_screenshot(device_id, phone, "checkin_page_failed")
+                    if debug_screenshot:
+                        result['screenshots'].append(debug_screenshot)
+                        log(f"  [签到] 已保存调试截图: {debug_screenshot}")
+                    
+                    result['message'] = "进入签到页面失败"
+                    result['error_type'] = ErrorType.CANNOT_REACH_CHECKIN  # 无法到达签到页
+                    result['error_message'] = result['message']
+                    return result
             
             # 8. 循环签到直到次数用完
             # log(f"\n  [签到] 开始循环签到...")  # [2026-03-01] 精简日志：删除中间步骤
@@ -971,20 +858,47 @@ class DailyCheckin:
             # 优化：第一次循环时，使用已知的页面状态（从 wait_for_page 返回）
             current_state = page_result.state if page_result else PageState.UNKNOWN
             
+            # [2026-03-11] 修复原因：快速签到模式下减少页面验证，提升性能
+            quick_mode_optimization = allow_skip_profile  # 快速签到模式标志
+            
             for attempt in range(max_attempts):
+                # [2026-03-11] 修改原因：快速签到模式下，如果今日次数为0，直接跳出循环
+                if 'skip_checkin_due_to_zero_times' in locals() and skip_checkin_due_to_zero_times:
+                    # 设置签到结果（已签到完成，次数为0）
+                    result['success'] = True
+                    result['already_checked'] = True
+                    result['remaining_times'] = 0
+                    result['checkin_count'] = 0
+                    result['reward_amount'] = 0.0
+                    result['message'] = "今日签到次数为0，已跳过签到流程"
+                    exit_reason = "remaining_zero"
+                    exit_page = PageState.HOME
+                    break
+                
                 # 5.0 每次循环前验证仍在签到页面
                 # 优化：第一次循环跳过验证（已经知道页面状态）
-                # 优化：快速签到模式下跳过验证（刚从首页重新进入签到页）
-                if attempt > 0 and not skip_page_verification:
+                # 优化：快速签到模式下大幅减少验证频率（每3次循环验证1次）
+                should_verify = attempt > 0 and not skip_page_verification
+                if quick_mode_optimization and should_verify:
+                    # 快速签到模式：每3次循环才验证1次页面状态
+                    should_verify = (attempt % 3 == 0)
+                
+                if should_verify:
                     # log(f"  [签到循环 {attempt+1}/{max_attempts}] 验证页面状态...")  # [2026-03-01] 精简日志：删除中间步骤
                     
-                    # 使用缓存的页面检测（循环中页面状态变化频繁，使用较短的TTL）
-                    page_result_loop = await self._detect_page_cached(
-                        device_id, 
-                        use_cache=True, 
-                        cache_key=f"loop_{attempt}",
-                        ttl=0.3  # 循环中使用更短的缓存时间
-                    )
+                    # [2026-03-11] 修复原因：快速签到模式下使用缓存检测，提升性能
+                    if quick_mode_optimization:
+                        # 快速签到模式：使用缓存检测，减少深度学习推理
+                        page_result_loop = await self._detect_page_cached(
+                            device_id, 
+                            use_cache=True,  # 使用缓存
+                            cache_key=f"quick_checkin_{attempt}",
+                            ttl=2.0  # 缓存2秒
+                        )
+                    else:
+                        # 完整模式：正常检测
+                        page_result_loop = await self.page_classifier.detect_page(device_id, use_cache=False)
+                    
                     current_state = page_result_loop.state if page_result_loop else PageState.UNKNOWN
                 else:
                     # 第一次循环：使用已知的页面状态
@@ -1006,7 +920,8 @@ class DailyCheckin:
                             image = Image.open(BytesIO(screenshot_data))
                             try:
                                 ocr_result = await self._ocr_pool.recognize(image, timeout=2.0)
-                                if ocr_result and ocr_result.texts:
+                                # [2026-03-05] 修复数组比较错误：检查 texts 是否为 None 并且长度大于 0
+                                if ocr_result and ocr_result.texts is not None and len(ocr_result.texts) > 0:
                                     text_str = ''.join(ocr_result.texts)
                                     if "温馨提示" in text_str or ("提示" in text_str and "次数" in text_str):
                                         is_warmtip = True
@@ -1018,9 +933,10 @@ class DailyCheckin:
                         if is_warmtip:
                             log(f"  [签到] 关闭温馨提示弹窗并返回首页...")
                             await self.adb.press_back(device_id)
+                            # [2026-03-01] 修复：使用签到专用检测器
                             await wait_for_page(
                                 device_id,
-                                self.detector,
+                                self.page_classifier,
                                 [PageState.HOME],
                                 log_callback=lambda msg: log(f"    [智能等待] {msg}")
                             )
@@ -1038,9 +954,8 @@ class DailyCheckin:
                         if close_success:
                             log(f"  [签到] ✓ 弹窗已关闭，等待页面刷新...")
                             await asyncio.sleep(0.5)  # 优化：减少等待时间从2秒到0.5秒
-                            # 重新验证页面状态（失效缓存）
-                            self._page_cache.invalidate(device_id, f"loop_{attempt}")
-                            page_result_loop = await self._detect_page_cached(device_id, use_cache=False, cache_key=f"after_close_{attempt}")
+                            # [2026-03-01] 修复：使用签到专用检测器
+                            page_result_loop = await self.page_classifier.detect_page(device_id, use_cache=False)
                             current_state = page_result_loop.state if page_result_loop else PageState.UNKNOWN
                             if current_state == PageState.CHECKIN:
                                 log(f"  [签到] ✓ 已返回签到页面，继续下一轮循环")
@@ -1052,8 +967,8 @@ class DailyCheckin:
                                     log(f"  [签到] 再次尝试关闭弹窗...")
                                     await self.adb.press_back(device_id)
                                     await asyncio.sleep(0.5)  # 优化：减少等待时间
-                                    self._page_cache.invalidate(device_id, f"after_close_{attempt}")
-                                    page_result_loop = await self._detect_page_cached(device_id, use_cache=False, cache_key=f"retry_close_{attempt}")
+                                    # [2026-03-01] 修复：使用签到专用检测器
+                                    page_result_loop = await self.page_classifier.detect_page(device_id, use_cache=False)
                                     current_state = page_result_loop.state if page_result_loop else PageState.UNKNOWN
                                     if current_state == PageState.CHECKIN:
                                         log(f"  [签到] ✓ 已返回签到页面，继续下一轮循环")
@@ -1062,8 +977,8 @@ class DailyCheckin:
                             log(f"  [签到] ⚠️ 关闭弹窗失败，尝试按返回键...")
                             await self.adb.press_back(device_id)
                             await asyncio.sleep(0.5)  # 优化：减少等待时间
-                            self._page_cache.invalidate(device_id, f"loop_{attempt}")
-                            page_result_loop = await self._detect_page_cached(device_id, use_cache=False, cache_key=f"fallback_{attempt}")
+                            # [2026-03-01] 修复：使用签到专用检测器
+                            page_result_loop = await self.page_classifier.detect_page(device_id, use_cache=False)
                             current_state = page_result_loop.state if page_result_loop else PageState.UNKNOWN
                             if current_state == PageState.CHECKIN:
                                 log(f"  [签到] ✓ 已返回签到页面，继续下一轮循环")
@@ -1115,34 +1030,9 @@ class DailyCheckin:
                 #     else:
                 #         log(f"  [签到 {attempt + 1}] 剩余次数: {remaining_times if remaining_times is not None else '未知'}，继续签到...")  # [2026-03-01] 精简日志：删除中间步骤
                 
-                # 5.4 执行签到（每次都重新检测按钮位置，不使用缓存）
-                checkin_button = None
-                try:
-                    detection_result = await self._detect_page_cached(
-                        device_id,
-                        use_cache=False,  # 不使用缓存（按钮位置会变化）
-                        detect_elements=True,
-                        cache_key=f"button_detect_{attempt}",  # 每次使用不同的key
-                        ttl=0  # 不缓存
-                    )
-                    
-                    if detection_result and detection_result.elements:
-                        for element in detection_result.elements:
-                            if '签到按钮' in element.class_name or '签到' in element.class_name:
-                                checkin_button = element.center
-                                break
-                    
-                    if checkin_button is None:
-                        # 智能检测器未检测到按钮，使用默认坐标
-                        pass
-                except Exception as e:
-                    # 智能检测器检测失败，使用默认坐标
-                    pass
-                
-                # 如果智能检测器失败，使用默认签到按钮坐标
-                # [2026-03-01] 修正：根据OCR识别结果，y坐标从800调整为888
-                if checkin_button is None:
-                    checkin_button = (270, 888)
+                # [2026-03-01] 修复：直接使用固定坐标，不使用YOLO检测器
+                # 5.4 执行签到（使用固定按钮坐标）
+                checkin_button = (270, 888)
                 
                 x, y = checkin_button
                 
@@ -1155,14 +1045,16 @@ class DailyCheckin:
                 # 5.4.2 点击签到按钮
                 # log(f"  [签到 {attempt + 1}] 点击签到按钮 ({x}, {y})...")  # [2026-03-01] 精简日志：删除中间步骤
                 
-                # 添加简洁日志：点击立即签到
+                # [2026-03-01] 精简日志：第一次显示"开始签到"
                 if attempt == 0:
-                    concise.action("开始签到")
-                # concise.action(f"第{attempt + 1}次签到")  # [2026-03-01] 精简日志：删除中间步骤
+                    log(f"  [签到] 开始签到")
                 
                 # 使用智能按钮点击器（自动学习坐标）
                 # [2026-02-21] 删除学习器：直接点击签到按钮
                 await self.adb.tap(device_id, x, y)
+                
+                # [2026-03-29] 修复：点击后等待0.3秒，避免截图操作干扰触摸事件导致上划手势
+                await asyncio.sleep(0.3)
                 
                 # 5.4.3 优化：根据当日剩余次数决定是否等待弹窗
                 # 
@@ -1190,10 +1082,11 @@ class DailyCheckin:
                     await self.adb.press_back(device_id)
                     await asyncio.sleep(0.3)
                     
+                    # [2026-03-01] 修复：使用签到专用检测器
                     # 等待返回首页
                     await wait_for_page(
                         device_id,
-                        self.detector,
+                        self.page_classifier,
                         [PageState.HOME],
                         log_callback=None
                     )
@@ -1207,128 +1100,21 @@ class DailyCheckin:
                     # 点击签到按钮
                     await self.adb.tap(device_id, checkin_button_pos[0], checkin_button_pos[1])
                     
-                    # 等待0.8秒让页面加载
-                    await asyncio.sleep(0.8)
+                    # [2026-03-01] 修复：使用智能等待器等待进入签到页，而不是固定等待+OCR
+                    # 智能等待器会持续检测，一旦检测到签到页就立即返回（内置15秒超时）
+                    page_result_fast = await wait_for_page(
+                        device_id,
+                        self.page_classifier,
+                        [PageState.CHECKIN],
+                        log_callback=None
+                    )
                     
-                    # [2026-03-01] 用OCR查找"立即签到"按钮验证是否在签到页
-                    # log(f"  [签到 {attempt + 1}] 查找'立即签到'按钮验证页面...")  # [2026-03-01] 精简日志：删除中间步骤
-                    page_verified = False
-                    
-                    try:
-                        screenshot_data = await self.adb.screencap(device_id)
-                        if screenshot_data and HAS_PIL and self._ocr_pool:
-                            image = Image.open(BytesIO(screenshot_data))
-                            ocr_result = await self._ocr_pool.recognize(image, timeout=3.0)
-                            
-                            if ocr_result and ocr_result.texts:
-                                # 查找"立即签到"按钮
-                                for text in ocr_result.texts:
-                                    if '立即签到' in text:
-                                        log(f"  [签到 {attempt + 1}] ✓ 找到'立即签到'按钮，已进入签到页")
-                                        page_verified = True
-                                        break
-                                
-                                # 如果找不到"立即签到"按钮，识别当前页面并处理
-                                if not page_verified:
-                                    log(f"  [签到 {attempt + 1}] ❌ 未找到'立即签到'按钮，识别当前页面...")
-                                    
-                                    # 识别当前页面状态
-                                    current_page = await self.detector.detect_page(device_id, use_cache=False, detect_elements=False)
-                                    
-                                    if current_page:
-                                        log(f"  [签到 {attempt + 1}] 当前页面: {current_page.state.value}")
-                                        
-                                        # 根据不同页面做处理
-                                        if current_page.state == PageState.HOME:
-                                            # 还在首页，可能点击失败，重试一次
-                                            log(f"  [签到 {attempt + 1}] 还在首页，重试点击签到按钮...")
-                                            await self.adb.tap(device_id, checkin_button_pos[0], checkin_button_pos[1])
-                                            await asyncio.sleep(0.8)
-                                            
-                                            # 再次验证
-                                            screenshot_data2 = await self.adb.screencap(device_id)
-                                            if screenshot_data2:
-                                                image2 = Image.open(BytesIO(screenshot_data2))
-                                                ocr_result2 = await self._ocr_pool.recognize(image2, timeout=3.0)
-                                                
-                                                if ocr_result2 and ocr_result2.texts:
-                                                    for text in ocr_result2.texts:
-                                                        if '立即签到' in text:
-                                                            log(f"  [签到 {attempt + 1}] ✓ 重试成功，找到'立即签到'按钮")
-                                                            page_verified = True
-                                                            break
-                                            
-                                            if not page_verified:
-                                                log(f"  [签到 {attempt + 1}] ❌ 重试失败，终止签到")
-                                                result['message'] = "快速签到模式：重试后仍无法进入签到页"
-                                                result['error_type'] = ErrorType.CHECKIN_FAILED
-                                                result['error_message'] = result['message']
-                                        
-                                        elif current_page.state in [PageState.ARTICLE, PageState.SEARCH, PageState.CATEGORY]:
-                                            # 误点到其他页面，返回首页重试
-                                            log(f"  [签到 {attempt + 1}] 误点到{current_page.state.value}，返回首页重试...")
-                                            
-                                            # 返回首页
-                                            if current_page.state == PageState.CATEGORY:
-                                                await self.adb.tap(device_id, 90, 920)  # 点击首页按钮
-                                            else:
-                                                await self.adb.press_back(device_id)  # 按返回键
-                                            
-                                            await asyncio.sleep(0.5)
-                                            
-                                            # 等待返回首页
-                                            await asyncio.sleep(0.5)
-                                            
-                                            # 重新点击签到按钮
-                                            log(f"  [签到 {attempt + 1}] 重新点击签到按钮...")
-                                            await self.adb.tap(device_id, checkin_button_pos[0], checkin_button_pos[1])
-                                            await asyncio.sleep(0.8)
-                                            
-                                            # 再次验证
-                                            screenshot_data2 = await self.adb.screencap(device_id)
-                                            if screenshot_data2:
-                                                image2 = Image.open(BytesIO(screenshot_data2))
-                                                ocr_result2 = await self._ocr_pool.recognize(image2, timeout=3.0)
-                                                
-                                                if ocr_result2 and ocr_result2.texts:
-                                                    for text in ocr_result2.texts:
-                                                        if '立即签到' in text:
-                                                            log(f"  [签到 {attempt + 1}] ✓ 重试成功，找到'立即签到'按钮")
-                                                            page_verified = True
-                                                            break
-                                            
-                                            if not page_verified:
-                                                log(f"  [签到 {attempt + 1}] ❌ 重试失败，终止签到")
-                                                result['message'] = "快速签到模式：重试后仍无法进入签到页"
-                                                result['error_type'] = ErrorType.CHECKIN_FAILED
-                                                result['error_message'] = result['message']
-                                        
-                                        else:
-                                            # 其他未知页面，终止签到
-                                            log(f"  [签到 {attempt + 1}] ❌ 未知页面状态，终止签到")
-                                            result['message'] = f"快速签到模式：进入未知页面({current_page.state.value})"
-                                            result['error_type'] = ErrorType.CHECKIN_FAILED
-                                            result['error_message'] = result['message']
-                                    else:
-                                        log(f"  [签到 {attempt + 1}] ❌ 无法识别当前页面，终止签到")
-                                        result['message'] = "快速签到模式：无法识别当前页面"
-                                        result['error_type'] = ErrorType.CHECKIN_FAILED
-                                        result['error_message'] = result['message']
-                            else:
-                                log(f"  [签到 {attempt + 1}] ❌ OCR识别失败")
-                                result['message'] = "快速签到模式：OCR识别失败"
-                                result['error_type'] = ErrorType.CHECKIN_FAILED
-                                result['error_message'] = result['message']
-                        else:
-                            log(f"  [签到 {attempt + 1}] ❌ 截图或OCR不可用")
-                            result['message'] = "快速签到模式：截图或OCR不可用"
-                            result['error_type'] = ErrorType.CHECKIN_FAILED
-                            result['error_message'] = result['message']
-                    except Exception as e:
-                        log(f"  [签到 {attempt + 1}] ❌ OCR验证出错: {e}")
-                        result['message'] = f"快速签到模式：OCR验证出错: {e}"
-                        result['error_type'] = ErrorType.CHECKIN_FAILED
-                        result['error_message'] = result['message']
+                    # 验证是否成功进入签到页
+                    if page_result_fast and page_result_fast.state == PageState.CHECKIN:
+                        page_verified = True
+                    else:
+                        page_verified = False
+                        log(f"  [签到 {attempt + 1}] ⚠️ 未能进入签到页，当前状态: {page_result_fast.state.value if page_result_fast else 'unknown'}")
                     
                     # 如果未验证成功，终止签到
                     if not page_verified:
@@ -1344,7 +1130,8 @@ class DailyCheckin:
                     if result.get('remaining_times') is not None:
                         result['remaining_times'] -= 1
                     
-                    log(f"  [签到] ✓ 第{attempt + 1}次签到完成")  # [2026-03-01] 精简日志：只保留关键结果
+                    # [2026-03-01] 精简日志：显示"完成第 X 次"
+                    log(f"  [签到] 完成第 {checkin_count} 次")
                     
                     # 设置跳过页面验证标志（下一次循环直接点击签到按钮）
                     skip_page_verification = True
@@ -1365,16 +1152,18 @@ class DailyCheckin:
                 is_warmtip = False  # 是否是温馨提示弹窗
                 
                 # 使用智能等待器等待弹窗出现（签到弹窗或温馨提示）
+                # [2026-03-01] 修复：使用签到专用检测器，YOLO检测器没有训练过这些类别
+                # [2026-03-01] 精简日志：禁用智能等待器的日志输出
                 wait_result = await wait_for_page(
                     device_id,
-                    self.detector,
+                    self.page_classifier,
                     [PageState.CHECKIN_POPUP, PageState.WARMTIP],
-                    log_callback=lambda msg: log(f"    [智能等待] {msg}")
+                    log_callback=None
                 )
                 
                 # 优先使用智能等待器的结果
                 if wait_result:
-                    log(f"  [签到] 智能等待器检测到: {wait_result.state.value}")  # [2026-03-01] 删除置信度，减少冗余
+                    # [2026-03-01] 精简日志：删除"智能等待器检测到"日志
                     
                     if wait_result.state == PageState.CHECKIN_POPUP:
                         # 检测到签到弹窗，但需要用OCR验证是否是温馨提示（页面分类器可能误判）
@@ -1384,7 +1173,8 @@ class DailyCheckin:
                             image = Image.open(BytesIO(screenshot_data))
                             try:
                                 ocr_result = await self._ocr_pool.recognize(image, timeout=TimeoutsConfig.OCR_TIMEOUT_SHORT)
-                                if ocr_result and ocr_result.texts:
+                                # [2026-03-05] 修复数组比较错误：检查 texts 是否为 None 并且长度大于 0
+                                if ocr_result and ocr_result.texts is not None and len(ocr_result.texts) > 0:
                                     text_str = ''.join(ocr_result.texts)
                                     
                                     # 先判断是否是温馨提示
@@ -1405,7 +1195,7 @@ class DailyCheckin:
                     elif wait_result.state == PageState.WARMTIP:
                         popup_detected = True
                         is_warmtip = True
-                        log(f"  [签到] ✓ 检测到温馨提示弹窗")
+                        # [2026-03-01] 精简日志：删除"检测到温馨提示弹窗"日志（后面有更详细的）
                 else:
                     # [2026-03-01] 优化：SmartWaiter超时后直接使用OCR验证,不使用页面分类器
                     # 智能等待器超时，使用OCR验证当前页面状态
@@ -1416,7 +1206,8 @@ class DailyCheckin:
                         image = Image.open(BytesIO(screenshot_data))
                         try:
                             ocr_result = await self._ocr_pool.recognize(image, timeout=TimeoutsConfig.OCR_TIMEOUT_SHORT)
-                            if ocr_result and ocr_result.texts:
+                            # [2026-03-05] 修复数组比较错误：检查 texts 是否为 None 并且长度大于 0
+                            if ocr_result and ocr_result.texts is not None and len(ocr_result.texts) > 0:
                                 text_str = ''.join(ocr_result.texts)
                                 
                                 # 检测签到页特征关键词
@@ -1426,6 +1217,9 @@ class DailyCheckin:
                                 # 判断是否在签到页
                                 if has_checkin_keywords and not has_popup_keywords:
                                     log(f"  [签到] ✓ OCR确认：当前在签到页，继续签到")
+                                    # [2026-03-01] 修复：更新current_state，而不是continue
+                                    # 这样下一轮循环的页面验证就能使用OCR的结果
+                                    current_state = PageState.CHECKIN
                                     # 继续下一轮循环
                                     continue
                                 
@@ -1449,21 +1243,24 @@ class DailyCheckin:
                 
                 # 5.5.1 如果检测到温馨提示弹窗，直接处理
                 if is_warmtip:
-                    log(f"  [签到] ⚠️ 检测到温馨提示弹窗（次数用完）")
+                    # [2026-03-01] 精简日志：删除温馨提示弹窗的详细日志
                     concise.action("出现温馨提示")
-                    log(f"  [签到] 关闭温馨提示弹窗并返回首页...")
                     
                     # 关闭弹窗（按返回键）
                     await self.adb.press_back(device_id)
                     
                     # 智能等待返回首页
+                    # [2026-03-01] 修复：使用签到专用检测器
+                    # [2026-03-01] 精简日志：禁用智能等待器的日志输出
                     await wait_for_page(
                         device_id,
-                        self.detector,
+                        self.page_classifier,
                         [PageState.HOME],
-                        log_callback=lambda msg: log(f"    [智能等待] {msg}")
+                        log_callback=None
                     )
                     
+                    # [2026-03-01] 精简日志：显示"签到已完成"和"已返回首页"
+                    log(f"  [签到] 签到已完成")
                     log(f"  [签到] ✓ 已返回首页")
                     
                     # 设置已签到标志（次数用完 = 今日已签到完成）
@@ -1491,7 +1288,8 @@ class DailyCheckin:
                             ttl=0  # 不缓存
                         )
                         
-                        if detection_result and detection_result.elements:
+                        # [2026-03-05] 修复数组比较错误：使用 is not None 和 len() 检查
+                        if detection_result and detection_result.elements is not None and len(detection_result.elements) > 0:
                             for element in detection_result.elements:
                                 if '关闭' in element.class_name or '知道了' in element.class_name:
                                     close_button_pos = element.center
@@ -1529,10 +1327,11 @@ class DailyCheckin:
                                 break
                     
                     # 使用智能等待器等待返回签到页
+                    # [2026-03-01] 修复：使用签到专用检测器
                     log(f"  [签到] 智能等待返回签到页...")
                     wait_success = await wait_for_page(
                         device_id,
-                        self.detector,
+                        self.page_classifier,
                         [PageState.CHECKIN],
                         log_callback=lambda msg: log(f"    [智能等待] {msg}")
                     )
@@ -1547,10 +1346,11 @@ class DailyCheckin:
                             if page_result.state == PageState.CHECKIN_POPUP:
                                 log(f"  [签到] ⚠️ 弹窗未关闭，再次尝试（按返回键）...")
                                 await self.adb.press_back(device_id)
+                                # [2026-03-01] 修复：使用签到专用检测器
                                 # 再次智能等待
                                 await wait_for_page(
                                     device_id,
-                                    self.detector,
+                                    self.page_classifier,
                                     [PageState.CHECKIN],
                                     log_callback=lambda msg: log(f"    [智能等待] {msg}")
                                 )
@@ -1583,7 +1383,8 @@ class DailyCheckin:
                         image = Image.open(BytesIO(screenshot_data))
                         try:
                             ocr_result = await self._ocr_pool.recognize(image, timeout=TimeoutsConfig.OCR_TIMEOUT_SHORT)
-                            if ocr_result and ocr_result.texts:
+                            # [2026-03-05] 修复数组比较错误：检查 texts 是否为 None 并且长度大于 0
+                            if ocr_result and ocr_result.texts is not None and len(ocr_result.texts) > 0:
                                 text_str = ''.join(ocr_result.texts)
                                 
                                 # 检测"温馨提示"弹窗（次数用完）- 只判断"温馨提示"
@@ -1597,10 +1398,11 @@ class DailyCheckin:
                                     # 关闭弹窗（按返回键）
                                     await self.adb.press_back(device_id)
                                     
+                                    # [2026-03-01] 修复：使用签到专用检测器
                                     # 智能等待返回首页
                                     await wait_for_page(
                                         device_id,
-                                        self.detector,
+                                        self.page_classifier,
                                         [PageState.HOME],
                                         log_callback=lambda msg: log(f"    [智能等待] {msg}")
                                     )
@@ -1628,9 +1430,10 @@ class DailyCheckin:
                                     
                                     # 不需要截图和OCR识别金额（使用余额对比计算总奖励）
                                     
+                                    # [2026-03-01] 修复：使用签到专用检测器
                                     # 关闭弹窗
                                     await self.detector.close_popup(device_id)
-                                    await wait_for_page(device_id, self.detector, [PageState.CHECKIN])
+                                    await wait_for_page(device_id, self.page_classifier, [PageState.CHECKIN])
                                     
                                     checkin_count += 1
                                     log(f"  [签到] ✓ 第{checkin_count}次签到完成")
@@ -1701,10 +1504,11 @@ class DailyCheckin:
                 
                 # 等待返回首页（最多等待5秒）
                 try:
+                    # [2026-03-01] 修复：使用签到专用检测器
                     await asyncio.wait_for(
                         wait_for_page(
                             device_id,
-                            self.detector,
+                            self.page_classifier,
                             [PageState.HOME],
                             log_callback=None
                         ),
@@ -1714,9 +1518,8 @@ class DailyCheckin:
                 except asyncio.TimeoutError:
                     pass  # log(f"  [签到] ⚠️ 返回首页超时，继续执行...")  # [2026-03-01] 精简日志：删除中间步骤
             else:
-                # 其他页面或未知页面，先检测当前页面再决定
-                # log(f"  [签到] 检测当前页面状态...")  # [2026-03-01] 精简日志：删除中间步骤
-                current_page = await self.detector.detect_page(device_id, use_cache=False, detect_elements=False)
+                # [2026-03-01] 修复：使用签到专用检测器检测当前页面
+                current_page = await self.page_classifier.detect_page(device_id, use_cache=False)
                 
                 if current_page:
                     # log(f"  [签到] 当前页面: {current_page.state.value}")  # [2026-03-01] 精简日志：删除中间步骤
@@ -1729,10 +1532,11 @@ class DailyCheckin:
                         await asyncio.sleep(0.5)
                         
                         try:
+                            # [2026-03-01] 修复：使用签到专用检测器
                             await asyncio.wait_for(
                                 wait_for_page(
                                     device_id,
-                                    self.detector,
+                                    self.page_classifier,
                                     [PageState.HOME],
                                     log_callback=None
                                 ),
@@ -1747,19 +1551,60 @@ class DailyCheckin:
                     await asyncio.sleep(0.5)
             
             # 获取签到后的完整资料（复用正常流程的方式）
+            # [2026-03-01] 修复原因：添加"步骤3: 获取资料"日志
+            concise.step(step_number + 1, "获取资料")
+            
             checkin_balance_after = None  # 签到后余额
             final_profile = None  # 签到后的完整资料
             max_retries = 3
             
             for retry in range(max_retries):
                 try:
-                    log(f"  [签到] 尝试获取签到后资料（第{retry+1}/{max_retries}次）...")
+                    # [2026-03-14] 修复原因：签到完成后已在首页，直接点击"我的"按钮，不需要检测页面
+                    concise.action("导航到个人页")
                     
-                    # 确保在个人页面
-                    await self.navigator.navigate_to_profile(device_id)
-                    await asyncio.sleep(TimeoutsConfig.WAIT_MEDIUM)  # 等待页面稳定
+                    # 直接点击"我的"按钮进入个人页
+                    await self.adb.tap(device_id, self.profile_navigator.TAB_MY[0], self.profile_navigator.TAB_MY[1])
                     
+                    # 等待进入个人页
+                    await asyncio.sleep(1.0)
+                    
+                    # 按返回键关闭可能的广告
+                    await self.adb.press_back(device_id)
+                    await asyncio.sleep(0.3)
+                    
+                    # [2026-03-14] 修复原因：验证是否成功进入个人页
+                    # 使用资料专用模型检测当前页面
+                    current_page = await self.profile_classifier.detect_page(device_id, use_cache=False)
+                    
+                    if current_page and current_page.state in [PageState.PROFILE_LOGGED, PageState.PROFILE]:
+                        # 成功进入个人页
+                        log(f"  [签到] ✓ 已进入个人页")
+                    elif current_page and current_page.state == PageState.HOME:
+                        # 还在首页，再次点击"我的"按钮导航到个人页
+                        log(f"  [签到] ⚠️ 第{retry+1}次导航失败，仍在首页，再次点击")
+                        if retry < max_retries - 1:
+                            await asyncio.sleep(TimeoutsConfig.WAIT_MEDIUM)
+                            continue
+                        else:
+                            log(f"  [签到] ❌ 导航到个人页失败，已重试{max_retries}次")
+                            break
+                    else:
+                        # 在其他页面
+                        page_name = current_page.state.value if current_page else "未知"
+                        log(f"  [签到] ⚠️ 第{retry+1}次导航失败，当前在: {page_name}")
+                        if retry < max_retries - 1:
+                            await asyncio.sleep(TimeoutsConfig.WAIT_MEDIUM)
+                            continue
+                        else:
+                            log(f"  [签到] ❌ 导航到个人页失败，页面异常")
+                            break
+                    
+                    # [2026-03-14] 修复原因：已在个人页，不需要等待，直接读取资料
                     # 使用正常流程的方式：get_full_profile_with_retry（带重试机制）
+                    # [2026-03-11] 修复原因：必须使用self.detector（PageDetectorIntegrated）而不是self.profile_classifier（PageDetectorDL）
+                    # PageDetectorDL不支持YOLO元素检测，会导致个人页元素检测失败
+                    concise.action("读取个人资料")
                     from .profile_reader import ProfileReader
                     profile_reader = ProfileReader(self.adb, self.detector)
                     account_str = f"{phone}----{password}" if password else phone
@@ -1767,11 +1612,13 @@ class DailyCheckin:
                     profile_task = profile_reader.get_full_profile_with_retry(device_id, account=account_str, max_retries=3)
                     
                     try:
-                        final_profile = await asyncio.wait_for(profile_task, timeout=30.0)  # 增加超时时间，因为内部有重试
+                        # [2026-03-14] 修复原因：获取资料3秒就够了，不需要30秒超时
+                        final_profile = await asyncio.wait_for(profile_task, timeout=5.0)
                         
                         if final_profile and final_profile.get('balance') is not None:
                             checkin_balance_after = final_profile.get('balance')
                             
+                            # [2026-03-12] 恢复签到后资料显示：用户要求显示签到完成后的个人资料
                             log(f"  [签到] ✓ 成功获取签到后资料:")
                             log(f"    - 余额: {checkin_balance_after:.2f} 元")
                             if final_profile.get('nickname'):
@@ -1825,13 +1672,11 @@ class DailyCheckin:
                     if balance is not None:
                         result['balance_before'] = balance  # 签到前余额
                 
-                log(f"  [签到] 签到前余额: {round(balance, 3)} 元")
-                log(f"  [签到] 签到后余额: {round(checkin_balance_after, 3)} 元")
-                log(f"  [签到] ✓ 总奖励: {round(total_reward, 3)} 元")
+                log(f"  [签到] 签到前余额: {balance:.2f} 元")
+                log(f"  [签到] 签到后余额: {checkin_balance_after:.2f} 元")
+                log(f"  [签到] ✓ 总奖励: {total_reward:.2f} 元")
             else:
                 log(f"  [签到] ⚠️ 无法获取余额，无法计算总奖励")
-                log(f"  [签到]    - 签到前余额: {balance}")
-                log(f"  [签到]    - 签到后余额: {checkin_balance_after}")
                 result['checkin_count'] = checkin_count
                 result['checkin_balance_after'] = checkin_balance_after  # 即使为None也返回
                 
@@ -1849,14 +1694,25 @@ class DailyCheckin:
             # 6. 设置最终结果
             # 统一处理：签到流程执行完毕即为成功
             result['success'] = True
-            result['message'] = f"签到完成，共签到 {result['checkin_count']} 次，总奖励 {round(result['reward_amount'], 3)} 元"
+            
+            # [2026-03-02] 修复原因：无法获取余额时，不显示奖励金额
+            if checkin_balance_after is not None and balance is not None:
+                result['message'] = f"签到完成，共签到 {result['checkin_count']} 次，总奖励 {round(result['reward_amount'], 3)} 元"
+            else:
+                result['message'] = f"签到完成，共签到 {result['checkin_count']} 次（无法计算奖励）"
+            
             concise.success("签到完成")
+            
+            # [2026-03-29] 静默：调试日志不输出到控制台
             
             # 优化：获取到最终余额后不需要返回首页，直接返回结果（下一步是退出登录）
             
             return result
             
         except Exception as e:
+            log(f"  [签到] ❌ 签到流程异常: {str(e)}")
+            import traceback
+            log(f"  [签到] 异常堆栈:\n{traceback.format_exc()}")
             result['message'] = f"签到失败: {str(e)}"
             result['error_type'] = ErrorType.CHECKIN_EXCEPTION  # 签到异常
             result['error_message'] = str(e)
@@ -1891,12 +1747,13 @@ class DailyCheckin:
             # [2026-02-21] 删除学习器：直接点击签到按钮
             await self.adb.tap(device_id, checkin_button_pos[0], checkin_button_pos[1])
             
+            # [2026-03-01] 修复：使用签到专用检测器
             # 优化：使用智能等待器等待进入签到页面
             await wait_for_page(
                 device_id,
-                self.detector,
+                self.page_classifier,
                 [PageState.CHECKIN],
-                log_callback=lambda msg: print(f"    [智能等待] {msg}")
+                log_callback=None  # [2026-03-29] 静默：不输出到控制台
             )
             
             # 读取签到信息
@@ -1919,7 +1776,7 @@ class DailyCheckin:
             }
     
     async def _find_checkin_button(self, device_id: str) -> Optional[Tuple[int, int]]:
-        """使用智能检测器或OCR识别首页的"每日签到"按钮位置
+        """使用YOLO或OCR识别首页的"每日签到"按钮位置
 
         # [2026-03-01] 修改策略：优先使用固定坐标（已验证位置正确），YOLO/OCR作为后备
 
@@ -1934,7 +1791,7 @@ class DailyCheckin:
         logger = get_logger()
 
         # 优先使用固定坐标（已验证位置正确）
-        logger.info(f"  [签到] 使用固定坐标: {self.CHECKIN_BUTTON}")
+        # [2026-03-01] 精简日志：删除固定坐标日志输出
         return self.CHECKIN_BUTTON
     
     async def _find_checkin_button_fallback(self, device_id: str) -> Optional[Tuple[int, int]]:
@@ -1955,9 +1812,9 @@ class DailyCheckin:
         detected_position = None
         detection_confidence = 0.0
 
-        # 步骤1: 尝试使用智能检测器（YOLO）
+        # 步骤1: 尝试使用YOLO
         try:
-            # 使用智能检测器的元素检测功能
+            # 使用YOLO的元素检测功能
             detection_result = await self._detect_page_cached(
                 device_id,
                 use_cache=False,
@@ -1966,7 +1823,8 @@ class DailyCheckin:
                 ttl=0
             )
 
-            if detection_result and detection_result.elements:
+            # [2026-03-05] 修复数组比较错误：使用 is not None 和 len() 检查
+            if detection_result and detection_result.elements is not None and len(detection_result.elements) > 0:
                 # 查找签到按钮元素
                 for element in detection_result.elements:
                     if '每日签到' in element.class_name or '签到按钮' in element.class_name:
@@ -1997,7 +1855,8 @@ class DailyCheckin:
 
                     from .timeouts_config import TimeoutsConfig
                     ocr_result = await self._ocr_pool.recognize(image, timeout=TimeoutsConfig.OCR_TIMEOUT_SHORT)
-                    if ocr_result and ocr_result.texts:
+                    # [2026-03-05] 修复数组比较错误：检查 texts 是否为 None 并且长度大于 0
+                    if ocr_result and ocr_result.texts is not None and len(ocr_result.texts) > 0:
                         for i, text in enumerate(ocr_result.texts):
                             if "每日签到" in text or (text == "签到" and i < len(ocr_result.boxes)):
                                 box = ocr_result.boxes[i]

@@ -133,13 +133,30 @@ class PageDetectorDL:
             self._device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
             
             # [2026-03-02] 简化：只使用 MobileNetV3 架构
+            # [2026-03-09] 修复原因：自动检测模型文件的第一层通道数
             # 定义模型架构
             class PageClassifier(nn.Module):
-                def __init__(self, num_classes):
+                def __init__(self, num_classes, first_channel=16):
                     super(PageClassifier, self).__init__()
                     
-                    # MobileNetV3架构
+                    # 使用标准 MobileNetV3-Large
                     self.mobilenet = models.mobilenet_v3_large(weights=None)
+                    
+                    # [2026-03-09] 修复原因：根据参数修改第一层卷积通道数
+                    if first_channel != 16:
+                        # 修改第一层卷积
+                        self.mobilenet.features[0][0] = nn.Conv2d(
+                            3, first_channel, kernel_size=3, stride=2, padding=1, bias=False
+                        )
+                        # 修改对应的BatchNorm层
+                        self.mobilenet.features[0][1] = nn.BatchNorm2d(first_channel)
+                        
+                        # 修改第二层的输入通道数
+                        self.mobilenet.features[1].block[0][0] = nn.Conv2d(
+                            first_channel, first_channel, kernel_size=3, stride=1, padding=1, groups=first_channel, bias=False
+                        )
+                        self.mobilenet.features[1].block[0][1] = nn.BatchNorm2d(first_channel)
+                    
                     in_features = self.mobilenet.classifier[0].in_features
                     self.mobilenet.classifier = nn.Sequential(
                         nn.Linear(in_features, 1280),
@@ -155,14 +172,28 @@ class PageDetectorDL:
             num_classes = len(self._classes)
             # [2026-03-03] 删除日志：避免每次创建实例都输出加载日志
             
-            model = PageClassifier(num_classes)
-            
-            # 加载权重
+            # [2026-03-09] 修复原因：先加载权重文件，检测第一层通道数
             checkpoint = torch.load(model_path, map_location=self._device)
             if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
-                model.load_state_dict(checkpoint['model_state_dict'])
+                state_dict = checkpoint['model_state_dict']
             else:
-                model.load_state_dict(checkpoint)
+                state_dict = checkpoint
+            
+            # 检测第一层通道数
+            first_layer_key = 'mobilenet.features.0.0.weight'
+            if first_layer_key in state_dict:
+                # [2026-03-10] 修复原因：shape[0]是输出通道数，shape[1]才是输入通道数
+                # 但这里我们需要的是第一层的输出通道数（也就是第二层的输入通道数）
+                first_channel = state_dict[first_layer_key].shape[0]
+            else:
+                first_channel = 16  # 默认值
+            
+            # 创建模型（使用检测到的通道数）
+            model = PageClassifier(num_classes, first_channel=first_channel)
+            
+            # 加载权重（使用strict=False兼容不同版本的模型结构）
+            model.load_state_dict(state_dict, strict=False)
+  
             
             model = model.to(self._device)
             model.eval()
